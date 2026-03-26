@@ -1,7 +1,7 @@
 # Sprint 1 Report (Dates from February 18, 2026 to March 25, 2026)
 
 ## YouTube link of Sprint 1 Video (Make this video unlisted)
-Sprint 1 video link is pending upload.
+Video Link: https://www.youtube.com/watch?v=f1Scz7WID6A
 
 ## What's New (User Facing)
 * No user facing release went out in Sprint 1 because this sprint was focused on planning and documentation
