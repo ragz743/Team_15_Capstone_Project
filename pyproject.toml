@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools >= 65.5.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "322"
+dynamic = ["version"]
+requires-python = ">= 3.12"
+authors = [ # put your name, email here!
+    {name = "Gavin Travis", email = "gavin.travis@wsu.edu"},
+]
+dependencies = [
+    "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pre-commit",
+    "ruff",
+    "black",
+    "isort",
+    "pyright",
+]
+
+[tool.setuptools.packages.find]
+where = ["code"]
+
+[tool.black]
+line-length = 120
+[tool.ruff]
+line-length = 120 # max line length
+select = [
+    "E", # code style errs
+    "W", # code style warnings
+    "F", # pyflakes issues -> fancy set of rules
+    "D", # doc string rules
+    "N", # pep8 naming conventions
+    "B", # bugbear errs -> more fancy rules
+]
+ignore = [
+    #"put err code here", # ignore specific err codes here, only do if its very unreasonable!
+]
+exclude = [".venv", "*.md", ".egg*", ".git", ".gitignore"] # stuff not to lint + format
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv/"
