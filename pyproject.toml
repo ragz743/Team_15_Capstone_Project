@@ -3,7 +3,7 @@ requires = ["setuptools >= 65.5.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "322"
+name = "Team-15-AWN_AI"
 dynamic = ["version"]
 requires-python = ">= 3.12"
 authors = [ # put your name, email here!
@@ -11,6 +11,8 @@ authors = [ # put your name, email here!
 ]
 dependencies = [
     "python-dotenv",
+    "mysql-connector-python",
+    "pytest",
 ]
 
 [project.optional-dependencies]
@@ -45,3 +47,10 @@ exclude = [".venv", "*.md", ".egg*", ".git", ".gitignore"] # stuff not to lint +
 [tool.pyright]
 venvPath = "."
 venv = ".venv/"
+
+[tool.pytest.ini_options]
+minversion = "9.0.2"
+addopts = "-q" # flags to pass to pytest implicitly
+testpaths = [ # the directories pytest will search for tests per test discover rules
+    "testing",
+]
