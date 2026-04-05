@@ -13,5 +13,42 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql # persist data here
 
+  embedding-model:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.llama-server
+      args:
+        - GGUF_FILE=models/${EMBEDDING_MODEL}
+    container_name: embedding
+    environment:
+      - LLAMA_ARG_MODEL=models/${EMBEDDING_MODEL}
+      - LLAMA_ARG_CTX_SIZE=4096 # note any llama-cpp args can be passed with
+      - LLAMA_ARG_HOST=0.0.0.0  # format 'LLAMA_ARG_<flag-name>'
+      - LLAMA_ARG_PORT=8081
+    ports:
+      - "8081:8081"
+    volumes:
+      - models:/models
+    restart: unless-stopped
+
+  chatbot-model:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.llama-server
+      args:
+        - GGUF_FILE=models/${CHATBOT_MODEL}
+    container_name: chatbot
+    environment:
+      - LLAMA_ARG_MODEL=models/${CHATBOT_MODEL}
+      - LLAMA_ARG_CTX_SIZE=4096
+      - LLAMA_ARG_HOST=0.0.0.0
+      - LLAMA_ARG_PORT=8082
+    ports:
+      - "8082:8082"
+    volumes:
+      - models:/models
+    restart: unless-stopped
+
 volumes:
   pgdata:
+  models:
