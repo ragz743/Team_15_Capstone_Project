@@ -1,0 +1,11 @@
+# syntax=docker/dockerfile:1
+# use pgvector official image (built on top of postgres official image)
+FROM pgvector/pgvector:pg18-trixie
+
+# copy this sql script to location that will call it during init
+# -> controls initial state of the DB! (its run one time during creation)
+COPY deployment/pgvector-seed.sql /docker-entrypoint-initdb.d/
+
+# Do install things, recall RUN command happens only during initial build
+# nothing for now?
+# -> will eventually be done in pgvector-seed.sql when table design complete
