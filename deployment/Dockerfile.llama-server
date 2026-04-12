@@ -1,5 +1,5 @@
 # use llama-cpp server for OpenAI API compatible LLM service
-FROM ghcr.io/ggml-org/llama.cpp:server
+FROM ghcr.io/ggml-org/llama.cpp:server:b8763
 
 # copy the specified gguf file from repo models/ to container models/
 COPY models/$GGUF_FILE models/

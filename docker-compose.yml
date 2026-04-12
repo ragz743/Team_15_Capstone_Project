@@ -19,6 +19,8 @@ services:
       dockerfile: deployment/Dockerfile.llama-server
       args:
         - GGUF_FILE=models/${EMBEDDING_MODEL}
+    profiles:
+      - local_llm
     container_name: embedding
     environment:
       - LLAMA_ARG_MODEL=models/${EMBEDDING_MODEL}
@@ -37,6 +39,8 @@ services:
       dockerfile: deployment/Dockerfile.llama-server
       args:
         - GGUF_FILE=models/${CHATBOT_MODEL}
+    profiles:
+      - local_llm
     container_name: chatbot
     environment:
       - LLAMA_ARG_MODEL=models/${CHATBOT_MODEL}

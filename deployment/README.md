@@ -19,3 +19,9 @@
 
 ## Shutting down services
 - shutting down containers is also handled by `docker-compose.yml`, use command `docker compose down` to shutdown all docker compose containers.
+
+## Using Docker profiles
+- Users need to run different services depending on available hardware, as a result project llm models are able to be configured using `docker profiles` which allow services to be started/stopped conditionally by calling their group with the `--profile` flag.
+- for example to run llm models locally using llama-cpp, docker compose should be called using the profiles flag: `docker compose --profile local_llm up` will launch both the embedding and chatbot models in local docker containers
+- **Note: profiles must also be used for bringing down services!**
+    - `docker compose --profile local_llm down` to bring down local model containers.
