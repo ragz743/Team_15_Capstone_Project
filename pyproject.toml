@@ -13,6 +13,7 @@ dependencies = [
     "python-dotenv",
     "mysql-connector-python",
     "psycopg[binary]",
+    "langchain"
 ]
 
 [project.optional-dependencies]
@@ -29,7 +30,7 @@ dev = [
 where = ["code"]
 
 [tool.black]
-line-length = 120
+line-length = 80
 [tool.ruff]
 line-length = 120 # max line length
 select = [
