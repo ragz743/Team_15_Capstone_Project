@@ -1,15 +1,12 @@
 """The vector store wrapper class."""
 
 import warnings
-from typing import TYPE_CHECKING
 
 from backend.databases.pgvector import PgVectorConnection
-
-if TYPE_CHECKING:
-    from backend.models._embedding_base import _BaseEmbedding
-    from langchain_core.documents import Document
-    from langchain_core.embeddings import Embeddings
-    from langchain_core.vectorstores import VectorStore
+from backend.models._embedding_base import _BaseEmbedding
+from langchain_core.documents import Document
+from langchain_core.embeddings import Embeddings
+from langchain_core.vectorstores import VectorStore
 
 
 class PgVectorStore(VectorStore):
