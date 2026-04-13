@@ -13,7 +13,10 @@ dependencies = [
     "python-dotenv",
     "mysql-connector-python",
     "psycopg[binary]",
-    "langchain"
+    "langchain",
+    "pyyaml",
+    "langchain-openrouter",
+    "langchain-openai",
 ]
 
 [project.optional-dependencies]
@@ -30,10 +33,10 @@ dev = [
 where = ["code"]
 
 [tool.black]
-line-length = 80
+line-length = 100
 [tool.ruff]
 line-length = 120 # max line length
-select = [
+lint.select = [
     "E", # code style errs
     "W", # code style warnings
     "F", # pyflakes issues -> fancy set of rules
@@ -41,7 +44,7 @@ select = [
     "N", # pep8 naming conventions
     "B", # bugbear errs -> more fancy rules
 ]
-ignore = [
+lint.ignore = [
     #"put err code here", # ignore specific err codes here, only do if its very unreasonable!
 ]
 exclude = [".venv", "*.md", ".egg*", ".git", ".gitignore"] # stuff not to lint + format
