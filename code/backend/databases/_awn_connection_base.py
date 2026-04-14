@@ -13,7 +13,7 @@ from mysql import connector
 class AWNDatabaseConnectionBase(ABC):
     """AgWeatherNet MySQL database connection base class."""
 
-    _TABLE_NAME: ClassVar[str]
+    _DB_NAME: ClassVar[str]
 
     def __init__(self) -> None:
         """Create a new AWN Database Connection."""
@@ -21,7 +21,7 @@ class AWNDatabaseConnectionBase(ABC):
             user=os.getenv("AWN_DB_USER"),
             password=os.getenv("AWN_DB_PASSWORD"),
             host=os.getenv("AWN_DB_HOST"),
-            database=self._TABLE_NAME,
+            database=self._DB_NAME,
         )
 
     def __enter__(self) -> Self:

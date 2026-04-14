@@ -29,11 +29,14 @@ dev = [
     "pytest",
 ]
 
+[project.scripts]
+index = "scripts.index:main"
+
 [tool.setuptools.packages.find]
 where = ["code"]
 
 [tool.black]
-line-length = 100
+line-length = 120
 [tool.ruff]
 line-length = 120 # max line length
 lint.select = [
@@ -46,6 +49,8 @@ lint.select = [
 ]
 lint.ignore = [
     #"put err code here", # ignore specific err codes here, only do if its very unreasonable!
+    "D203",
+    "D213",
 ]
 exclude = [".venv", "*.md", ".egg*", ".git", ".gitignore"] # stuff not to lint + format
 
