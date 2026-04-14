@@ -1,8 +1,14 @@
 -- SQL Script to Run when pgvector container is initialized
 
-CREATE EXTENSION vector; -- enable pgvector extension included in image
+-- Switch to vectorstore, then set up schema
+\c vectorstore
 
-CREATE DATABASE vectorstore; -- create the vectorstore db
+-- enable pgvector extension included in image
+CREATE EXTENSION IF NOT EXISTS vector;
 
--- dummy table to make sure pgvector ext works...
-CREATE TABLE items (id bigserial PRIMARY KEY, embedding vector(3));
+-- daily index table
+CREATE TABLE IF NOT EXISTS daily_index (
+    id BIGSERIAL PRIMARY KEY,   -- auto inc vector id
+    embedding VECTOR(128),  -- vector width is hardcoded into _BaseEmbedding class
+    metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
+);

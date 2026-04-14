@@ -41,7 +41,7 @@ class MetadataQueryResult(NamedTuple):
 class DailyQueryResult(NamedTuple):
     """The data returned by the daily station query."""
 
-    date: date
+    date: str
     avg_air_temp: Decimal
     avg_humidity: Decimal
     avg_wind_sp: Decimal
@@ -52,7 +52,7 @@ class DailyQueryResult(NamedTuple):
         match row:
             case (date, avg_air_temp, avg_humidity, avg_wind_sp):
                 return cls(
-                    date,
+                    date.strftime("%Y-%m-%d"),
                     avg_air_temp,
                     avg_humidity,
                     avg_wind_sp,
@@ -84,7 +84,7 @@ class DailyLoader(_BaseLoader):
         stations: list[MetadataQueryResult],
     ) -> list[DailyQueryResult]:
         """Query stations from the daily db."""
-        result: list[DailyQueryResult] = []  # type: ignore
+        result: list[DailyQueryResult] = []
         with AWNDailyDatabaseConnection() as awn_conn:
             for s in stations:
                 query_daily = f"""
@@ -94,9 +94,9 @@ class DailyLoader(_BaseLoader):
                     """
 
                 # prep table name and date
-                yesterday = (date.today() - timedelta(weeks=4)).strftime("%Y-%m-%d")  # YYYY-MM-DD
+                a_month_ago = (date.today() - timedelta(weeks=4)).strftime("%Y-%m-%d")  # YYYY-MM-DD
                 result.extend(
-                    [DailyQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_daily, (yesterday,))]
+                    [DailyQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_daily, (a_month_ago,))]
                 )
         return result
 

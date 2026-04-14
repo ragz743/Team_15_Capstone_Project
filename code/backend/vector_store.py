@@ -1,8 +1,10 @@
 """The vector store wrapper class."""
 
+import json
 import warnings
 
 from backend.databases.pgvector import PgVectorConnection
+from backend.model_factory import ModelFactory
 from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -17,11 +19,21 @@ class PgVectorStore(VectorStore):
 
     def __init__(self, embedding_model: _BaseEmbedding) -> None:
         """Create an instance of the PgVectorStore class."""
-        pass
+        # NOTE: Need to implement, just load embedding. Doing both will have to do for now...
+        self._embedding_model, _ = ModelFactory.load_from_models_yaml()
 
     def add_documents(self, documents: list[Document], **kwargs) -> list[str]:
         """Add or update documents in the vector store."""
-        raise NotImplementedError
+        embeddings = self._embedding_model.embed_documents(documents)
+        # pgvector needs query strings to be in bytes
+        # and also to return ids on insert
+        insert_sql = b"""
+        INSERT INTO daily_index (embedding, metadata)
+        VALUES (%s, %s)
+        RETURNING id;
+        """
+        with PgVectorConnection() as pgvec_conn:
+            return [pgvec_conn.insert(insert_sql, (vec, json.dumps(doc.metadata))) for vec, doc in embeddings]
 
     def aadd_documents(self, documents, **kwargs):
         """Async add or update documents in the vector store."""

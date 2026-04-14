@@ -2,15 +2,18 @@
 
 import dotenv
 from backend.loaders.daily_loader import DailyLoader
+from backend.model_factory import ModelFactory
+from backend.vector_store import PgVectorStore
 
 
 def main() -> None:
     """Manual indexing script entry point."""
     dotenv.load_dotenv()
+    embedding_model, _ = ModelFactory.load_from_models_yaml()
 
     loader = DailyLoader()
-    docs = loader.load()
-    for doc in docs:
-        print(f"{doc.page_content}\n{doc.metadata}")
+    docs = [d for d in loader.load() if d.page_content]
+    vector_store = PgVectorStore(embedding_model)
+    vector_store.add_documents(docs)
 
     pass
