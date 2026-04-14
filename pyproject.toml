@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml",
     "langchain-openrouter",
     "langchain-openai",
+    "langchain-text-splitters",
 ]
 
 [project.optional-dependencies]
