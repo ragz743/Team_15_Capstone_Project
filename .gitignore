@@ -9,6 +9,7 @@ bin-release/
 models/*
 models.yaml
 *.gguf
+.DS_Store
 
 # Executables
 *.swf
