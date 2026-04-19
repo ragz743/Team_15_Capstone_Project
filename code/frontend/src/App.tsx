@@ -15,6 +15,7 @@ type Message = {
   error?: boolean;
 };
 
+
 function createId() {
   return globalThis.crypto?.randomUUID() ?? Math.random().toString(36).slice(2, 10);
 }
@@ -49,7 +50,6 @@ export default function App() {
   // Track the active request so we can abort it on unmount / clear.
   const abortRef = useRef<AbortController | null>(null);
 
-  // Auto-resize the composer to fit the draft up to a fixed cap.
   useEffect(() => {
     const node = textareaRef.current;
     if (!node) {
@@ -59,7 +59,6 @@ export default function App() {
     node.style.height = `${Math.min(node.scrollHeight, 180)}px`;
   }, [draft]);
 
-  // Keep the transcript pinned to the latest message.
   useEffect(() => {
     const node = transcriptRef.current;
     if (node) {
@@ -116,7 +115,6 @@ export default function App() {
       );
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
-        // Intentionally cancelled (unmount / clear) — drop the pending bubble.
         setMessages((previous) => previous.filter((m) => m.id !== pendingAssistant.id));
         return;
       }
@@ -187,8 +185,7 @@ export default function App() {
             {messages.length === 0 ? (
               <div className="empty-state">
                 <div className="empty-line" />
-                <h3>No conversation yet</h3>
-                <p>Ask a question to get started — responses come from the AWN backend.</p>
+                <h3>No conversation yet, ask a question to get started</h3>
               </div>
             ) : (
               <div className="message-stack">

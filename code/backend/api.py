@@ -48,7 +48,7 @@ class ChatResponse(BaseModel):
     model: str
 
 
-# Global chatbot instance, initialized at startup and shared across requests.
+# Global chatbot instance, initialized at startup
 _chatbot: _BaseChatbot | None = None
 _chatbot_model_name: str = ""
 
@@ -85,7 +85,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Dev-only permissive CORS.
+# Dev only permissive CORS, NOT for production
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],

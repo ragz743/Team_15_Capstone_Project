@@ -4,10 +4,7 @@ Vite + React + TypeScript frontend mockup for the AG Weather Net chatbot.
 
 ## Current scope
 
-- clean visual prototype for a non-technical audience
-- no seeded weather data
-- no fake assistant responses
-- simple chat layout ready for backend wiring later
+- back end wiring done
 
 ## Scripts
 
@@ -20,6 +17,5 @@ npm run lint
 
 ## Integration note
 
-The current backend repository does not expose a FastAPI chat route yet.
-When that exists, the composer can be wired to the backend and the main
-conversation area can render real answers
+FastAPI route to chat to LLM via OpenRouter is implemented, simple works
+Needs API key from openrouter
