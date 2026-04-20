@@ -37,7 +37,9 @@ class AWNDatabaseConnectionBase(ABC):
         """Close the database connection by exiting with context manager."""
         self.conn.disconnect()
 
-    def simple_query(self, sql_query: str, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
+    def simple_query(
+        self, sql_query: str, query_vars: Sequence[Any]
+    ) -> Generator[Sequence[Any]]:
         """Make a simple query to the connected database."""
         cursor = self.conn.cursor()
 

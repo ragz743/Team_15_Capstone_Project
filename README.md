@@ -23,7 +23,7 @@ TODO: List which add-ons are included in the project, and the purpose each add-o
 ### Installation Steps
 
 TODO: Describe the installation process (making sure you mention `bundle install`).
-Instructions need to be such that a user can just copy/paste the commands to get things set up and running. 
+Instructions need to be such that a user can just copy/paste the commands to get things set up and running.
 
 
 ## Functionality
@@ -34,7 +34,7 @@ and showcase your features.
 
 ## Known Problems
 
-TODO: Describe any known issues, bugs, odd behaviors or code smells. 
+TODO: Describe any known issues, bugs, odd behaviors or code smells.
 Provide steps to reproduce the problem and/or name a file or a function where the problem lives.
 
 

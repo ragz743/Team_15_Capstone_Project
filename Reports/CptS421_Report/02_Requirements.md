@@ -135,5 +135,3 @@
 | NFR-5: Security | The system shall prevent unauthorized database access, protect against SQL injection, and ensure secure communication between components.
 | NFR-6: Usability | The system interface shall be intuitive and require no prior technical knowledge of database systems. |
 | NFR-7: Maintainability | The system shall utilize sound software design to optimize maintainability of the application with respect to modularity and code reuse. |
-
-

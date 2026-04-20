@@ -23,7 +23,9 @@ def load_environment_vars() -> None:
         AWNForecastDatabaseConnection,
     ],
 )
-def test_awn_database_connection(db_class: type[AWNDatabaseConnectionBase]) -> None:
+def test_awn_database_connection(
+    db_class: type[AWNDatabaseConnectionBase],
+) -> None:
     """Check the credentials work, assumes your current ip can connect to the db host."""
     with db_class() as awn_db:
         assert awn_db.conn.is_connected(), "database connection failed."

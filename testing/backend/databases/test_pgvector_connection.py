@@ -15,4 +15,6 @@ def load_environment_vars() -> None:
 def test_awn_database_connection() -> None:
     """Check the credentials work, assumes your current ip can connect to the db host."""
     with pgvector.PgVectorConnection() as vectorstore:
-        assert vectorstore.conn.execute("SELECT 1"), "database connection failed."
+        assert vectorstore.conn.execute(
+            "SELECT 1"
+        ), "database connection failed."
