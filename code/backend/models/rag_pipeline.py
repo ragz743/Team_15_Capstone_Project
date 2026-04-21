@@ -28,11 +28,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from ..databases.vector_store import RetrievedChunk, VectorStore
+
 logger = logging.getLogger(__name__)
 
 # DOMAIN CONSTANTS
 
-VALID_DATA_TYPES = frozenset(
+VALID_INTENTS = frozenset(
     {"live", "historical", "forecast", "aggregate", "schema"}
 )
 OFF_TOPIC = "off_topic"
@@ -42,18 +44,18 @@ MAX_HISTORY_TURNS = (
 
 # PROMPT TEMPLATES
 
+# Stage 1 - Intent classification
 INTENT_SYSTEM = """\
   You are a query router for the AgWeatherNet agricultural weather database. Your ONLY job is to classify the user query
   and extract parameters. Output ONLY valid JSON - no prose, no markdown fences.
 
   JSON schema:
   {{
-    "data_type":    "<live|historical|forecast|aggregate|schema|off_topic>",
+    "intent":    "<live|historical|forecast|aggregate|schema|off_topic>",
     "station_hint": "<station name / location the user mentioned, or null>",
     "date_start":   "<ISO-8601 date or null>",
     "date_end":     "<ISO-8601 date or null>",
     "metric":       "<weather metric name or null (e.g. temperature, precipitation)>",
-    "ambiguous":    <true|false>,
     "reason":       "<one sentence explanation>"
   }}
 
@@ -69,22 +71,26 @@ INTENT_SYSTEM = """\
   Today's date (UTC): {today}
   """
 
-STATION_DISAMBIG_SYSTEM = """\
+# Stage 2 - Station disambiguation
+DISAMBIG_SYSTEM = """\
   You are a weather station resolver for AgWeatherNet.
   Match the user's location hint to the official AgWeatherNet station list.
 
   Output ONLY valid JSON - no prose.
 
-  Schema when a match is found:
-  {{"station_id": "<official_id>", "station_name": "<display name>", "ask_user": false}}
+  JSON schema when a match is found:
+  {{"station_id": "<id>", "station_name": "<display name>", "ask_user": false}}
 
-  Schema when multiple equally-close stations are found:
+  JSON schema when multiple equally-close stations are found:
   {{
     "station_id": null,
-    "candidates": [],
+    "candidates": [{{"id": "<id>", "name": "<name>"}}, ...],
     "ask_user": true,
     "clarification_message": "<explain no station found; suggest alternatives>"
   }}
+
+  JSON schema for when no matches are found:
+  {{"station_id": null, "candidates": [], "ask_user": false}}
 
   Known AgWeatherNet stations:
   {station_list_json}
@@ -131,19 +137,19 @@ ANSWER_SYSTEM = """\
   {history}
   """
 
+
 # DATA-TRANSFER OBJECTS
 
 
 @dataclass
 class IntentResult:
-    """Output of Stage 1: intent classification."""
+    """Output of Stage 1: intent classification. Not part of the public API."""
 
-    data_type: str
+    intent: str
     station_hint: str | None
     date_start: str | None
     date_end: str | None
     metric: str | None
-    ambiguous: bool
     reason: str
 
 
@@ -154,7 +160,7 @@ class PipelineResponse:
     Attributes
     ----------
     answer: Text to display in the chatbot UI.
-    data_type: Resolved intent label.
+    intent: Resolved intent label.
     station_id: Resolved station identifier (if known).
     retrieved_chunks: Chunks injected into the LLM prompt (for logging / FR-39).
     needs_clarification: True when 'answer' IS the clarifying question itself.
@@ -164,9 +170,9 @@ class PipelineResponse:
     """
 
     answer: str
-    data_type: str
+    intent: str
     station_id: str | None
-    retrieved_chunks: list = field(default_factory=list)
+    retrieved_chunks: list[RetrievedChunk] = field(default_factory=list)
     needs_clarification: bool = False
     latency_ms: float = 0.0
     stage_timings: dict[str, float] = field(default_factory=dict)
@@ -184,7 +190,7 @@ class RAGPipeline:
 
     def __init__(
         self,
-        vector_store: Any,
+        vector_store: VectorStore,
         embedding_model: Any,
         chatbot_model: Any,
         known_stations: list[dict],
@@ -213,11 +219,11 @@ class RAGPipeline:
         self.vs = vector_store
         self.embed = embedding_model
         self.chat = chatbot_model
-        self.known_stations = known_stations
+        self.stations = known_stations
         self.today = today
-        self.max_context_chunks = max_context_chunks
+        self.max_chunks = max_context_chunks
 
-    # PUBLIC API
+    # PUBLIC API (ENTRY POINT)
 
     def run(
         self,
@@ -244,7 +250,7 @@ class RAGPipeline:
 
         """
         t_start = time.monotonic()
-        history = (conversation_history or [])[-MAX_HISTORY_TURNS:]
+        history = list[dict] = conversation_history or []
         timings: dict[str, float] = {}
 
         # Stage 1: Intent Classification
@@ -252,24 +258,31 @@ class RAGPipeline:
         intent = self._stage1_classify(user_query)
         timings["stage1_intent_ms"] = (time.monotonic() - t0) * 1000
         logger.info(
-            "Stage1 intent=%s station_hint=%s",
-            intent.data_type,
+            "RAGPipeline Stage1: intent=%s station_hint=%s metric=%s reason=%s",
+            intent.intent,
             intent.station_hint,
+            intent.metric,
+            intent.reason,
         )
 
         # Guard: off-topic -> short-circuit without touching the DB (FR-5)
-        if intent.data_type == OFF_TOPIC:
+        if intent.intent == OFF_TOPIC:
             return PipelineResponse(
                 answer=(
                     "I can only assist with weather data from AgWeatherNet's Washington State "
                     "station network. Please ask a question about weather conditions, forecasts, or "
                     "station data."
                 ),
-                data_type=OFF_TOPIC,
+                intent=OFF_TOPIC,
                 station_id=None,
                 needs_clarification=False,
                 latency_ms=(time.monotonic() - t_start) * 1000,
-                stage_timings=timings,
+                stage_timings={
+                    **timings,
+                    "stage2_disambig_ms": 0.0,
+                    "stage3_retrieval_ms": 0.0,
+                    "stage4_synthesis_ms": 0.0,
+                },
             )
 
         # Stage 2: Station Diambiguation
@@ -278,52 +291,59 @@ class RAGPipeline:
 
         if station_id is None and intent.station_hint:
             disambig = self._stage2_resolve_station(intent.station_hint)
-            timings["stage2_disambig_ms"] = (time.monotonic() - t0) * 1000
+            logger.info("RAGPipeline Stage2: disambig=%s", disambig)
 
             if disambig.get("ask_user"):
+                timings["stage2_disambig_ms"] = (time.monotonic() - t0) * 1000
+
                 # Return the clarifying question - do not query the DB yet
                 return PipelineResponse(
                     answer=disambig["clarification_message"],
-                    data_type=intent.data_type,
+                    intent=intent.intent,
                     station_id=None,
                     needs_clarification=True,
                     latency_ms=(time.monotonic() - t_start) * 1000,
-                    stage_timings=timings,
+                    stage_timings={
+                        **timings,
+                        "stage3_retrieval_ms": 0.0,
+                        "stage4_synthesis_ms": 0.0,
+                    },
                 )
             station_id = disambig.get("station_id")
-        else:
-            timings["stage2_disambig_ms"] = 0.0
+
+        timings["stage2_disambig_ms"] = (time.monotonic() - t0) * 1000
 
         # Stage 3: Semantic Retrieval
         t0 = time.monotonic()
-        chunks = self._stage3_retrieve(intent, station_id)
+        chunks = self._stage3_retrieve(
+            user_query=user_query,
+            intent=intent.intent,
+            station_id=station_id,
+            metric=intent.metric,
+        )
         timings["stage3_retrieval_ms"] = (time.monotonic() - t0) * 1000
         logger.info(
-            "Stage3 retrieved %d chunks (station=%s data_type=%s)",
+            "RAGPipeline Stage3: retrieved %d chunks (station=%s data_type=%s)",
             len(chunks),
             station_id,
-            intent.data_type,
+            intent.intent,
         )
 
         # Stage 4: Answer Synthesis
         t0 = time.monotonic()
         answer = self._stage4_synthesize(
             user_query=user_query,
-            intent=intent,
-            station_id=station_id,
             chunks=chunks,
             history=history,
         )
         timings["stage4_synthesis_ms"] = (time.monotonic() - t0) * 1000
 
         total_ms = (time.monotonic() - t_start) * 1000
-        logger.info(
-            "Pipeline complete in %.0f ms (station=%s)", total_ms, station_id
-        )
+        logger.info("RAGPipeline complete in %.0f ms", total_ms)
 
         return PipelineResponse(
             answer=answer,
-            data_type=intent.data_type,
+            intent=intent.intent,
             station_id=station_id,
             retrieved_chunks=chunks,
             needs_clarification=False,
@@ -348,30 +368,29 @@ class RAGPipeline:
         )
         try:
             data = _parse_json(raw)
-            dt = data.get("data_type", OFF_TOPIC)
-            # Validate data_type; unknown values become off_topic
-            if dt not in VALID_DATA_TYPES and dt != OFF_TOPIC:
-                dt = OFF_TOPIC
+            intent = data.get("intent", OFF_TOPIC)
+            # Validate intent; unknown values become off_topic
+            if intent not in VALID_INTENTS:
+                intent = OFF_TOPIC
             return IntentResult(
-                data_type=dt,
+                intent=intent,
                 station_hint=data.get("station_hint"),
                 date_start=data.get("date_start"),
                 date_end=data.get("date_end"),
                 metric=data.get("metric"),
-                ambiguous=bool(data.get("ambiguous", False)),
                 reason=data.get("reason", ""),
             )
         except (json.JSONDecodeError, TypeError, KeyError) as exc:
             logger.warning(
-                "Stage1 parse error (%s) - defaulting to off_topic.", exc
+                "RAGPipeline Stage1: JSON parse error (%s) - defaulting to off_topic.",
+                exc,
             )
             return IntentResult(
-                data_type=OFF_TOPIC,
+                intent=OFF_TOPIC,
                 station_hint=None,
                 date_start=None,
                 date_end=None,
                 metric=None,
-                ambiguous=False,
                 reason="parse error",
             )
 
@@ -380,8 +399,8 @@ class RAGPipeline:
 
         Matches a hint to a station_id or returns a clarification question (FR-6, FR-11).
         """
-        system = STATION_DISAMBIG_SYSTEM.format(
-            station_list_json=json.dumps(self.known_stations, indent=2)
+        system = DISAMBIG_SYSTEM.format(
+            station_list_json=json.dumps(self.stations, indent=2)
         )
         raw = self.chat.complete(
             messages=[
@@ -395,13 +414,20 @@ class RAGPipeline:
         try:
             return _parse_json(raw)
         except (json.JSONDecodeError, TypeError) as exc:
-            logger.warning("Stage2 parse error (%s).", exc)
+            logger.warning(
+                "RAGPipeline stage2: JSON parse failed (%s) - no station resolved.",
+                exc,
+            )
             # Fail open: proceed without a station_id rather than crashing
             return {"station_id": None, "ask_user": False}
 
     def _stage3_retrieve(
-        self, intent: IntentResult, station_id: str | None
-    ) -> list:
+        self,
+        user_query: str,
+        intent: str,
+        station_id: str | None,
+        metric: str | None,
+    ) -> list[RetrievedChunk]:
         """Stage 3: Retrieve relevant chunks.
 
         Embed the user query and run metadata-filtered semantic search against the
@@ -411,31 +437,30 @@ class RAGPipeline:
         Aggregate queries also pull schema context so the LLM understands the available
         aggregation columns.
         """
-        query_vec: list[float] = self.embed.embed(intent.reason or "")
-        if intent.data_type == "aggregate":
+        query_vec: list[float] = self.embed.embed(user_query)
+
+        if intent == "aggregate":
             # Pull both aggregate context and schema context (FR-10)
             return self.vs.search_multi_type(
                 query_vec,
                 data_types=["aggregate", "schema"],
                 station_id=station_id,
-                metric=intent.metric,
-                top_k=self.max_context_chunks,
+                metric=metric,
+                top_k=self.max_chunks,
             )
 
         return self.vs.search(
             query_vec,
-            data_type=intent.data_type,
+            data_type=intent,
             station_id=station_id,
-            metric=intent.metric,
-            top_k=self.max_context_chunks,
+            metric=metric,
+            top_k=self.max_chunks,
         )
 
     def _stage4_synthesize(
         self,
         user_query: str,
-        intent: IntentResult,
-        station_id: str | None,
-        chunks: list,
+        chunks: list[RetrievedChunk],
         history: list[dict],
     ) -> str:
         """Stage 4: Generate final response.
@@ -448,35 +473,38 @@ class RAGPipeline:
         """
         # Build context block with attribution headers (FR-31)
         context_parts: list[str] = []
-        for i, chunk in enumerate(chunks, start=1):
+        for i, chunk in enumerate(chunks, 1):
             m = chunk.metadata
             header = (
                 f"[Source {i}] "
-                f"station={m.station_id or 'N/A'} | "
-                f"type={m.data_type or 'N/A'} | "
-                f"table={m.source_table or 'N/A'} | "
-                f"similarity={chunk.similarity:.2f}"
+                f"  station={m.station_id or 'N/A'} | "
+                f"  type={m.data_type or 'N/A'} | "
+                f"  table={m.source_table or 'N/A'} | "
+                f"  similarity={chunk.similarity:.2f}"
             )
             context_parts.append(f"{header}\n{chunk.content}")
 
-        if context_parts:
-            context_block = "\n\n---\n\n".join(context_parts)
-        else:
-            context_block = "No matching data found in the AgWeatherNet database for this query."
+        context_block = (
+            "\n\n---\n\n".join(context_parts)
+            if context_parts
+            else "No matching data found in the AgWeatherNet database for this query."
+        )
 
         # Build history block (FR-29 follow-up context)
+        trimmed = history[-MAX_HISTORY_TURNS:]
         history_block = (
-            "\n".join(f"{m['role'].upper()}: {m['content']}" for m in history)
+            "\n".join(f"{m['role'].upper()}: {m['content']}" for m in trimmed)
             or "(no prior conversation)"
         )
 
         system = ANSWER_SYSTEM.format(
             context=context_block,
             history=history_block,
+            max_turns=MAX_HISTORY_TURNS,
         )
 
-        messages = [{"role": "system", "content": system}]
-        messages.extend(history)
+        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        messages += trimmed
         messages.append({"role": "user", "content": user_query})
 
         return self.chat.complete(messages=messages)
@@ -490,5 +518,5 @@ def _parse_json(text: str) -> dict:
 
     Raises json.JSONDecodeError if the result is not valid JSON.
     """
-    cleaned = re.sub(r"```(?:json)?|```", "", text, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"```(?:json)?|```", "", text).strip()
     return json.loads(cleaned)

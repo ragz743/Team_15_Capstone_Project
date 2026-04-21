@@ -33,7 +33,7 @@ dev = [
 where = ["code"]
 
 [tool.black]
-line-length = 80
+line-length = 120
 
 [tool.ruff]
 line-length = 120 # max line length
