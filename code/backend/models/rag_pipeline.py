@@ -34,13 +34,9 @@ logger = logging.getLogger(__name__)
 
 # DOMAIN CONSTANTS
 
-VALID_INTENTS = frozenset(
-    {"live", "historical", "forecast", "aggregate", "schema"}
-)
+VALID_INTENTS = frozenset({"live", "historical", "forecast", "aggregate", "schema"})
 OFF_TOPIC = "off_topic"
-MAX_HISTORY_TURNS = (
-    6  # Maximum conversation turns retained for follow-up context (FR-29).
-)
+MAX_HISTORY_TURNS = 6  # Maximum conversation turns retained for follow-up context (FR-29).
 
 # PROMPT TEMPLATES
 
@@ -250,7 +246,7 @@ class RAGPipeline:
 
         """
         t_start = time.monotonic()
-        history = list[dict] = conversation_history or []
+        history: list[dict] = conversation_history or []
         timings: dict[str, float] = {}
 
         # Stage 1: Intent Classification
@@ -399,9 +395,7 @@ class RAGPipeline:
 
         Matches a hint to a station_id or returns a clarification question (FR-6, FR-11).
         """
-        system = DISAMBIG_SYSTEM.format(
-            station_list_json=json.dumps(self.stations, indent=2)
-        )
+        system = DISAMBIG_SYSTEM.format(station_list_json=json.dumps(self.stations, indent=2))
         raw = self.chat.complete(
             messages=[
                 {"role": "system", "content": system},
@@ -492,10 +486,7 @@ class RAGPipeline:
 
         # Build history block (FR-29 follow-up context)
         trimmed = history[-MAX_HISTORY_TURNS:]
-        history_block = (
-            "\n".join(f"{m['role'].upper()}: {m['content']}" for m in trimmed)
-            or "(no prior conversation)"
-        )
+        history_block = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in trimmed) or "(no prior conversation)"
 
         system = ANSWER_SYSTEM.format(
             context=context_block,
@@ -503,7 +494,7 @@ class RAGPipeline:
             max_turns=MAX_HISTORY_TURNS,
         )
 
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        messages: list[dict] = [{"role": "system", "content": system}]
         messages += trimmed
         messages.append({"role": "user", "content": user_query})
 
