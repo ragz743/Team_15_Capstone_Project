@@ -3,12 +3,14 @@ bin-debug/
 bin-release/
 [Oo]bj/
 [Bb]in/
+node_modules/
 
 # Other files and folders
 .settings/
 models/*
 models.yaml
 *.gguf
+.DS_Store
 
 # Executables
 *.swf
