@@ -1,6 +1,7 @@
 """The loader base class."""
 
 from abc import abstractmethod
+from typing import ClassVar
 
 from langchain_core.document_loaders import BaseLoader
 from langchain_core.documents import Document
@@ -8,6 +9,8 @@ from langchain_core.documents import Document
 
 class _BaseLoader(BaseLoader):
     """Implement the langchain BaseLoader interface but also manage the data source."""
+
+    insert_sql: ClassVar[bytes]
 
     # TODO (Any): Add the aload (async load) as another abstract method
     @abstractmethod

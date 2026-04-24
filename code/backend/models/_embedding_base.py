@@ -8,7 +8,7 @@ from langchain_core.documents import Document
 class _BaseEmbedding(ABC):
     """The embedding model base class."""
 
-    _VECTOR_DIMENSIONS = 128
+    _VECTOR_DIMENSIONS = 768
 
     @abstractmethod
     def embed_document(self, document: Document) -> tuple[list[float], Document]:

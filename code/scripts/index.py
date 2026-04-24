@@ -12,8 +12,7 @@ def main() -> None:
     embedding_model, _ = ModelFactory.load_from_models_yaml()
 
     loader = DailyLoader()
-    docs = [d for d in loader.load() if d.page_content]
     vector_store = PgVectorStore(embedding_model)
-    vector_store.add_documents(docs)
+    vector_store.load_and_store(loader)
 
     pass

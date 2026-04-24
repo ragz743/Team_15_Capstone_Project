@@ -16,6 +16,8 @@
 ## Installation with Docker Compose
 - Installation is handled completely by the `docker-compose.yml`, simply run `docker compose up -d` from the terminal to launch services in detached mode
 - at any time, active docker containers can be seen with the command `docker ps`
+> Note: During development it is a common need to wipe the database for a clean start! To do this shutdown the containers and remove the current volumes with `docker compose down -v` **WHICH WILL DELETE ALL CONTAINER DATA SO USE CAUTION!!!**
+
 
 ## Shutting down services
 - shutting down containers is also handled by `docker-compose.yml`, use command `docker compose down` to shutdown all docker compose containers.

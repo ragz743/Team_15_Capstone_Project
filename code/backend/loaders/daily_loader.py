@@ -65,6 +65,12 @@ class DailyQueryResult(NamedTuple):
 class DailyLoader(_BaseLoader):
     """A loader for pulling and processing awn daily data."""
 
+    insert_sql = b"""
+    INSERT INTO daily_index (embedding, document, metadata)
+    VALUES (%s, %s, %s)
+    RETURNING id;
+    """
+
     def __init__(self) -> None:
         """Create an instance of the DailyLoader class."""
 
@@ -74,17 +80,17 @@ class DailyLoader(_BaseLoader):
             SELECT UNIT_ID, STATION_NAME, COUNTY, STATE,
             STATION_LATDEG, STATION_LNGDEG
             FROM METADATA
-            WHERE COUNTY = 'Whitman'
-            """
+            WHERE COUNTY = 'Whitman' AND ACTIVE_STATION = "Y"
+           """
         with AWNDatabaseConnection() as awn_conn:
             return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
 
     def _query_station_daily(
         self,
         stations: list[MetadataQueryResult],
-    ) -> list[DailyQueryResult]:
+    ) -> list[tuple[MetadataQueryResult, DailyQueryResult]]:
         """Query stations from the daily db."""
-        result: list[DailyQueryResult] = []
+        result: list[tuple[MetadataQueryResult, DailyQueryResult]] = []
         with AWNDailyDatabaseConnection() as awn_conn:
             for s in stations:
                 query_daily = f"""
@@ -96,7 +102,10 @@ class DailyLoader(_BaseLoader):
                 # prep table name and date
                 a_month_ago = (date.today() - timedelta(weeks=4)).strftime("%Y-%m-%d")  # YYYY-MM-DD
                 result.extend(
-                    [DailyQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_daily, (a_month_ago,))]
+                    [
+                        (s, DailyQueryResult.from_tuple(tup))
+                        for tup in awn_conn.simple_query(query_daily, (a_month_ago,))
+                    ]
                 )
         return result
 
@@ -106,7 +115,7 @@ class DailyLoader(_BaseLoader):
         docs: list[Document] = []
         metadata_results = self._query_stations()
         stations_daily = self._query_station_daily(metadata_results)
-        for meta, station in zip(metadata_results, stations_daily, strict=False):
+        for meta, station in stations_daily:
             d = Document(
                 page_content=f"""
                 On {station.date}, {meta.station} had
