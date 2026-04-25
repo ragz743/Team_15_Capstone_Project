@@ -1,5 +1,6 @@
 """Loader for creating documents from AWN forecast databases."""
 
+import json
 from datetime import datetime
 from typing import NamedTuple, Self, Sequence, override
 
@@ -9,8 +10,10 @@ from backend.databases.awn_fc_connection import (
     AWNForecastFallbackDatabaseConnection,
 )
 from backend.databases.awn_main_connection import AWNDatabaseConnection
+from backend.databases.pgvector import PgVectorConnection
 from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
+from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 
 
@@ -50,8 +53,9 @@ class ForecastLoader(_BaseLoader):
     RETURNING id;
     """
 
-    def __init__(self):
+    def __init__(self, embedding_model: _BaseEmbedding) -> None:
         """Create and instance of the ForecastLoader class."""
+        self._embedding_model = embedding_model
 
     def _query_stations(self) -> list[MetadataQueryResult]:
         # TODO (Gavin): extract meta data query into a common class for all loaders
@@ -60,7 +64,7 @@ class ForecastLoader(_BaseLoader):
             SELECT UNIT_ID, STATION_NAME, COUNTY, STATE,
             STATION_LATDEG, STATION_LNGDEG
             FROM METADATA
-            WHERE COUNTY = 'Chelan' AND ACTIVE_STATION = "Y"
+            WHERE COUNTY = 'Whitman' AND ACTIVE_STATION = "Y"
            """
         with AWNDatabaseConnection() as awn_conn:
             return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
@@ -109,7 +113,7 @@ class ForecastLoader(_BaseLoader):
         return result
 
     @override
-    def load(self) -> list[Document]:
+    def _load(self) -> list[Document]:
         """Load the data from the datasource and process into documents."""
         docs: list[Document] = []
         metadata_results = self._query_stations()
@@ -139,3 +143,18 @@ class ForecastLoader(_BaseLoader):
             docs.append(d)
 
         return docs
+
+    @override
+    def _store(self, docs: list[Document]) -> list[str]:
+        """Given a list of documents, store them in the vector store."""
+        embeddings = self._embedding_model.embed_documents(docs)
+
+        with PgVectorConnection() as pgvec_conn:
+            ids = [
+                pgvec_conn.insert(
+                    self.insert_sql, (doc.metadata["id"], vec, doc.page_content, json.dumps(doc.metadata))
+                )
+                for vec, doc in embeddings
+            ]
+
+        return ids

@@ -1,11 +1,8 @@
 """The vector store wrapper class."""
 
-import json
 import warnings
 
 from backend.databases.pgvector import PgVectorConnection
-from backend.loaders._loader_base import _BaseLoader
-from backend.model_factory import ModelFactory
 from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
@@ -20,23 +17,6 @@ class PgVectorStore(VectorStore):
 
     def __init__(self, embedding_model: _BaseEmbedding) -> None:
         """Create an instance of the PgVectorStore class."""
-        # NOTE: Need to implement, just load embedding. Doing both will have to do for now...
-        self._embedding_model, _ = ModelFactory.load_from_models_yaml()
-
-    def load_and_store(self, loader: _BaseLoader) -> list[str]:
-        """Given a document loader, use it to load then embed vectors before storing."""
-        docs: list[Document] = [d for d in loader.load() if d.page_content]
-        embeddings = self._embedding_model.embed_documents(docs)
-
-        with PgVectorConnection() as pgvec_conn:
-            ids = [
-                pgvec_conn.insert(
-                    loader.insert_sql, (doc.metadata["id"], vec, doc.page_content, json.dumps(doc.metadata))
-                )
-                for vec, doc in embeddings
-            ]
-
-        return ids
 
     def add_documents(self, documents: list[Document], **kwargs) -> list[str]:
         """Add or update documents in the vector store."""

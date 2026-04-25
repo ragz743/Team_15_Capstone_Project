@@ -1,13 +1,16 @@
 """Loader for creating documents from the AWN daily database."""
 
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import NamedTuple, Self, Sequence, override
 
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
+from backend.databases.pgvector import PgVectorConnection
 from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
+from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 
 
@@ -44,8 +47,9 @@ class DailyLoader(_BaseLoader):
     RETURNING id;
     """
 
-    def __init__(self) -> None:
+    def __init__(self, embedding_model: _BaseEmbedding) -> None:
         """Create an instance of the DailyLoader class."""
+        self._embedding_model = embedding_model
 
     def _query_stations(self) -> list[MetadataQueryResult]:
         """Get station names from the metadata table."""
@@ -83,7 +87,7 @@ class DailyLoader(_BaseLoader):
         return result
 
     @override
-    def load(self) -> list[Document]:
+    def _load(self) -> list[Document]:
         """Load the data from the datasource and process into documents."""
         docs: list[Document] = []
         metadata_results = self._query_stations()
@@ -107,3 +111,16 @@ class DailyLoader(_BaseLoader):
             docs.append(d)
 
         return docs
+
+    @override
+    def _store(self, docs: list[Document]) -> list[str]:
+        """Given a list of documents, store them in the vector store."""
+        embeddings = self._embedding_model.embed_documents(docs)
+
+        with PgVectorConnection() as pgvec_conn:
+            ids = [
+                pgvec_conn.insert(self.insert_sql, (vec, doc.page_content, json.dumps(doc.metadata)))
+                for vec, doc in embeddings
+            ]
+
+        return ids
