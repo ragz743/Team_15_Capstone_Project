@@ -1,7 +1,7 @@
 """Script for running an index operation manually."""
 
 import dotenv
-from backend.loaders.daily_loader import DailyLoader
+from backend.loaders.forecast_loader import ForecastLoader
 from backend.model_factory import ModelFactory
 from backend.vector_store import PgVectorStore
 
@@ -11,7 +11,7 @@ def main() -> None:
     dotenv.load_dotenv()
     embedding_model, _ = ModelFactory.load_from_models_yaml()
 
-    loader = DailyLoader()
+    loader = ForecastLoader()
     vector_store = PgVectorStore(embedding_model)
     vector_store.load_and_store(loader)
 

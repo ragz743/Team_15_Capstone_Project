@@ -30,7 +30,9 @@ class PgVectorStore(VectorStore):
 
         with PgVectorConnection() as pgvec_conn:
             ids = [
-                pgvec_conn.insert(loader.insert_sql, (vec, doc.page_content, json.dumps(doc.metadata)))
+                pgvec_conn.insert(
+                    loader.insert_sql, (doc.metadata["id"], vec, doc.page_content, json.dumps(doc.metadata))
+                )
                 for vec, doc in embeddings
             ]
 

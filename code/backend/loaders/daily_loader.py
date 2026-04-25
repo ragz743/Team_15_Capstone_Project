@@ -6,36 +6,9 @@ from typing import NamedTuple, Self, Sequence, override
 
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
+from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
 from langchain_core.documents import Document
-
-
-class MetadataQueryResult(NamedTuple):
-    """The data returned by the metadata query."""
-
-    unit_id: str
-    station: str
-    county: str
-    state: str
-    station_lat: str
-    station_lng: str
-
-    @classmethod
-    def from_tuple(cls, row: Sequence[object]) -> Self:
-        """Create a MetadataQueryResult from a tuple."""
-        match row:
-            case (str(unit), str(station), str(county), str(state), str(lat), str(lng)):
-                return cls(
-                    unit,
-                    station,
-                    county,
-                    state,
-                    lat,
-                    lng,
-                )
-            case _:
-                msg = f"unrecognized tuple structure: {row}"
-                raise ValueError(msg)
 
 
 class DailyQueryResult(NamedTuple):
@@ -122,7 +95,7 @@ class DailyLoader(_BaseLoader):
                 an average air temp of {station.avg_air_temp},
                 an average wind speed of {station.avg_wind_sp},
                 and an average humidity of {station.avg_humidity}.
-                """,
+                """.strip(),
                 metadata={
                     "date": station.date,
                     "county": meta.county,

@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS daily_index (
 -- Will hold only the most up to date information
 -- for each station (entry with maximum timestamp)
 CREATE TABLE IF NOT EXISTS live_index (
-    id BIGSERIAL PRIMARY KEY, -- station UNIT_ID == vector id
+    id INTEGER PRIMARY KEY, -- station UNIT_ID == vector id
     embedding VECTOR(768),  -- vector width is hardcoded into _BaseEmbedding class
     document TEXT,          -- document text to be retrieved during search
     metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS live_index (
 -- hourly precision, always keep the newest set of forecasts
 -- for each station
 CREATE TABLE IF NOT EXISTS forecast_index (
-    id BIGSERIAL PRIMARY KEY, -- station UNIT_ID == vector id
+    id INTEGER PRIMARY KEY, -- station UNIT_ID == vector id
     embedding VECTOR(768),  -- vector width is hardcoded into _BaseEmbedding class
     document TEXT,          -- document text to be retrieved during search
     metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
