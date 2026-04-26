@@ -1,7 +1,7 @@
 # Sprint 2 Report (Dates from March 26th, 2026 to April 24th, 2026)
 
 ## YouTube link of Sprint 2
-Video Link:
+Video Link: https://youtu.be/ltAWGXFPh8g
 
 ## What's New (User Facing)
  * Establish project infrastructure including Docker containerization, pgvector database setup, LLM containerization, environment variable management, and pytest configuration
@@ -25,6 +25,7 @@ Here are links to the issues that we completed in this sprint:
  * [#19 Vector DB Queries](https://github.com/ragz743/Team_15_Capstone_Project/issues/19)
  * [#20 RAG Prompt Templates](https://github.com/ragz743/Team_15_Capstone_Project/issues/20)
  * [#21 Large Language Model Integration](https://github.com/ragz743/Team_15_Capstone_Project/issues/21)
+ * [#22 Chatbot UI Mockup](https://github.com/ragz743/Team_15_Capstone_Project/issues/22)
  * [#23 Docker Compose Setup](https://github.com/ragz743/Team_15_Capstone_Project/issues/23)
  * [#24 PyTest Setup and Config](https://github.com/ragz743/Team_15_Capstone_Project/issues/24)
  * [#25 Environment Variable Management](https://github.com/ragz743/Team_15_Capstone_Project/issues/25)
@@ -34,7 +35,6 @@ Here are links to the issues that we completed in this sprint:
  
  * [#17 Document Splitting RAG Stage](https://github.com/ragz743/Team_15_Capstone_Project/issues/17) Implemented but ultimately determined to be unnecessary for the current prototype architecture.
  * [#18 Integrate Embedding Model and Store Vectors in Vector DB](https://github.com/ragz743/Team_15_Capstone_Project/issues/18) Currently in progress but was not completed within the sprint timeline.
- * [#22 Chatbot UI Mockup](https://github.com/ragz743/Team_15_Capstone_Project/issues/22) Deferred as the team is focused on integrating the existing backend with the frontend before building a custom UI.
 
 ## Code Files for Review
 Please review the following code files, which were actively developed during this sprint, for quality:
