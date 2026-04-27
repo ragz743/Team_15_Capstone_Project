@@ -4,10 +4,10 @@ import os
 from typing import TYPE_CHECKING, override
 
 from backend.models._embedding_base import _BaseEmbedding
-from langchain_openai import OpenAIEmbeddings
 
 if TYPE_CHECKING:
     from langchain_core.documents import Document
+    from langchain_openai import OpenAIEmbeddings
 
 
 class EmbeddingOpenRouter(_BaseEmbedding):
@@ -18,6 +18,7 @@ class EmbeddingOpenRouter(_BaseEmbedding):
     def __init__(self, model_name: str, **kwargs) -> None:
         """Create an instance of the ChatbotOpenRouter."""
         self._model = OpenAIEmbeddings(
+            model=model_name,  # Ensures correct embedding model is used in OpenAIEmbeddings
             api_key=os.getenv("OPENROUTER_API_KEY"),  # type: ignore (can't get SecretStr type)
             base_url=self._BASE_URL,
             check_embedding_ctx_length=False,
