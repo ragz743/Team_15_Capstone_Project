@@ -16,7 +16,10 @@ dependencies = [
     "python-dotenv",
     "mysql-connector-python",
     "psycopg[binary]",
-    "langchain"
+    "langchain",
+    "pyyaml",
+    "langchain-openrouter",
+    "langchain-openai",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +31,9 @@ dev = [
     "pyright",
     "pytest",
 ]
+
+[project.scripts]
+index = "scripts.index:main"
 
 [tool.setuptools.packages.find]
 where = ["code"]

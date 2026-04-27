@@ -15,6 +15,33 @@ TODO: Write a compelling/creative/informative project description / summary
 ### Prerequisites
 
 TODO: List what a user needs to have installed before running the installation instructions below (e.g., git, which versions of Ruby/Rails)
+## Running Models
+Project is setup to be able to interact with models modularly. This can be controlled with the file `models.yaml` which determines how to connect to models. At the time of writing this message, only open router models are supported. See an example config below for details on which arguments are required to use models hosted by open router.
+```yaml
+models:
+  embedding:
+    class_file: "embedding_openrouter.py"
+    class: "EmbeddingOpenRouter"
+    kwargs:
+      model: "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+      temperature: 0
+  chatbot:
+    class_file: "chatbot_openrouter.py"
+    class: "ChatbotOpenRouter"
+    kwargs:
+      model: "google/gemma-4-26b-a4b-it:free"
+      temperature: 0
+
+```
+- `models.yaml` is generic so that users may extend the model types to include new models sources as needed, modularity is an important feature of this project!
+  - Any class which inherits from `_BaseEmbedding` or `_BaseChatbot` should be compatible with the rest of the project
+- root key must always be `models` and contain an entry for both `embedding` and `chatbot` models
+- the keys inside of the model type must include the following
+  - `class_file`: which is the name of the python file containing the class definition
+  - `class`: the name of the python class to use/instantiate
+  - `kwargs`: the key word arguments to pass to the class constructor
+    - this will be depended on the python class and may very between model hosts!
+    - this also leaves the door open for customization based on model and machine as configuration can greatly influence how a model responds
 
 ### Add-ons
 
