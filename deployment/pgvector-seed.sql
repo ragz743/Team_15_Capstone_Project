@@ -1,8 +1,37 @@
 -- SQL Script to Run when pgvector container is initialized
 
-CREATE EXTENSION vector; -- enable pgvector extension included in image
+-- Switch to vectorstore, then set up schema
+\c vectorstore
 
-CREATE DATABASE vectorstore; -- create the vectorstore db
+-- enable pgvector extension included in image
+CREATE EXTENSION IF NOT EXISTS vector;
 
--- dummy table to make sure pgvector ext works...
-CREATE TABLE items (id bigserial PRIMARY KEY, embedding vector(3));
+-- daily index table
+CREATE TABLE IF NOT EXISTS daily_index (
+    id BIGSERIAL PRIMARY KEY,   -- auto inc vector id
+    embedding VECTOR(768),  -- vector width is hardcoded into _BaseEmbedding class
+    document TEXT,          -- document text to be retrieved during search
+    metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
+);
+
+-- live index table
+-- Will hold only the most up to date information
+-- for each station (entry with maximum timestamp)
+CREATE TABLE IF NOT EXISTS live_index (
+    id INTEGER PRIMARY KEY, -- station UNIT_ID == vector id
+    embedding VECTOR(768),  -- vector width is hardcoded into _BaseEmbedding class
+    document TEXT,          -- document text to be retrieved during search
+    metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
+);
+
+-- forecast index table
+-- will hold on the most up to date forecast information
+-- forecasts cover X number of days into the future with an
+-- hourly precision, always keep the newest set of forecasts
+-- for each station
+CREATE TABLE IF NOT EXISTS forecast_index (
+    id INTEGER PRIMARY KEY, -- station UNIT_ID == vector id
+    embedding VECTOR(768),  -- vector width is hardcoded into _BaseEmbedding class
+    document TEXT,          -- document text to be retrieved during search
+    metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
+);
