@@ -27,9 +27,7 @@ class PgVectorConnection:
             "password": os.getenv("PG_PASSWORD"),
             "dbname": self._DB_NAME,
         }
-        self.conn = psycopg.connect(
-            conninfo=" ".join({f"{k}={v}" for k, v in conn_info.items()})
-        )
+        self.conn = psycopg.connect(conninfo=" ".join({f"{k}={v}" for k, v in conn_info.items()}))
 
     def __enter__(self) -> Self:
         """Open the database connection using a context manager."""
@@ -44,9 +42,7 @@ class PgVectorConnection:
         """Close the database connection by exiting with context manager."""
         self.conn.close()
 
-    def simple_query(
-        self, sql_query: bytes, query_vars: Sequence[Any]
-    ) -> Generator[Sequence[Any]]:
+    def simple_query(self, sql_query: bytes, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
         """Make a simple query to the connected database."""
         cursor = self.conn.cursor()
 

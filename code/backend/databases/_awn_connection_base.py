@@ -13,7 +13,7 @@ from mysql import connector
 class AWNDatabaseConnectionBase(ABC):
     """AgWeatherNet MySQL database connection base class."""
 
-    _TABLE_NAME: ClassVar[str]
+    _DB_NAME: ClassVar[str]
 
     def __init__(self) -> None:
         """Create a new AWN Database Connection."""
@@ -21,7 +21,7 @@ class AWNDatabaseConnectionBase(ABC):
             user=os.getenv("AWN_DB_USER"),
             password=os.getenv("AWN_DB_PASSWORD"),
             host=os.getenv("AWN_DB_HOST"),
-            database=self._TABLE_NAME,
+            database=self._DB_NAME,
         )
 
     def __enter__(self) -> Self:
@@ -37,9 +37,7 @@ class AWNDatabaseConnectionBase(ABC):
         """Close the database connection by exiting with context manager."""
         self.conn.disconnect()
 
-    def simple_query(
-        self, sql_query: str, query_vars: Sequence[Any]
-    ) -> Generator[Sequence[Any]]:
+    def simple_query(self, sql_query: str, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
         """Make a simple query to the connected database."""
         cursor = self.conn.cursor()
 
