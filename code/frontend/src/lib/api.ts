@@ -9,7 +9,6 @@
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
-
 /** A single turn in the chat transcript, matching backend ChatMessage. */
 export type ChatRole = "user" | "assistant" | "system";
 
