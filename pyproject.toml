@@ -40,13 +40,9 @@ where = ["code"]
 
 [tool.black]
 line-length = 120
-
 [tool.ruff]
 line-length = 120 # max line length
-exclude = [".venv", "*.md", ".egg*", ".git", ".gitignore"] # stuff not to lint + format
-
-[tool.ruff.lint]
-select = [
+lint.select = [
     "E", # code style errs
     "W", # code style warnings
     "F", # pyflakes issues -> fancy set of rules
@@ -55,11 +51,10 @@ select = [
     "B", # bugbear errs -> more fancy rules
     "I", # isort compatibility
 ]
-
-ignore = [
+lint.ignore = [
     #"put err code here", # ignore specific err codes here, only do if its very unreasonable!
-    "D203", # Conflict: One-blank-line-before-class (Incompatible with D211)
-    "D213", # Conflict: Multi-line-summary-second-line (Incompatible with D212)
+    "D203",
+    "D213",
 ]
 
 [tool.pyright]

@@ -1,11 +1,8 @@
-"""Loader for creating documents from the AWN daily database."""
+"""Loader for creating documents from the AWN live database."""
 
 import json
-from datetime import date, timedelta
-from decimal import Decimal
 from typing import NamedTuple, Self, Sequence, override
 
-from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.databases.pgvector import PgVectorConnection
 from backend.loaders._common import MetadataQueryResult
@@ -14,44 +11,52 @@ from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 
 
-class DailyQueryResult(NamedTuple):
-    """The data returned by the daily station query."""
+class LiveQueryResult(NamedTuple):
+    """The result of the live data loader query."""
 
-    date: str
-    avg_air_temp: Decimal
-    avg_humidity: Decimal
-    avg_wind_sp: Decimal
+    timestamp: str
+    air_temp: float
+    rel_humidity: float
+    precipitation: float
+    wind_speed: float
 
     @classmethod
     def from_tuple(cls, row: Sequence) -> Self:
-        """Create a DailyQueryResult from a tuple."""
+        """Create a LiveQueryResult from a tuple."""
         match row:
-            case (date, avg_air_temp, avg_humidity, avg_wind_sp):
+            case (tstamp, air_temp, rel_humidity, precip, wind_speed):
                 return cls(
-                    date.strftime("%Y-%m-%d"),
-                    avg_air_temp,
-                    avg_humidity,
-                    avg_wind_sp,
+                    tstamp.strftime("%Y-%m-%d %H:%M:S"),
+                    air_temp,
+                    rel_humidity,
+                    precip,
+                    wind_speed,
                 )
             case _:
                 msg = f"unrecognized tuple structure: {row}"
                 raise ValueError(msg)
 
 
-class DailyLoader(_BaseLoader):
-    """A loader for pulling and processing awn daily data."""
+class LiveLoader(_BaseLoader):
+    """A loader for processing live station data."""
 
     insert_sql = b"""
-    INSERT INTO daily_index (embedding, document, metadata)
-    VALUES (%s, %s, %s)
+    INSERT INTO live_index (id, embedding, document, metadata)
+    VALUES (%s, %s, %s, %s)
+    ON CONFLICT (id)
+    DO UPDATE SET
+        embedding = EXCLUDED.embedding,
+        document = EXCLUDED.document,
+        metadata = EXCLUDED.metadata
     RETURNING id;
     """
 
     def __init__(self, embedding_model: _BaseEmbedding) -> None:
-        """Create an instance of the DailyLoader class."""
+        """Create an instance of the LiveLoader class."""
         self._embedding_model = embedding_model
 
     def _query_stations(self) -> list[MetadataQueryResult]:
+        # TODO (Gavin): extract meta data query into a common class for all loaders
         """Get station names from the metadata table."""
         query_metadata = """
             SELECT UNIT_ID, STATION_NAME, COUNTY, STATE,
@@ -62,28 +67,23 @@ class DailyLoader(_BaseLoader):
         with AWNDatabaseConnection() as awn_conn:
             return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
 
-    def _query_station_daily(
+    def _query_station_most_recent(
         self,
         stations: list[MetadataQueryResult],
-    ) -> list[tuple[MetadataQueryResult, DailyQueryResult]]:
-        """Query stations from the daily db."""
-        result: list[tuple[MetadataQueryResult, DailyQueryResult]] = []
-        with AWNDailyDatabaseConnection() as awn_conn:
+    ) -> list[tuple[MetadataQueryResult, LiveQueryResult]]:
+        """Query the most recent weather status from each station."""
+        result: list[tuple[MetadataQueryResult, LiveQueryResult]] = []
+        with AWNDatabaseConnection() as awn_conn:
             for s in stations:
+                # Always get the most recent (max) record for each station
                 query_daily = f"""
-                    SELECT JULDATE, AVG_AIR_TEMP, AVG_HUMIDITY, AVG_WIND_SP
-                    FROM station{s.unit_id}daily
-                    WHERE JULDATE >= %s
+                    SELECT TSTAMP, AIR_TEMP, REL_HUMIDITY, PRECIP, WIND_SPEED
+                    FROM station{s.unit_id}
+                    ORDER BY TSTAMP DESC
+                    LIMIT 1;
                     """
 
-                # prep table name and date
-                a_month_ago = (date.today() - timedelta(weeks=4)).strftime("%Y-%m-%d")  # YYYY-MM-DD
-                result.extend(
-                    [
-                        (s, DailyQueryResult.from_tuple(tup))
-                        for tup in awn_conn.simple_query(query_daily, (a_month_ago,))
-                    ]
-                )
+                result.extend([(s, LiveQueryResult.from_tuple(tup)) for tup in awn_conn.simple_query(query_daily, ())])
         return result
 
     @override
@@ -91,17 +91,19 @@ class DailyLoader(_BaseLoader):
         """Load the data from the datasource and process into documents."""
         docs: list[Document] = []
         metadata_results = self._query_stations()
-        stations_daily = self._query_station_daily(metadata_results)
-        for meta, station in stations_daily:
+        stations_live = self._query_station_most_recent(metadata_results)
+        for meta, station in stations_live:
             d = Document(
                 page_content=f"""
-                On {station.date}, {meta.station} had
-                an average air temp of {station.avg_air_temp},
-                an average wind speed of {station.avg_wind_sp},
-                and an average humidity of {station.avg_humidity}.
+                At {station.timestamp}, {meta.station} had
+                an air temp of {station.air_temp},
+                an wind speed of {station.wind_speed},
+                precipitation of {station.precipitation} inches,
+                and an average humidity of {station.rel_humidity}.
                 """.strip(),
                 metadata={
-                    "date": station.date,
+                    "id": meta.unit_id,
+                    "timestamp": station.timestamp,
                     "county": meta.county,
                     "state": meta.state,
                     "latitude": meta.station_lat,
@@ -119,7 +121,9 @@ class DailyLoader(_BaseLoader):
 
         with PgVectorConnection() as pgvec_conn:
             ids = [
-                pgvec_conn.insert(self.insert_sql, (vec, doc.page_content, json.dumps(doc.metadata)))
+                pgvec_conn.insert(
+                    self.insert_sql, (doc.metadata["id"], vec, doc.page_content, json.dumps(doc.metadata))
+                )
                 for vec, doc in embeddings
             ]
 
