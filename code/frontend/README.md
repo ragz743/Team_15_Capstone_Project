@@ -2,9 +2,11 @@
 
 Vite + React + TypeScript frontend mockup for the AG Weather Net chatbot.
 
-## Current scope
+## What it does
 
-- back end wiring done
+- Shows the chat UI.
+- Sends chat messages to the FastAPI backend.
+- Uses the Vite `/api` proxy so local requests go to `localhost:8000`.
 
 ## Scripts
 
@@ -15,7 +17,19 @@ npm run build
 npm run lint
 ```
 
-## Integration note
+## Running locally
 
-FastAPI route to chat to LLM via OpenRouter is implemented, simple works
-Needs API key from openrouter
+Start the backend from the repo root:
+
+```bash
+uvicorn backend.api:app --reload --port 8000
+```
+
+Then start the frontend from this folder:
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` in the browser.

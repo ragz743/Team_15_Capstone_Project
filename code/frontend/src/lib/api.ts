@@ -101,8 +101,11 @@ export async function sendChat(
 export interface HealthResponse {
   status: string;
   chatbot_ready: boolean;
+  retriever_ready: boolean;
   model: string | null;
+  embedding_model: string | null;
   has_api_key: boolean;
+  has_embedding_model: boolean;
 }
 
 export async function fetchHealth(signal?: AbortSignal): Promise<HealthResponse> {

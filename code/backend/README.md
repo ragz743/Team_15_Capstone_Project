@@ -9,8 +9,8 @@ layer that the React frontend talks to.
 
 | Method | Path          | Purpose                                      |
 | ------ | ------------- | -------------------------------------------- |
-| GET    | `/api/health` | Readiness + chatbot status                   |
-| POST   | `/api/chat`   | Forward a conversation to the LLM, get reply |
+| GET    | `/api/health` | Readiness + retriever/chatbot status         |
+| POST   | `/api/chat`   | Send latest user question through retrieval  |
 
 `POST /api/chat` request body:
 
@@ -28,22 +28,39 @@ Response:
 { "reply": "…assistant text…", "model": "google/gemma-2-9b-it:free" }
 ```
 
-RAG is intentionally NOT wired here yet — it will be enabled once
-`PgVectorStore.similarity_search` is implemented. At that point, swap the
-direct `ChatbotOpenRouter.invoke` call in `api.py` for `Retriever.retrieve`.
+The API currently sends the latest user message into `Retriever.retrieve`.
+Conversation history is still accepted from the frontend, but the retriever
+interface only accepts one question string today.
 
-## Running locally
+## Run the demo
 
 From the repo root, with the project venv active:
 
 ```bash
-# one-time: install deps (picks up fastapi + uvicorn)
+# one-time: install deps
 python -m pip install -e ".[dev]"
 
-# ensure SECRET_STUFF.env has OPENROUTER_API_KEY=...
-# then start the server
+# start pgvector
+docker compose up -d pgvector
+
+# seed daily_index before demoing real retrieved context
+# this uses models.yaml for the embedding model configuration
+index
+
+# start FastAPI
 uvicorn backend.api:app --reload --port 8000
 ```
+
+In another terminal:
+
+```bash
+cd code/frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`, enter a question, and the React app will call
+FastAPI through the Vite `/api` proxy.
 
 Quick smoke test:
 
@@ -56,13 +73,18 @@ curl -X POST http://localhost:8000/api/chat \
 
 ## Configuration
 
-Env vars consumed by `api.py` (all read from `.env` / `SECRET_STUFF.env`):
+Env vars consumed by `api.py` and the pgvector connection. `api.py` loads
+`.env` automatically; otherwise export these in the shell before starting
+uvicorn:
 
 | Variable                      | Required | Default                    |
 | ----------------------------- | -------- | -------------------------- |
 | `OPENROUTER_API_KEY`          | yes      | —                          |
+| `OPENROUTER_EMBEDDING_MODEL`  | yes      | —                          |
 | `OPENROUTER_CHAT_MODEL`       | no       | `openai/gpt-oss-20b:free` |
 | `OPENROUTER_CHAT_TEMPERATURE` | no       | `0`                       |
+| `PG_USER`                     | yes      | —                          |
+| `PG_PASSWORD`                 | yes      | —                          |
 
 > OpenRouter rotates free-tier availability. If the default 404s, list live
 > models with:
@@ -71,4 +93,19 @@ Env vars consumed by `api.py` (all read from `.env` / `SECRET_STUFF.env`):
 >   -H "Authorization: Bearer $OPENROUTER_API_KEY" \
 >   | jq -r '.data[] | select(.id | endswith(":free")) | .id'
 > ```
-> Then set `OPENROUTER_CHAT_MODEL=<id>` in `SECRET_STUFF.env`.
+> Then set `OPENROUTER_CHAT_MODEL=<id>` in `.env` or export it in your shell.
+
+Before demo, we need to confirm `daily_index` has rows:
+
+```bash
+docker compose exec pgvector psql -U "$PG_USER" -d vectorstore \
+  -c "SELECT count(*) FROM daily_index;"
+```
+
+If `daily_index` is empty, the web flow still works, but the assistant may say
+there is not enough context to answer.
+
+Containerization handoff: this PR keeps localhost defaults, including
+`PgVectorConnection host=localhost`. The follow-up containerization PR should
+make that host env-driven so FastAPI can connect to `pgvector` inside the
+compose network.
