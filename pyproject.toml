@@ -29,6 +29,7 @@ dev = [
     "isort",
     "pyright",
     "pytest",
+    "httpx",
 ]
 
 [project.scripts]
