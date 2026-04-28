@@ -17,7 +17,6 @@ class PgVectorStore(VectorStore):
 
     def __init__(self, embedding_model: _BaseEmbedding) -> None:
         """Create an instance of the PgVectorStore class."""
-        pass
 
     def add_documents(self, documents: list[Document], **kwargs) -> list[str]:
         """Add or update documents in the vector store."""

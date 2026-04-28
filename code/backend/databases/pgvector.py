@@ -52,3 +52,13 @@ class PgVectorConnection:
         # iter through result tuples, can be any number of rows so be careful!
         for query_fields in cursor:
             yield query_fields
+
+    def insert(self, sql_query: bytes, query_vars: Sequence[Any]) -> str:
+        """Insert data into the database sing the sql_query and parameters."""
+        cursor = self.conn.cursor()
+
+        # execute the query and save changes before exit
+        id = cursor.execute(sql_query, query_vars).fetchone()
+        self.conn.commit()
+
+        return str(id)
