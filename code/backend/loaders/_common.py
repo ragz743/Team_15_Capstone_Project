@@ -1,5 +1,6 @@
 """The common Metadata table type to be called from other loaders during table selection."""
 
+import itertools
 from typing import NamedTuple, Self, Sequence
 
 
@@ -29,3 +30,13 @@ class MetadataQueryResult(NamedTuple):
             case _:
                 msg = f"unrecognized tuple structure: {row}"
                 raise ValueError(msg)
+
+
+def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
+    """Convert a collection of named tuple object into a markdown table."""
+    columns = zip(tuples[0]._fields, units, strict=True)
+    header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
+    divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"
+    rows = ["| " + " | ".join(map(str, row)) + " |\n" for row in tuples]
+
+    return header + divider + "".join(rows)

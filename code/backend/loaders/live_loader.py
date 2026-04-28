@@ -5,6 +5,7 @@ from typing import NamedTuple, Self, Sequence, override
 
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.databases.pgvector import PgVectorConnection
+from backend.loaders import _common
 from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
 from backend.models._embedding_base import _BaseEmbedding
@@ -26,7 +27,7 @@ class LiveQueryResult(NamedTuple):
         match row:
             case (tstamp, air_temp, rel_humidity, precip, wind_speed):
                 return cls(
-                    tstamp.strftime("%Y-%m-%d %H:%M:S"),
+                    tstamp.strftime("%Y-%m-%d %H:%M:%S"),
                     air_temp,
                     rel_humidity,
                     precip,
@@ -35,6 +36,11 @@ class LiveQueryResult(NamedTuple):
             case _:
                 msg = f"unrecognized tuple structure: {row}"
                 raise ValueError(msg)
+
+    @staticmethod
+    def get_units() -> list[str]:
+        """Get the units for each field of the result type."""
+        return ["", "F", "%", "inches of rain", "miles per hour"]
 
 
 class LiveLoader(_BaseLoader):
@@ -62,7 +68,9 @@ class LiveLoader(_BaseLoader):
             SELECT UNIT_ID, STATION_NAME, COUNTY, STATE,
             STATION_LATDEG, STATION_LNGDEG
             FROM METADATA
-            WHERE COUNTY = 'Whitman' AND ACTIVE_STATION = "Y"
+            WHERE
+            COUNTY = 'Whitman' AND
+            ACTIVE_STATION = "Y";
            """
         with AWNDatabaseConnection() as awn_conn:
             return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
@@ -94,15 +102,10 @@ class LiveLoader(_BaseLoader):
         stations_live = self._query_station_most_recent(metadata_results)
         for meta, station in stations_live:
             d = Document(
-                page_content=f"""
-                At {station.timestamp}, {meta.station} had
-                an air temp of {station.air_temp},
-                an wind speed of {station.wind_speed},
-                precipitation of {station.precipitation} inches,
-                and an average humidity of {station.rel_humidity}.
-                """.strip(),
+                page_content=_common.to_markdown_table((station,), LiveQueryResult.get_units()),
                 metadata={
                     "id": meta.unit_id,
+                    "station": meta.station,
                     "timestamp": station.timestamp,
                     "county": meta.county,
                     "state": meta.state,

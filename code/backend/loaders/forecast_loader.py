@@ -11,6 +11,7 @@ from backend.databases.awn_fc_connection import (
 )
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.databases.pgvector import PgVectorConnection
+from backend.loaders import _common
 from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
 from backend.models._embedding_base import _BaseEmbedding
@@ -29,12 +30,17 @@ class ForecastQueryResult(NamedTuple):
         match row:
             case (tstamp, air_temp):
                 return cls(
-                    tstamp.strftime("%Y-%m-%d %H:%M:S"),
+                    tstamp.strftime("%Y-%m-%d %H:%M:%S"),
                     air_temp,
                 )
             case _:
                 msg = f"unrecognized tuple structure: {row}"
                 raise ValueError(msg)
+
+    @staticmethod
+    def get_units() -> list[str]:
+        """Get the units for each field of the result type."""
+        return ["", "F"]
 
 
 class ForecastLoader(_BaseLoader):
@@ -122,17 +128,10 @@ class ForecastLoader(_BaseLoader):
             init_time = forecast_table[0].forecast_time  # each forecast made at the same time, just use one
             d = Document(
                 # each forecast gets a summary, leave a blank line between for LLM readability
-                page_content="\n\n".join(
-                    [
-                        f"""
-                At {row.forecast_time}, {meta.station} is forecasted to have
-                an air temp of {row.air_temp},
-                """.strip()
-                        for row in forecast_table
-                    ]
-                ),
+                page_content=_common.to_markdown_table(forecast_table, ForecastQueryResult.get_units()),
                 metadata={
                     "id": meta.unit_id,
+                    "station": meta.station,
                     "timestamp": init_time,
                     "county": meta.county,
                     "state": meta.state,

@@ -8,6 +8,7 @@ from typing import NamedTuple, Self, Sequence, override
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.databases.pgvector import PgVectorConnection
+from backend.loaders import _common
 from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
 from backend.models._embedding_base import _BaseEmbedding
@@ -37,6 +38,11 @@ class DailyQueryResult(NamedTuple):
                 msg = f"unrecognized tuple structure: {row}"
                 raise ValueError(msg)
 
+    @staticmethod
+    def get_units() -> list[str]:
+        """Get the units for each field of the result type."""
+        return ["", "F", "%", "miles per hour"]
+
 
 class DailyLoader(_BaseLoader):
     """A loader for pulling and processing awn daily data."""
@@ -57,7 +63,9 @@ class DailyLoader(_BaseLoader):
             SELECT UNIT_ID, STATION_NAME, COUNTY, STATE,
             STATION_LATDEG, STATION_LNGDEG
             FROM METADATA
-            WHERE COUNTY = 'Whitman' AND ACTIVE_STATION = "Y"
+            WHERE
+            COUNTY = 'Whitman' AND
+            ACTIVE_STATION = "Y";
            """
         with AWNDatabaseConnection() as awn_conn:
             return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
@@ -77,12 +85,9 @@ class DailyLoader(_BaseLoader):
                     """
 
                 # prep table name and date
-                a_month_ago = (date.today() - timedelta(weeks=4)).strftime("%Y-%m-%d")  # YYYY-MM-DD
+                a_week_ago = (date.today() - timedelta(weeks=1)).strftime("%Y-%m-%d")  # YYYY-MM-DD
                 result.extend(
-                    [
-                        (s, DailyQueryResult.from_tuple(tup))
-                        for tup in awn_conn.simple_query(query_daily, (a_month_ago,))
-                    ]
+                    [(s, DailyQueryResult.from_tuple(tup)) for tup in awn_conn.simple_query(query_daily, (a_week_ago,))]
                 )
         return result
 
@@ -94,14 +99,11 @@ class DailyLoader(_BaseLoader):
         stations_daily = self._query_station_daily(metadata_results)
         for meta, station in stations_daily:
             d = Document(
-                page_content=f"""
-                On {station.date}, {meta.station} had
-                an average air temp of {station.avg_air_temp},
-                an average wind speed of {station.avg_wind_sp},
-                and an average humidity of {station.avg_humidity}.
-                """.strip(),
+                page_content=_common.to_markdown_table((station,), DailyQueryResult.get_units()),
                 metadata={
+                    "id": meta.unit_id,
                     "date": station.date,
+                    "station": meta.station,
                     "county": meta.county,
                     "state": meta.state,
                     "latitude": meta.station_lat,
