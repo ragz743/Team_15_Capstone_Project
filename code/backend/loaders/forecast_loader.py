@@ -9,8 +9,8 @@ from backend.databases.awn_fc_connection import (
     AWNForecastDatabaseConnection,
     AWNForecastFallbackDatabaseConnection,
 )
-from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.databases.pgvector import PgVectorConnection
+from backend.loaders import _common
 from backend.loaders._common import MetadataQueryResult
 from backend.loaders._loader_base import _BaseLoader
 from backend.models._embedding_base import _BaseEmbedding
@@ -29,12 +29,17 @@ class ForecastQueryResult(NamedTuple):
         match row:
             case (tstamp, air_temp):
                 return cls(
-                    tstamp.strftime("%Y-%m-%d %H:%M:S"),
+                    tstamp.strftime("%Y-%m-%d %H:%M:%S"),
                     air_temp,
                 )
             case _:
                 msg = f"unrecognized tuple structure: {row}"
                 raise ValueError(msg)
+
+    @staticmethod
+    def get_units() -> list[str]:
+        """Get the units for each field of the result type."""
+        return ["", "F"]
 
 
 class ForecastLoader(_BaseLoader):
@@ -56,18 +61,6 @@ class ForecastLoader(_BaseLoader):
     def __init__(self, embedding_model: _BaseEmbedding) -> None:
         """Create and instance of the ForecastLoader class."""
         self._embedding_model = embedding_model
-
-    def _query_stations(self) -> list[MetadataQueryResult]:
-        # TODO (Gavin): extract meta data query into a common class for all loaders
-        """Get station names from the metadata table."""
-        query_metadata = """
-            SELECT UNIT_ID, STATION_NAME, COUNTY, STATE,
-            STATION_LATDEG, STATION_LNGDEG
-            FROM METADATA
-            WHERE COUNTY = 'Whitman' AND ACTIVE_STATION = "Y"
-           """
-        with AWNDatabaseConnection() as awn_conn:
-            return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
 
     def _query_station_current_forecast(
         self,
@@ -94,21 +87,24 @@ class ForecastLoader(_BaseLoader):
                     result.append((s, forecast_table))
 
                 except mysql.connector.Error:  # query from fallback if table does not exist
-                    table = f"forecast{s.unit_id}"
-                    query_forecast = f"""
-                        SELECT INDATE, INTIME, AIR_TEMP
-                        FROM {table}
-                        WHERE
-                            INDATE = (SELECT MAX(INDATE) FROM {table}) AND
-                            INTIME = (SELECT MAX(INTIME) FROM {table})
-                        {limit};
-                        """
-                    forecast_table = [
-                        ForecastQueryResult.from_tuple((datetime.combine(date, time), air_temp))
-                        for date, time, air_temp in fallback_conn.simple_query(query_forecast, ())
-                    ]
+                    try:
+                        table = f"forecast{s.unit_id}"
+                        query_forecast = f"""
+                            SELECT INDATE, INTIME, AIR_TEMP
+                            FROM {table}
+                            WHERE
+                                INDATE = (SELECT MAX(INDATE) FROM {table}) AND
+                                INTIME = (SELECT MAX(INTIME) FROM {table})
+                            {limit};
+                            """
+                        forecast_table = [
+                            ForecastQueryResult.from_tuple((datetime.combine(date, time), air_temp))
+                            for date, time, air_temp in fallback_conn.simple_query(query_forecast, ())
+                        ]
 
-                    result.append((s, forecast_table))
+                        result.append((s, forecast_table))
+                    except mysql.connector.Error:
+                        pass  # there is not a forecast table for this station :(
 
         return result
 
@@ -116,23 +112,16 @@ class ForecastLoader(_BaseLoader):
     def _load(self) -> list[Document]:
         """Load the data from the datasource and process into documents."""
         docs: list[Document] = []
-        metadata_results = self._query_stations()
+        metadata_results = _common.query_stations()
         stations_forecast = self._query_station_current_forecast(metadata_results)
         for meta, forecast_table in [(m, s) for m, s in stations_forecast if s]:
             init_time = forecast_table[0].forecast_time  # each forecast made at the same time, just use one
             d = Document(
                 # each forecast gets a summary, leave a blank line between for LLM readability
-                page_content="\n\n".join(
-                    [
-                        f"""
-                At {row.forecast_time}, {meta.station} is forecasted to have
-                an air temp of {row.air_temp},
-                """.strip()
-                        for row in forecast_table
-                    ]
-                ),
+                page_content=_common.to_markdown_table(forecast_table, ForecastQueryResult.get_units()),
                 metadata={
                     "id": meta.unit_id,
+                    "station": meta.station,
                     "timestamp": init_time,
                     "county": meta.county,
                     "state": meta.state,
