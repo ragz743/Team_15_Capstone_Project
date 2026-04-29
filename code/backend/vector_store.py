@@ -1,7 +1,6 @@
 """The vector store wrapper class."""
 
 import json
-import warnings
 
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._embedding_base import _BaseEmbedding
@@ -35,8 +34,8 @@ class PgVectorStore(VectorStore):
         embeddings = self._embedding_model.embed_documents(documents)
         ids: list[str] = []
         with self._vector_db.conn.cursor() as cursor:
-            for doc, embedding in zip(documents, embeddings, strict=True):
-                vec_str = "[" + ",".join(str(v) for v in embedding) + "]"
+            for doc, (vec, _) in zip(documents, embeddings, strict=True):
+                vec_str = "[" + ",".join(str(v) for v in vec) + "]"
                 query = sql.SQL(
                     "INSERT INTO {} (embedding, document, metadata) VALUES (%s::vector, %s, %s) RETURNING id"
                 ).format(sql.Identifier(self._table))
@@ -59,15 +58,14 @@ class PgVectorStore(VectorStore):
     # as Document objects.
     def similarity_search(self, query: str, k: int = 4, **kwargs) -> list[Document]:
         """Return a list of documents found during semantic search."""
-        query_embedding = self._embedding_model.embed_document(Document(page_content=query))
-        vec_str = "[" + ",".join(str(v) for v in query_embedding) + "]"
+        query_vec, _ = self._embedding_model.embed_document(Document(page_content=query))
+        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
         rows = self._vector_db.simple_query(
             f"SELECT document, metadata FROM {self._table} ORDER BY embedding <-> %s::vector LIMIT %s".encode(),
             (vec_str, k),
         )
         return [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
 
-    @warnings.deprecated("not supported for this project.")
     def from_texts(
         self,
         texts: list[str],

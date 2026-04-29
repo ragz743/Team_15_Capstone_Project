@@ -74,7 +74,7 @@ class ModelFactory:
         from backend.models.embedding_openrouter import EmbeddingOpenRouter
 
         model_name = os.environ["EMBEDDING_MODEL"]
-        return EmbeddingOpenRouter(model_name)
+        return EmbeddingOpenRouter({"model": model_name})
 
     @staticmethod
     def load_chatbot_model() -> _BaseChatbot:

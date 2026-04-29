@@ -1,13 +1,11 @@
 """A Wrapper for the langchain class to be instantiated by the model factory."""
 
 import os
-from typing import TYPE_CHECKING, override
+from typing import override
 
 from backend.models._embedding_base import _BaseEmbedding
+from langchain_core.documents import Document
 from langchain_openai import OpenAIEmbeddings
-
-if TYPE_CHECKING:
-    from langchain_core.documents import Document
 
 
 class EmbeddingOpenRouter(_BaseEmbedding):
@@ -15,22 +13,20 @@ class EmbeddingOpenRouter(_BaseEmbedding):
 
     _BASE_URL = "https://openrouter.ai/api/v1"
 
-    def __init__(self, model_name: str, **kwargs) -> None:
-        """Create an instance of the ChatbotOpenRouter."""
+    def __init__(self, kwargs: dict) -> None:
+        """Create an instance of the EmbeddingOpenRouter."""
+        model_name: str = kwargs.pop("model")
+        base_url: str = kwargs.pop("base_url", self._BASE_URL)
         self._model = OpenAIEmbeddings(
-            model=model_name,  # Ensures correct embedding model is used in OpenAIEmbeddings
+            model=model_name,
             api_key=os.getenv("OPENROUTER_API_KEY"),  # type: ignore (can't get SecretStr type)
-            base_url=self._BASE_URL,
+            base_url=base_url,
             check_embedding_ctx_length=False,
-            # dimensions=self._VECTOR_DIMENSIONS,
             **kwargs,
         )
 
     @override
     def embed_document(self, document: Document) -> tuple[list[float], Document]:
-        # note: we only pass str content when embedding, but we store
-        # metadata with the vector in the db
-        print(f"{document.page_content}")
         return self._model.embed_query(document.page_content)[: self._VECTOR_DIMENSIONS], document
 
     @override

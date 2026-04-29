@@ -34,6 +34,7 @@ dev = [
 
 [project.scripts]
 index = "scripts.index:main"
+retrieve = "scripts.retrieve:main"
 
 [tool.setuptools.packages.find]
 where = ["code"]

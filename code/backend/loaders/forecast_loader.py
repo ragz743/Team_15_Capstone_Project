@@ -44,7 +44,7 @@ class ForecastLoader(_BaseLoader):
 
     insert_sql = b"""
     INSERT INTO forecast_index (id, embedding, document, metadata)
-    VALUES (%s, %s, %s, %s)
+    VALUES (%s, %s::vector, %s, %s)
     ON CONFLICT (id)
     DO UPDATE SET
         embedding = EXCLUDED.embedding,
@@ -152,7 +152,13 @@ class ForecastLoader(_BaseLoader):
         with PgVectorConnection() as pgvec_conn:
             ids = [
                 pgvec_conn.insert(
-                    self.insert_sql, (doc.metadata["id"], vec, doc.page_content, json.dumps(doc.metadata))
+                    self.insert_sql,
+                    (
+                        doc.metadata["id"],
+                        "[" + ",".join(str(v) for v in vec) + "]",
+                        doc.page_content,
+                        json.dumps(doc.metadata),
+                    ),
                 )
                 for vec, doc in embeddings
             ]
