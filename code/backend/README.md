@@ -1,18 +1,16 @@
 # AWN Backend
 
-Python backend: data loaders, vector store, LLM wrappers, and a FastAPI HTTP
-layer that the React frontend talks to.
+Backend code for the AWN chatbot demo. This includes the data loaders, vector
+store, model wrappers, and the FastAPI server used by the React frontend.
 
-## Prototype chat API (Sprint 2)
+## Chat API
 
-`backend/api.py` exposes a minimal HTTP surface used by the frontend:
+The frontend talks to `backend/api.py`.
 
-| Method | Path          | Purpose                                      |
-| ------ | ------------- | -------------------------------------------- |
-| GET    | `/api/health` | Readiness + retriever/chatbot status         |
-| POST   | `/api/chat`   | Send latest user question through retrieval  |
+- `GET /api/health` checks whether the backend is ready.
+- `POST /api/chat` sends the latest user question through `Retriever.retrieve()`.
 
-`POST /api/chat` request body:
+Example chat request:
 
 ```json
 {
@@ -22,32 +20,25 @@ layer that the React frontend talks to.
 }
 ```
 
-Response:
+Example response:
 
 ```json
-{ "reply": "…assistant text…", "model": "google/gemma-2-9b-it:free" }
+{
+  "reply": "assistant response",
+  "model": "openai/gpt-oss-20b:free"
+}
 ```
 
-The API currently sends the latest user message into `Retriever.retrieve`.
-Conversation history is still accepted from the frontend, but the retriever
-interface only accepts one question string today.
+Right now the frontend can send the full conversation, but the backend only uses
+the latest user message because `Retriever.retrieve()` takes one question string.
 
-## Run the demo
+## Run Locally
 
-From the repo root, with the project venv active:
+From the repo root:
 
 ```bash
-# one-time: install deps
 python -m pip install -e ".[dev]"
-
-# start pgvector
 docker compose up -d pgvector
-
-# seed daily_index before demoing real retrieved context
-# this uses models.yaml for the embedding model configuration
-index
-
-# start FastAPI
 uvicorn backend.api:app --reload --port 8000
 ```
 
@@ -59,53 +50,52 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`, enter a question, and the React app will call
-FastAPI through the Vite `/api` proxy.
+Open `http://localhost:5173` and ask a question in the chat UI.
 
-Quick smoke test:
+The frontend sends `/api` requests through the Vite proxy to FastAPI on
+`http://localhost:8000`.
+
+## Environment
+
+Set these before starting FastAPI:
 
 ```bash
-curl http://localhost:8000/api/health
-curl -X POST http://localhost:8000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"hello"}]}'
+OPENROUTER_API_KEY=
+OPENROUTER_EMBEDDING_MODEL=
+PG_USER=
+PG_PASSWORD=
 ```
 
-## Configuration
+Optional:
 
-Env vars consumed by `api.py` and the pgvector connection. `api.py` loads
-`.env` automatically; otherwise export these in the shell before starting
-uvicorn:
+```bash
+OPENROUTER_CHAT_MODEL=openai/gpt-oss-20b:free
+OPENROUTER_CHAT_TEMPERATURE=0
+```
 
-| Variable                      | Required | Default                    |
-| ----------------------------- | -------- | -------------------------- |
-| `OPENROUTER_API_KEY`          | yes      | —                          |
-| `OPENROUTER_EMBEDDING_MODEL`  | yes      | —                          |
-| `OPENROUTER_CHAT_MODEL`       | no       | `openai/gpt-oss-20b:free` |
-| `OPENROUTER_CHAT_TEMPERATURE` | no       | `0`                       |
-| `PG_USER`                     | yes      | —                          |
-| `PG_PASSWORD`                 | yes      | —                          |
+`api.py` loads `.env` automatically if one exists.
 
-> OpenRouter rotates free-tier availability. If the default 404s, list live
-> models with:
-> ```bash
-> curl -s "https://openrouter.ai/api/v1/models" \
->   -H "Authorization: Bearer $OPENROUTER_API_KEY" \
->   | jq -r '.data[] | select(.id | endswith(":free")) | .id'
-> ```
-> Then set `OPENROUTER_CHAT_MODEL=<id>` in `.env` or export it in your shell.
+## Check Retrieval Data
 
-Before demo, we need to confirm `daily_index` has rows:
+The web flow can run with an empty `daily_index`, but the assistant may not have
+enough context to answer weather questions.
+
+To check the table:
 
 ```bash
 docker compose exec pgvector psql -U "$PG_USER" -d vectorstore \
   -c "SELECT count(*) FROM daily_index;"
 ```
 
-If `daily_index` is empty, the web flow still works, but the assistant may say
-there is not enough context to answer.
+If the count is `0`, run the project indexing flow or ask the retrieval/data
+owner for the current setup.
 
-Containerization handoff: this PR keeps localhost defaults, including
-`PgVectorConnection host=localhost`. The follow-up containerization PR should
-make that host env-driven so FastAPI can connect to `pgvector` inside the
-compose network.
+## Smoke Test
+
+```bash
+curl http://localhost:8000/api/health
+
+curl -X POST http://localhost:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"hello"}]}'
+```

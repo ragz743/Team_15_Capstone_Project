@@ -1,11 +1,5 @@
 /**
- * Thin HTTP client for the AWN backend.
- *
- * Uses same-origin relative URLs on purpose — during development the Vite
- * dev proxy (see vite.config.ts) forwards `/api/*` to the FastAPI server,
- * and in production we expect the frontend and API to be served from the
- * same origin. Point `VITE_API_BASE` at an absolute URL if that ever
- * stops being true.
+ *  HTTP client for the AWN backend.
  */
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "";
@@ -42,15 +36,12 @@ async function parseErrorDetail(response: Response): Promise<string | undefined>
       return body.detail;
     }
   } catch {
-    // Response was not JSON — fall through to undefined.
   }
   return undefined;
 }
 
 /**
- * Build a user-friendly message for a failed HTTP response. Distinguishes
- * FastAPI errors (which always include a JSON `detail`) from Vite dev-proxy
- * errors (502/504 with a non-JSON body when uvicorn isn't running).
+ * Build a user-friendly message for a failed HTTP response.
  */
 function friendlyErrorMessage(status: number, detail: string | undefined): string {
   if (detail) {
@@ -97,7 +88,7 @@ export async function sendChat(
   return (await response.json()) as ChatResponse;
 }
 
-/** GET /api/health — useful for a startup readiness check. */
+/** GET /api/health */
 export interface HealthResponse {
   status: string;
   chatbot_ready: boolean;
