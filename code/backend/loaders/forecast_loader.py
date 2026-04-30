@@ -44,7 +44,7 @@ class ForecastLoader(_BaseLoader):
 
     insert_sql = b"""
     INSERT INTO forecast_index (id, embedding, document, metadata)
-    VALUES (%s, %s::vector, %s, %s)
+    VALUES (%s, %s, %s, %s)
     ON CONFLICT (id)
     DO UPDATE SET
         embedding = EXCLUDED.embedding,
