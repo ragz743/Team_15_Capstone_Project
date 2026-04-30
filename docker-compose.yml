@@ -27,6 +27,7 @@ services:
       - LLAMA_ARG_CTX_SIZE=4096 # note any llama-cpp args can be passed with
       - LLAMA_ARG_HOST=0.0.0.0  # format 'LLAMA_ARG_<flag-name>'
       - LLAMA_ARG_PORT=8081
+      - LLAMA_ARG_EMBEDDINGS=1  # enable /v1/embeddings endpoint
     ports:
       - "8081:8081"
     volumes:

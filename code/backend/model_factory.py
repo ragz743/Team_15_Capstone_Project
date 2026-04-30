@@ -1,7 +1,6 @@
 """The class responsible for creating llm model classes."""
 
 import importlib
-import os
 import pathlib
 from typing import Callable
 
@@ -71,14 +70,9 @@ class ModelFactory:
     @staticmethod
     def load_embedding_model() -> _BaseEmbedding:
         """Load an embedding model type and return an instance of it."""
-        from backend.models.embedding_openrouter import EmbeddingOpenRouter
-
-        model_name = os.environ["EMBEDDING_MODEL"]
-        return EmbeddingOpenRouter({"model": model_name})
+        raise NotImplementedError
 
     @staticmethod
     def load_chatbot_model() -> _BaseChatbot:
         """Load a chatbot model type and return an instance of it."""
-        from backend.models.chatbot_openrouter import ChatbotOpenRouter
-
-        return ChatbotOpenRouter({"model": os.environ["CHATBOT_MODEL"]})
+        raise NotImplementedError

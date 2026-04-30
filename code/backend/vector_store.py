@@ -57,6 +57,8 @@ class PgVectorStore(VectorStore):
     # Embeds the query string, then runs pgvector's <-> L2 nearest-neighbour operation and returns top-k results
     # as Document objects.
     def similarity_search(self, query: str, k: int = 4, **kwargs) -> list[Document]:
+        # TODO: Implement metadata filtering later.
+        # raise NotImplementedError
         """Return a list of documents found during semantic search."""
         query_vec, _ = self._embedding_model.embed_document(Document(page_content=query))
         vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"

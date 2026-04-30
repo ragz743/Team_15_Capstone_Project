@@ -13,13 +13,8 @@ def main() -> None:
     dotenv.load_dotenv()
     embedding_model, chatbot_model = ModelFactory.load_from_models_yaml()
 
-    stores = [
-        PgVectorStore(embedding_model, table="daily_index"),
-        PgVectorStore(embedding_model, table="live_index"),
-        PgVectorStore(embedding_model, table="forecast_index"),
-    ]
-
-    retriever = Retriever(stores, chatbot_model)
+    store = PgVectorStore(embedding_model)
+    retriever = Retriever(store, chatbot_model)
 
     question = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else input("Enter your question: ")
     response = retriever.retrieve(question)
