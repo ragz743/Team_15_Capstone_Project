@@ -43,7 +43,7 @@ class DailyLoader(_BaseLoader):
 
     insert_sql = b"""
     INSERT INTO daily_index (embedding, document, metadata)
-    VALUES (%s::vector, %s, %s)
+    VALUES (%s, %s, %s)
     RETURNING id;
     """
 
@@ -119,10 +119,7 @@ class DailyLoader(_BaseLoader):
 
         with PgVectorConnection() as pgvec_conn:
             ids = [
-                pgvec_conn.insert(
-                    self.insert_sql,
-                    ("[" + ",".join(str(v) for v in vec) + "]", doc.page_content, json.dumps(doc.metadata)),
-                )
+                pgvec_conn.insert(self.insert_sql, (vec, doc.page_content, json.dumps(doc.metadata)))
                 for vec, doc in embeddings
             ]
 
