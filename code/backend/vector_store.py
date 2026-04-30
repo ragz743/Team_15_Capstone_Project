@@ -1,6 +1,7 @@
 """The vector store wrapper class."""
 
 import json
+import warnings
 
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._embedding_base import _BaseEmbedding
@@ -25,11 +26,13 @@ class PgVectorStore(VectorStore):
         self._vector_db = PgVectorConnection()
         self._table = table
 
-    # Batches embedding via embed_documents, then inserts each (embedding, document, metadata) row using
-    # pgvector's ::vector cast.
+    # Batches embedding via embed_documents, then inserts each (embedding, document, metadata) row
     # Metadata is json.dumps(..., default=str) to safely serialize date values from DailyLoader.
     # Returns auto-generated row IDs.
     def add_documents(self, documents: list[Document], **kwargs) -> list[str]:
+        # TODO: (Gavin) Function is fine for now, but not needed as loaders are decoupled from pgvector. The current
+        # setup should never load embeddings into the vector store using the vector store object.
+        # In other words, the vector store class is only for retrieval.
         """Add or update documents in the vector store."""
         embeddings = self._embedding_model.embed_documents(documents)
         ids: list[str] = []
@@ -37,7 +40,7 @@ class PgVectorStore(VectorStore):
             for doc, (vec, _) in zip(documents, embeddings, strict=True):
                 vec_str = "[" + ",".join(str(v) for v in vec) + "]"
                 query = sql.SQL(
-                    "INSERT INTO {} (embedding, document, metadata) VALUES (%s::vector, %s, %s) RETURNING id"
+                    "INSERT INTO {} (embedding, document, metadata) VALUES (%s, %s, %s) RETURNING id"
                 ).format(sql.Identifier(self._table))
                 cursor.execute(
                     query,
@@ -63,11 +66,12 @@ class PgVectorStore(VectorStore):
         query_vec, _ = self._embedding_model.embed_document(Document(page_content=query))
         vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
         rows = self._vector_db.simple_query(
-            f"SELECT document, metadata FROM {self._table} ORDER BY embedding <-> %s::vector LIMIT %s".encode(),
+            f"SELECT document, metadata FROM {self._table} ORDER BY embedding <-> %s LIMIT %s".encode(),
             (vec_str, k),
         )
         return [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
 
+    @warnings.deprecated("not supported for this project.")
     def from_texts(
         self,
         texts: list[str],
