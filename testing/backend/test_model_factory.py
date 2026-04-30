@@ -22,5 +22,5 @@ def test_model_factory_load_from_models_yaml() -> None:
         metadata={},
     )
 
-    assert len(embedding_model.embed_document(doc)) == 0, "failed to connect and embed document"
+    assert embedding_model.embed_document(doc), "failed to connect and embed document"
     assert chatbot_model.invoke([doc.page_content]), "failed to connect to chatbot and get response"
