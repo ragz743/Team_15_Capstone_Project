@@ -2,12 +2,11 @@
 
 Vite + React + TypeScript frontend mockup for the AG Weather Net chatbot.
 
-## Current scope
+## What it does
 
-- clean visual prototype for a non-technical audience
-- no seeded weather data
-- no fake assistant responses
-- simple chat layout ready for backend wiring later
+- Shows the chat UI.
+- Sends chat messages to the FastAPI backend.
+- Uses the Vite `/api` proxy so local requests go to `localhost:8000`.
 
 ## Scripts
 
@@ -18,8 +17,19 @@ npm run build
 npm run lint
 ```
 
-## Integration note
+## Running locally
 
-The current backend repository does not expose a FastAPI chat route yet.
-When that exists, the composer can be wired to the backend and the main
-conversation area can render real answers
+Start the backend from the repo root:
+
+```bash
+uvicorn backend.api:app --reload --port 8000
+```
+
+Then start the frontend from this folder:
+
+```bash
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173` in the browser.

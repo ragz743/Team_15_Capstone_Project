@@ -17,6 +17,8 @@ dependencies = [
     "pyyaml",
     "langchain-openrouter",
     "langchain-openai",
+    "fastapi",
+    "uvicorn[standard]",
 ]
 
 [project.optional-dependencies]
@@ -27,6 +29,7 @@ dev = [
     "isort",
     "pyright",
     "pytest",
+    "httpx",
 ]
 
 [project.scripts]
