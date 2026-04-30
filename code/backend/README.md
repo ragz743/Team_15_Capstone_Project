@@ -1,44 +1,77 @@
 # AWN Backend
 
-Backend code for the AWN chatbot demo. This includes the data loaders, vector
-store, model wrappers, and the FastAPI server used by the React frontend.
+This folder contains the backend for the AWN chatbot. It includes the data
+loaders, pgvector search code, OpenRouter model wrappers, and the FastAPI server
+used by the React frontend.
 
-## Chat API
+## Run The Demo With Docker
 
-The frontend talks to `backend/api.py`.
-
-- `GET /api/health` checks whether the backend is ready.
-- `POST /api/chat` sends the latest user question through `Retriever.retrieve()`.
-
-Example chat request:
-
-```json
-{
-  "messages": [
-    { "role": "user", "content": "What's the frost risk in Prosser tonight?" }
-  ]
-}
-```
-
-Example response:
-
-```json
-{
-  "reply": "assistant response",
-  "model": "openai/gpt-oss-20b:free"
-}
-```
-
-Right now the frontend can send the full conversation, but the backend only uses
-the latest user message because `Retriever.retrieve()` takes one question string.
-
-## Run Locally
+This is the easiest way to run the demo.
 
 From the repo root:
 
 ```bash
+cp .env.example .env
+```
+
+Add the private demo OpenRouter key to `.env`:
+
+```bash
+OPENROUTER_API_KEY=your-demo-key-here
+```
+
+Then start everything:
+
+```bash
+docker compose up
+```
+
+Open:
+
+```text
+http://localhost:8080
+```
+
+Try a question like:
+
+```text
+what was the average temperature in Whitman county recently?
+```
+
+The Docker setup starts three services:
+
+| Service | Purpose |
+| ------- | ------- |
+| `frontend` | Serves the React app through nginx |
+| `api` | Runs the FastAPI backend |
+| `pgvector` | Runs Postgres with the pgvector extension |
+
+The frontend calls `/api/*`, and nginx forwards those requests to FastAPI.
+FastAPI connects to Postgres using `PG_HOST=pgvector` inside Docker.
+
+This PR only starts the web stack. It does not create or refresh retrieval
+data. The retrieval/data owner must make sure `daily_index` has data before a
+demo that depends on real retrieved context.
+
+## API Key Plan
+
+For the client demo, the team will provide an OpenRouter key privately. Add that
+key to `.env` as `OPENROUTER_API_KEY`. Rotate the key after the demo.
+
+The checked-in `.env.example` already includes the default chat model and
+embedding model.
+
+## Local Development
+
+Docker is the supported demo path. The local flow is still useful for backend
+and frontend development.
+
+From the repo root, with the virtual environment active:
+
+```bash
 python -m pip install -e ".[dev]"
 docker compose up -d pgvector
+index
 uvicorn backend.api:app --reload --port 8000
 ```
 
@@ -50,52 +83,74 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173` and ask a question in the chat UI.
+Open:
 
-The frontend sends `/api` requests through the Vite proxy to FastAPI on
-`http://localhost:8000`.
-
-## Environment
-
-Set these before starting FastAPI:
-
-```bash
-OPENROUTER_API_KEY=
-OPENROUTER_EMBEDDING_MODEL=
-PG_USER=
-PG_PASSWORD=
+```text
+http://localhost:5173
 ```
 
-Optional:
+The Vite dev server forwards `/api/*` requests to FastAPI on port `8000`.
+
+## API Endpoints
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `GET` | `/api/health` | Checks whether the API, retriever, and chatbot are ready |
+| `POST` | `/api/chat` | Sends the latest user question through retrieval and the chatbot |
+
+Example request:
 
 ```bash
-OPENROUTER_CHAT_MODEL=openai/gpt-oss-20b:free
-OPENROUTER_CHAT_TEMPERATURE=0
+curl -X POST http://localhost:8000/api/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"hello"}]}'
 ```
 
-`api.py` loads `.env` automatically if one exists.
+Example response:
 
-## Check Retrieval Data
+```json
+{
+  "reply": "assistant response",
+  "model": "openai/gpt-oss-20b:free"
+}
+```
 
-The web flow can run with an empty `daily_index`, but the assistant may not have
-enough context to answer weather questions.
+The API accepts a message list from the frontend, but today it only sends the
+latest user message to `Retriever.retrieve()`.
 
-To check the table:
+## Configuration
+
+`backend/api.py` loads `.env` automatically.
+
+| Variable | Required | Default |
+| -------- | -------- | ------- |
+| `OPENROUTER_API_KEY` | yes | none |
+| `OPENROUTER_EMBEDDING_MODEL` | yes | `openai/text-embedding-3-small` in `.env.example` |
+| `OPENROUTER_CHAT_MODEL` | no | `openai/gpt-oss-20b:free` |
+| `OPENROUTER_CHAT_TEMPERATURE` | no | `0` |
+| `PG_USER` | yes | none |
+| `PG_PASSWORD` | yes | none |
+| `PG_HOST` | no | `localhost` |
+| `PG_PORT` | no | `5432` |
+
+Outside Docker, Postgres still defaults to `localhost:5432`.
+
+## Quick Checks
+
+Check API readiness:
+
+```bash
+curl http://localhost:8000/api/health
+```
+
+Check that retrieval data exists:
 
 ```bash
 docker compose exec pgvector psql -U "$PG_USER" -d vectorstore \
   -c "SELECT count(*) FROM daily_index;"
 ```
 
-If the count is `0`, run the project indexing flow or ask the retrieval/data
-owner for the current setup.
-
-## Smoke Test
-
-```bash
-curl http://localhost:8000/api/health
-
-curl -X POST http://localhost:8000/api/chat \
-  -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"hello"}]}'
-```
+The count must be greater than `0` for retrieval-based answers. If it is `0`,
+the web stack can still run, but the chatbot will not have enough context to
+answer weather questions well. Loading that data is outside this containerization
+ticket.
