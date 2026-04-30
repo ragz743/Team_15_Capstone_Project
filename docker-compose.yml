@@ -10,8 +10,45 @@ services:
       POSTGRES_USER: ${PG_USER}
       POSTGRES_PASSWORD: ${PG_PASSWORD}
       POSTGRES_DB: vectorstore
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
     volumes:
       - pgdata:/var/lib/postgresql # persist data here
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${PG_USER} -d vectorstore"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.api
+    container_name: api
+    depends_on:
+      pgvector:
+        condition: service_healthy
+    environment:
+      PG_HOST: pgvector
+      PG_PORT: 5432
+      PG_USER: ${PG_USER}
+      PG_PASSWORD: ${PG_PASSWORD}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      OPENROUTER_CHAT_MODEL: ${OPENROUTER_CHAT_MODEL}
+      OPENROUTER_CHAT_TEMPERATURE: ${OPENROUTER_CHAT_TEMPERATURE}
+      OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL}
+    ports:
+      - "8000:8000" # exposed for debugging; nginx proxies internally
+
+  frontend:
+    build:
+      context: .
+      dockerfile: deployment/Dockerfile.frontend
+    container_name: frontend
+    depends_on:
+      - api
+    ports:
+      - "8080:80" # client opens http://localhost:8080
 
   embedding-model:
     build:

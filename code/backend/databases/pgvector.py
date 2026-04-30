@@ -16,18 +16,27 @@ class PgVectorConnection:
 
     def __init__(
         self,
-        host: str = "localhost",
-        port: int = 5432,
+        host: str | None = None,
+        port: int | None = None,
     ):
         """Create a pgvector database connection."""
-        conn_info = {  # combine connection args into string using dictionary
+        host = host if host is not None else os.getenv("PG_HOST", "localhost")
+        port = port if port is not None else int(os.getenv("PG_PORT", "5432"))
+
+        conn_info: dict[str, Any] = {
             "host": host,
             "port": port,
-            "user": os.getenv("PG_USER"),
-            "password": os.getenv("PG_PASSWORD"),
             "dbname": self._DB_NAME,
         }
-        self.conn = psycopg.connect(conninfo=" ".join({f"{k}={v}" for k, v in conn_info.items()}))
+
+        user = os.getenv("PG_USER")
+        password = os.getenv("PG_PASSWORD")
+        if user is not None:
+            conn_info["user"] = user
+        if password is not None:
+            conn_info["password"] = password
+
+        self.conn = psycopg.connect(**conn_info)
 
     def __enter__(self) -> Self:
         """Open the database connection using a context manager."""
