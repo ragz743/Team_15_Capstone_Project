@@ -132,6 +132,9 @@ latest user message to `Retriever.retrieve()`.
 | `PG_PASSWORD` | yes | none |
 | `PG_HOST` | no | `localhost` |
 | `PG_PORT` | no | `5432` |
+| `AWN_DB_USER` | data loaders only | none |
+| `AWN_DB_PASSWORD` | data loaders only | none |
+| `AWN_DB_HOST` | data loaders only | none |
 
 Outside Docker, Postgres still defaults to `localhost:5432`.
 
