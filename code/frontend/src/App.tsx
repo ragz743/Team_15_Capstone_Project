@@ -1,4 +1,11 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  buildConversationTitle,
+  loadConversations,
+  saveConversations,
+  type StoredChatMessage,
+  type StoredConversation,
+} from "./lib/chatHistory";
 import { ApiError, sendChat, type ChatMessage as ApiChatMessage } from "./lib/api";
 
 /**
@@ -39,9 +46,30 @@ function toApiMessages(messages: Message[]): ApiChatMessage[] {
     .map((m) => ({ role: m.role, content: m.text }));
 }
 
+function toStoredMessages(messages: Message[]): StoredChatMessage[] {
+  return messages
+    .filter((message) => !message.pending)
+    .map(({ id, role, text, timestamp, error }) => ({
+      id,
+      role,
+      text,
+      timestamp,
+      error,
+    }));
+}
+
+function toDisplayMessages(messages: StoredChatMessage[]): Message[] {
+  return messages.map((message) => ({ ...message }));
+}
+
+// active conversation, supports multiple conversations in the sidebar, persists to localStorage
 export default function App() {
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
+  const [conversations, setConversations] = useState<StoredConversation[]>(() =>
+    loadConversations(),
+  );
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
   // Single in-flight request guard — keeps the UI from pipelining user turns
   // while the assistant is still thinking.
   const [isSending, setIsSending] = useState(false);
@@ -72,6 +100,31 @@ export default function App() {
     };
   }, []);
 
+  function persistConversation(conversationId: string, nextMessages: Message[]) {
+    const storedMessages = toStoredMessages(nextMessages);
+    if (storedMessages.length === 0) {
+      return;
+    }
+
+    const now = new Date().toISOString();
+    setConversations((previous) => {
+      const existing = previous.find((conversation) => conversation.id === conversationId);
+      const nextConversation: StoredConversation = {
+        id: conversationId,
+        title: buildConversationTitle(storedMessages),
+        createdAt: existing?.createdAt ?? storedMessages[0]?.timestamp ?? now,
+        updatedAt: now,
+        messages: storedMessages,
+      };
+      const nextConversations = [
+        nextConversation,
+        ...previous.filter((conversation) => conversation.id !== conversationId),
+      ];
+      saveConversations(nextConversations);
+      return nextConversations;
+    });
+  }
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -94,10 +147,17 @@ export default function App() {
       pending: true,
     };
 
+    const conversationId = activeConversationId ?? createId();
+    if (!activeConversationId) {
+      setActiveConversationId(conversationId);
+    }
+
     // Snapshot the transcript the backend will see so we aren't racing state updates.
     const historyForApi = toApiMessages([...messages, userMessage]);
 
-    setMessages((previous) => [...previous, userMessage, pendingAssistant]);
+    const nextMessages = [...messages, userMessage, pendingAssistant];
+    setMessages(nextMessages);
+    persistConversation(conversationId, nextMessages);
     setDraft("");
     setIsSending(true);
 
@@ -106,13 +166,13 @@ export default function App() {
 
     try {
       const { reply } = await sendChat(historyForApi, controller.signal);
-      setMessages((previous) =>
-        previous.map((m) =>
-          m.id === pendingAssistant.id
-            ? { ...m, text: reply, pending: false, timestamp: new Date().toISOString() }
-            : m,
-        ),
+      const completedMessages = nextMessages.map((m) =>
+        m.id === pendingAssistant.id
+          ? { ...m, text: reply, pending: false, timestamp: new Date().toISOString() }
+          : m,
       );
+      setMessages(completedMessages);
+      persistConversation(conversationId, completedMessages);
     } catch (err) {
       if (err instanceof DOMException && err.name === "AbortError") {
         setMessages((previous) => previous.filter((m) => m.id !== pendingAssistant.id));
@@ -123,19 +183,19 @@ export default function App() {
         err instanceof ApiError
           ? err.detail ?? err.message
           : "Something went wrong reaching the AWN backend.";
-      setMessages((previous) =>
-        previous.map((m) =>
-          m.id === pendingAssistant.id
-            ? {
-                ...m,
-                text: detail,
-                pending: false,
-                error: true,
-                timestamp: new Date().toISOString(),
-              }
-            : m,
-        ),
+      const failedMessages = nextMessages.map((m) =>
+        m.id === pendingAssistant.id
+          ? {
+              ...m,
+              text: detail,
+              pending: false,
+              error: true,
+              timestamp: new Date().toISOString(),
+            }
+          : m,
       );
+      setMessages(failedMessages);
+      persistConversation(conversationId, failedMessages);
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
@@ -144,12 +204,40 @@ export default function App() {
     }
   }
 
-  function handleClearConversation() {
+  function stopActiveRequest() {
     abortRef.current?.abort();
     abortRef.current = null;
+    setIsSending(false);
+  }
+
+  function handleNewConversation() {
+    stopActiveRequest();
+    setActiveConversationId(null);
     setMessages([]);
     setDraft("");
-    setIsSending(false);
+  }
+
+  function handleSelectConversation(conversation: StoredConversation) {
+    stopActiveRequest();
+    setActiveConversationId(conversation.id);
+    setMessages(toDisplayMessages(conversation.messages));
+    setDraft("");
+  }
+
+  function handleClearConversation() {
+    stopActiveRequest();
+    if (activeConversationId) {
+      setConversations((previous) => {
+        const nextConversations = previous.filter(
+          (conversation) => conversation.id !== activeConversationId,
+        );
+        saveConversations(nextConversations);
+        return nextConversations;
+      });
+    }
+    setActiveConversationId(null);
+    setMessages([]);
+    setDraft("");
   }
 
   return (
@@ -162,9 +250,38 @@ export default function App() {
             <h1>AG Weather Net Assistant</h1>
           </div>
 
+          <nav className="history-panel" aria-label="Recent conversations">
+            <div className="history-panel__header">
+              <p className="history-title">Recents</p>
+              <button className="new-chat-button" onClick={handleNewConversation} type="button">
+                New chat
+              </button>
+            </div>
+
+            {conversations.length === 0 ? (
+              <p className="history-empty">Recent chats will appear here.</p>
+            ) : (
+              <ol className="history-list">
+                {conversations.map((conversation) => (
+                  <li key={conversation.id}>
+                    <button
+                      className={`history-item${
+                        conversation.id === activeConversationId ? " history-item--active" : ""
+                      }`}
+                      onClick={() => handleSelectConversation(conversation)}
+                      type="button"
+                    >
+                      <span>{conversation.title}</span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </nav>
+
           <div className="sidebar-bottom">
             <button className="ghost-link" onClick={handleClearConversation} type="button">
-              Clear conversation
+              Clear current chat
             </button>
           </div>
         </aside>

@@ -36,6 +36,8 @@ async function parseErrorDetail(response: Response): Promise<string | undefined>
       return body.detail;
     }
   } catch {
+    // Some backend errors may not include a JSON body.
+    return undefined;
   }
   return undefined;
 }
