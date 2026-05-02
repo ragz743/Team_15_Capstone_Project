@@ -18,10 +18,14 @@ class PgVectorStore(VectorStore):
     _vector_db: PgVectorConnection
     _table: str
 
-    # Stores the embedding model, opens a PgVectorConnection, and accepts a table parameter (default "daily_index")
-    # to match the schema in pgvector-seed.sql.
+    _ALLOWED_TABLES = frozenset({"daily_index", "live_index", "forecast_index"})
+
     def __init__(self, embedding_model: _BaseEmbedding, table: str = "daily_index") -> None:
         """Create an instance of the PgVectorStore class."""
+        if table not in self._ALLOWED_TABLES:
+            msg = f"unsupported vector store table: {table}"
+            raise ValueError(msg)
+
         self._embedding_model = embedding_model
         self._vector_db = PgVectorConnection()
         self._table = table
