@@ -1,5 +1,6 @@
 """The vector store wrapper class."""
 
+import json
 import warnings
 
 from backend.databases.pgvector import PgVectorConnection
@@ -7,6 +8,7 @@ from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
+from psycopg import sql
 
 
 class PgVectorStore(VectorStore):
@@ -28,27 +30,50 @@ class PgVectorStore(VectorStore):
         self._vector_db = PgVectorConnection()
         self._table = table
 
+    # Batches embedding via embed_documents, then inserts each (embedding, document, metadata) row
+    # Metadata is json.dumps(..., default=str) to safely serialize date values from DailyLoader.
+    # Returns auto-generated row IDs.
     def add_documents(self, documents: list[Document], **kwargs) -> list[str]:
+        # TODO: (Gavin) Function is fine for now, but not needed as loaders are decoupled from pgvector. The current
+        # setup should never load embeddings into the vector store using the vector store object.
+        # In other words, the vector store class is only for retrieval.
         """Add or update documents in the vector store."""
-        raise NotImplementedError
+        embeddings = self._embedding_model.embed_documents(documents)
+        ids: list[str] = []
+        with self._vector_db.conn.cursor() as cursor:
+            for doc, (vec, _) in zip(documents, embeddings, strict=True):
+                vec_str = "[" + ",".join(str(v) for v in vec) + "]"
+                query = sql.SQL(
+                    "INSERT INTO {} (embedding, document, metadata) VALUES (%s, %s, %s) RETURNING id"
+                ).format(sql.Identifier(self._table))
+                cursor.execute(
+                    query,
+                    (vec_str, doc.page_content, json.dumps(doc.metadata, default=str)),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    raise RuntimeError("Insert failed: no row returned")
+                ids.append(str(row[0]))
+        self._vector_db.conn.commit()
+        return ids
 
     def aadd_documents(self, documents, **kwargs):
         """Async add or update documents in the vector store."""
         raise NotImplementedError
 
+    # Embeds the query string, then runs pgvector's <-> L2 nearest-neighbour operation and returns top-k results
+    # as Document objects.
     def similarity_search(self, query: str, k: int = 4, **kwargs) -> list[Document]:
+        # TODO: Implement metadata filtering later.
+        # raise NotImplementedError
         """Return a list of documents found during semantic search."""
-        query_embedding, _ = self._embedding_model.embed_document(Document(page_content=query))
-        vector_value = "[" + ",".join(str(value) for value in query_embedding) + "]"
-        sql_query = f"""
-            SELECT document, metadata
-            FROM {self._table}
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-        """.encode()
-
-        rows = self._vector_db.simple_query(sql_query, (vector_value, k))
-        return [Document(page_content=str(row[0]), metadata=row[1] or {}) for row in rows]
+        query_vec, _ = self._embedding_model.embed_document(Document(page_content=query))
+        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
+        rows = self._vector_db.simple_query(
+            f"SELECT document, metadata FROM {self._table} ORDER BY embedding <-> %s LIMIT %s".encode(),
+            (vec_str, k),
+        )
+        return [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
 
     @warnings.deprecated("not supported for this project.")
     def from_texts(

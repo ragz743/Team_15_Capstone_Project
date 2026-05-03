@@ -6,9 +6,10 @@ from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 
 RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
-    """You are a helpful AgWeatherNet assistant with access to Washington State weather station data.
-        Use the following weather data context to answer the user's question as accurately as possible.
-        If the context does not contain enough information to answer, say so honestly.
+    """You are a helpful AgWeatherNet assistant with access
+        to Washington State weather station data.
+        Use the following weather data context to answer the user's question as accurately as possible with units
+        provided. If the context does not contain enough information to answer, say so honestly.
 
         Context:
         {context}

@@ -8,6 +8,9 @@ dynamic = ["version"]
 requires-python = ">= 3.12"
 authors = [ # put your name, email here!
     {name = "Gavin Travis", email = "gavin.travis@wsu.edu"},
+    {name = "Sairaghav Gubba", email = "sairaghav.gubba@wsu.edu"},
+    {name = "Danbi Kim", email = "danbi.kim1@wsu.edu"},
+    {name = "Zuriel Hernandez", email = "z.hernandezguerra@wsu.edu"},
 ]
 dependencies = [
     "python-dotenv",
@@ -34,6 +37,7 @@ dev = [
 
 [project.scripts]
 index = "scripts.index:main"
+retrieve = "scripts.retrieve:main"
 
 [tool.setuptools.packages.find]
 where = ["code"]
@@ -49,17 +53,17 @@ lint.select = [
     "D", # doc string rules
     "N", # pep8 naming conventions
     "B", # bugbear errs -> more fancy rules
+    "I", # isort compatibility
 ]
 lint.ignore = [
     #"put err code here", # ignore specific err codes here, only do if its very unreasonable!
     "D203",
     "D213",
 ]
-exclude = [".venv", "*.md", ".egg*", ".git", ".gitignore"] # stuff not to lint + format
 
 [tool.pyright]
 venvPath = "."
-venv = ".venv/"
+venv = ".venv"
 
 [tool.pytest.ini_options]
 minversion = "9.0.2"

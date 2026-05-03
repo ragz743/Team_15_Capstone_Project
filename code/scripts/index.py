@@ -10,7 +10,11 @@ def main() -> None:
     dotenv.load_dotenv()
     embedding_model, _ = ModelFactory.load_from_models_yaml()
 
-    for loader_class in [daily_loader.DailyLoader, live_loader.LiveLoader, forecast_loader.ForecastLoader]:
+    for loader_class in [
+        daily_loader.DailyLoader,
+        live_loader.LiveLoader,
+        forecast_loader.ForecastLoader,
+    ]:
         loader = loader_class(embedding_model)
         loader.index()
 
