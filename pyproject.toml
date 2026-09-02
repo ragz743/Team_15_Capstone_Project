@@ -17,6 +17,7 @@ dependencies = [
     "pyyaml",
     "langchain-openrouter",
     "langchain-openai",
+    "langgraph",
     "fastapi",
     "uvicorn[standard]",
 ]
