@@ -5,9 +5,35 @@ from __future__ import annotations
 import os
 from abc import ABC
 from types import TracebackType
-from typing import Any, ClassVar, Generator, Self, Sequence
+from typing import Any, ClassVar, Generator, NamedTuple, Self, Sequence
 
 from mysql import connector
+
+
+class SchemaQueryResult(NamedTuple):
+    """The fields returned from a schema query."""
+
+    column_name: str
+    data_type: str
+    is_nullable: str
+    column_key: str
+    column_comment: str
+
+    @classmethod
+    def from_tuple(cls, row: Sequence) -> Self:
+        """Create a SchemaQueryResult from a tuple."""
+        match row[:5]:
+            case (name, type_, nullable, key, comment):
+                return cls(
+                    name,
+                    type_,
+                    nullable,
+                    key,
+                    comment,
+                )
+            case _:
+                msg = f"unrecognized tuple structure: {row}"
+                raise ValueError(msg)
 
 
 class AWNDatabaseConnectionBase(ABC):
@@ -47,3 +73,17 @@ class AWNDatabaseConnectionBase(ABC):
         # iter through result tuples, can be any number of rows so be careful!
         for query_fields in cursor:
             yield query_fields
+
+    def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
+        """Query table schema given a table name."""
+        cols = ", ".join(map(lambda s: s.upper(), SchemaQueryResult._fields))
+        # column list is built from fixed field names, not user input, so inlining it is safe
+        query_schema = f"""
+        SELECT {cols}
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = %s
+        AND TABLE_NAME = %s
+        ORDER BY ORDINAL_POSITION
+        """
+        results = self.simple_query(query_schema, (self._DB_NAME, table_name))
+        return [SchemaQueryResult.from_tuple(tup) for tup in results]

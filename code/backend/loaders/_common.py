@@ -75,6 +75,9 @@ def query_stations() -> list[MetadataQueryResult]:
 
 def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
     """Convert a collection of named tuple object into a markdown table."""
+    if len(tuples) != len(units):
+        msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
+        raise ValueError(msg)
     columns = zip(tuples[0]._fields, units, strict=True)
     header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
     divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"

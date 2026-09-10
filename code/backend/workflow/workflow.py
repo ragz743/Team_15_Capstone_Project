@@ -1,7 +1,9 @@
 """AgWeatherNet Chatbot Workflow."""
 
+from datetime import datetime
 from typing import Annotated, Literal, TypedDict
 
+from langchain_openrouter import ChatOpenRouter
 from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
@@ -19,8 +21,25 @@ QueryType = Literal[
 class QueryClassification(BaseModel):
     """A standalone query categorized as a variant of the QueryType."""
 
-    query_type: QueryType
-    reworded_query: str = Field(description="A rewording of the user's input as a clear standalone query.")
+    query_type: QueryType = Field(
+        description=(
+            "current_weather: conditions right now or 'today' with no forecast intent. "
+            "forecast_weather: any future-looking question (tomorrow, this week, will it...). "
+            "historical_weather: past dates/periods (yesterday, last month, on this date last year). "
+            "miscellaneous: anything not about specific weather conditions/timing, "
+            "e.g. site usage, definitions, or unsupported requests."
+        )
+    )
+    reworded_query: str = Field(description="The user's intent restated as a clear, standalone, unambiguous query.")
+
+
+class QueryClassifications(BaseModel):
+    """One or more standalone queries extracted from the user's input."""
+
+    sub_queries: list[QueryClassification] = Field(
+        min_length=1,
+        description="Every distinct weather question found in the user's input.",
+    )
 
 
 class ChatState(TypedDict):
@@ -28,6 +47,45 @@ class ChatState(TypedDict):
 
     messages: Annotated[list, message.add_messages]
     sub_queries: list[QueryClassification]
+
+
+class ClassifierChatbot:
+    """Chatbot for classifying questions with structured output."""
+
+    _CLASSIFIER_SYSTEM_PROMPT = f"""
+    Today's date is {datetime.now():%Y-%m-%d}.
+    You are a weather data research assistant. Break the user's input into one
+    or more standalone weather-related queries, and classify each one.
+
+    If the input contains multiple distinct questions, return one entry per
+    question. If it's a single question, return one entry.
+
+    Examples:
+    - "What's it like outside and will it rain tomorrow?" ->
+    two entries: current_weather ("What is the current weather?"),
+    forecast_weather ("Will it rain tomorrow?")
+    - "How much rain did we get last week?" ->
+    one entry: historical_weather ("How much rain fell in the last week?")
+    - "What's a dew point?" ->
+    one entry: miscellaneous ("What is a dew point?")
+    """
+
+    def __init__(self) -> None:
+        """ClassifierChatbot Constructor."""
+        self._model = ChatOpenRouter(model="openrouter/free", temperature=0).with_structured_output(
+            QueryClassifications
+        )
+
+    def classify(self, state: ChatState) -> dict:
+        """Make a call to the llm."""
+        result = self._model.invoke(
+            [
+                ("system", self._CLASSIFIER_SYSTEM_PROMPT),
+                *state["messages"],
+            ]
+        )
+
+        return {"sub_queries": result.sub_queries}  # type: ignore
 
 
 class ChatbotWorkflow:
@@ -43,6 +101,7 @@ class ChatbotWorkflow:
             "miscellaneous": "_query_miscellaneous",
         }
         self.graph = self._build_graph()
+        self.classifier_chat_model = ClassifierChatbot()
 
     def run(self, user_input: str) -> str:
         """Process user input through the graph and return a response."""
@@ -62,16 +121,12 @@ class ChatbotWorkflow:
         graph.add_node("query_current", self._query_current)
         graph.add_node("query_forecast", self._query_forecast)
         graph.add_node("query_miscellaneous", self._query_miscellaneous)
+        graph.add_node("chatbot_summarize", self._chatbot_summarize)
 
         # connect nodes with edges
         graph.add_edge(START, "query_classifier")
         graph.add_conditional_edges("query_classifier", self._route_query)
-        for node in (
-            "query_current",
-            "query_forecast",
-            "query_historical",
-            "query_miscellaneous",
-        ):
+        for node in self._query_handlers.values():
             graph.add_edge(node, "chatbot_summarize")
         graph.add_edge("chatbot_summarize", END)
 
@@ -79,7 +134,7 @@ class ChatbotWorkflow:
 
     def _query_classifier(self, state: ChatState) -> dict:
         """Given user input classify it before taking action."""
-        raise NotImplementedError
+        return self.classifier_chat_model.classify(state)
 
     def _query_historical(self, state: ChatState) -> dict:
         """Perform a historical weather data query."""
