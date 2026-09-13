@@ -142,20 +142,30 @@ def chat(request: ChatRequest) -> ChatResponse:
     if _retriever is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Retriever is not initialized. Check server logs, pgvector, "
-                "OPENROUTER_API_KEY, and OPENROUTER_EMBEDDING_MODEL."
-            ),
+            detail="The weather service is temporarily unavailable. Please try again later.",
         )
 
     question = _latest_user_message(request.messages)
     if question is None:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
+    question = question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Please enter a weather related question.")
+
     try:
         reply = _retriever.retrieve(question)
     except Exception as exc:
         logger.exception("Retriever invocation failed")
-        raise HTTPException(status_code=502, detail=f"Retrieval error: {exc}") from exc
+        raise HTTPException(
+            status_code=502,
+            detail="The weather service could not complete your request. Please try again.",
+        ) from exc
+
+    if not reply.strip():
+        raise HTTPException(
+            status_code=502,
+            detail="The weather service returned an empty answer. Please try again.",
+        )
 
     return ChatResponse(reply=reply, model=_chatbot_model_name)
