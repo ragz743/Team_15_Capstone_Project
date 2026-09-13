@@ -36,6 +36,11 @@ class Retriever:
         """Search the vector store for relevant context and pass it to the chatbot."""
         # Search vector store for relevant documents
         relevant_docs: list[Document] = self._vector_store.similarity_search(question)
+        if not relevant_docs:
+            return (
+                "No matching weather records were found in the indexed data. "
+                "I cannot provide an answer to this question."
+            )
 
         # Combine document contents into a single string
         context: str = "\n\n".join(doc.page_content for doc in relevant_docs)

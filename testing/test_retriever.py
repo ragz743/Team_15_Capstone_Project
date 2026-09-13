@@ -51,3 +51,28 @@ def test_retriever_returns_chatbot_response(mock_vector_store, mock_chatbot):
     retriever = Retriever(mock_vector_store, mock_chatbot)
     response = retriever.retrieve("What is the temperature?")
     assert response == "The temperature at Pullman is 72F."
+
+
+def test_empty_retrieval_returns_no_data_without_calling_chatbot(
+    mock_vector_store: MagicMock, mock_chatbot: MagicMock
+) -> None:
+    """Do not generate a weather answer without supporting records."""
+    mock_vector_store.similarity_search.return_value = []
+
+    response = Retriever(mock_vector_store, mock_chatbot).retrieve("What is the temperature?")
+
+    assert "No matching weather records" in response
+    assert "cannot provide an answer" in response
+    mock_chatbot.invoke.assert_not_called()
+
+
+def test_retrieval_failure_is_not_reported_as_missing_data(
+    mock_vector_store: MagicMock, mock_chatbot: MagicMock
+) -> None:
+    """Keep infrastructure errors distinct from successful searches with no results."""
+    mock_vector_store.similarity_search.side_effect = RuntimeError("database unavailable")
+
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        Retriever(mock_vector_store, mock_chatbot).retrieve("What is the temperature?")
+
+    mock_chatbot.invoke.assert_not_called()
