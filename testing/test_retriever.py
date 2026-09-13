@@ -33,21 +33,21 @@ def test_rag_prompt_template_has_required_variables():
 
 
 def test_retriever_calls_vector_store(mock_vector_store, mock_chatbot):
-    """Check that retrieve calls the vector store with the question."""
-    retriever = Retriever(mock_vector_store, mock_chatbot)
+    """Check that retrieve calls each vector store with the question."""
+    retriever = Retriever([mock_vector_store], mock_chatbot)
     retriever.retrieve("What is the temperature?")
     mock_vector_store.similarity_search.assert_called_once_with("What is the temperature?")
 
 
 def test_retriever_calls_chatbot(mock_vector_store, mock_chatbot):
     """Check that retrieve passes a formatted prompt to the chatbot."""
-    retriever = Retriever(mock_vector_store, mock_chatbot)
+    retriever = Retriever([mock_vector_store], mock_chatbot)
     retriever.retrieve("What is the temperature?")
     mock_chatbot.invoke.assert_called_once()
 
 
 def test_retriever_returns_chatbot_response(mock_vector_store, mock_chatbot):
     """Check that retrieve returns the chatbot response."""
-    retriever = Retriever(mock_vector_store, mock_chatbot)
+    retriever = Retriever([mock_vector_store], mock_chatbot)
     response = retriever.retrieve("What is the temperature?")
     assert response == "The temperature at Pullman is 72F."

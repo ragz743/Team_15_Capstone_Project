@@ -70,10 +70,18 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
 
     temperature = float(os.getenv("OPENROUTER_CHAT_TEMPERATURE", "0"))
 
+    # Builds embedding model and chatbot
     embedding_model = EmbeddingOpenRouter(embedding_model_name)
-    vector_store = PgVectorStore(embedding_model)
     chatbot = ChatbotOpenRouter({"model": chat_model_name, "temperature": temperature})
-    retriever = Retriever(vector_store, chatbot)
+
+    # Builds all three stores: daily_index, live_index, forecast_index
+    stores = [
+        PgVectorStore(embedding_model, table="daily_index"),
+        PgVectorStore(embedding_model, table="live_index"),
+        PgVectorStore(embedding_model, table="forecast_index"),
+    ]
+    retriever = Retriever(stores, chatbot)
+
     return retriever, chatbot, chat_model_name, embedding_model_name
 
 

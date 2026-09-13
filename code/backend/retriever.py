@@ -52,27 +52,38 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
 )
 
 
+_TABLE_LABELS: dict[str, str] = {
+    "daily_index": "Historical Data",
+    "live_index": "Current Conditions",
+    "forecast_index": "Forecast Data",
+}
+
+
 class Retriever:
     """The class responsible for vector store search and presentation to user process."""
 
-    _vector_store: PgVectorStore
+    # Retriever now holds a list[PgVectorStore]
+    _vector_stores: list[PgVectorStore]
     _chatbot: _BaseChatbot
 
-    def __init__(self, vector_store: PgVectorStore, chatbot: _BaseChatbot) -> None:
+    def __init__(self, vector_stores: PgVectorStore | list[PgVectorStore], chatbot: _BaseChatbot) -> None:
         """Create an instance of the Retriever class."""
-        self._vector_store = vector_store
+        self._vector_stores = [vector_stores] if isinstance(vector_stores, PgVectorStore) else vector_stores
         self._chatbot = chatbot
 
+    # Queries _vector_stores and assembles a labeled context ([Historical Data],
+    # [Current Conditions], [Forecast Data]) so the LLM knows what type of data
+    # it's reading
     def retrieve(self, question: str) -> str:
-        """Search the vector store for relevant context and pass it to the chatbot."""
-        # Search vector store for relevant documents
-        relevant_docs: list[Document] = self._vector_store.similarity_search(question)
+        """Search all vector stores for relevant context and pass it to the chatbot."""
+        sections: list[str] = []
+        for store in self._vector_stores:
+            docs: list[Document] = store.similarity_search(question)
+            if docs:
+                label = _TABLE_LABELS.get(store.table, store.table)
+                content = "\n\n".join(doc.page_content for doc in docs)
+                sections.append(f"[{label}]\n{content}")
 
-        # Combine document contents into a single string
-        context: str = "\n\n".join(doc.page_content for doc in relevant_docs)
-
-        # Format the prompt with context & question
+        context: str = "\n\n".join(sections)
         prompt: str = RAG_PROMPT_TEMPLATE.format(context=context, question=question)
-
-        # Pass the prompt to the chatbot and return the response
         return self._chatbot.invoke([prompt])
