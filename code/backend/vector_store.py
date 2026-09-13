@@ -1,7 +1,6 @@
 """The vector store wrapper class."""
 
 import json
-import warnings
 
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._embedding_base import _BaseEmbedding
@@ -29,6 +28,11 @@ class PgVectorStore(VectorStore):
         self._embedding_model = embedding_model
         self._vector_db = PgVectorConnection()
         self._table = table
+
+    @property
+    def table(self) -> str:
+        """Return the name of the index table this store queries."""
+        return self._table
 
     # Batches embedding via embed_documents, then inserts each (embedding, document, metadata) row
     # Metadata is json.dumps(..., default=str) to safely serialize date values from DailyLoader.
@@ -75,7 +79,7 @@ class PgVectorStore(VectorStore):
         )
         return [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
 
-    @warnings.deprecated("not supported for this project.")
+    # @warnings.deprecated("not supported for this project.")
     def from_texts(
         self,
         texts: list[str],

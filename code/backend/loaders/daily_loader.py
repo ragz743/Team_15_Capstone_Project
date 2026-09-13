@@ -66,6 +66,10 @@ class DailyLoader(_BaseLoader):
     insert_sql = b"""
     INSERT INTO daily_index (embedding, document, metadata)
     VALUES (%s, %s, %s)
+    ON CONFLICT ((metadata->>'id'), (metadata->>'date'))
+    DO UPDATE SET
+        embedding = EXCLUDED.embedding,
+        document  = EXCLUDED.document
     RETURNING id;
     """
 
