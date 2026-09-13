@@ -77,7 +77,7 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     # Builds all three stores: daily_index, live_index, forecast_index
     stores = [
         PgVectorStore(embedding_model, table="daily_index"),
-        PgVectorStore(embedding_model, table="live_index"),
+        PgVectorStore(embedding_model, table="live_index", staleness_days=30),
         PgVectorStore(embedding_model, table="forecast_index"),
     ]
     retriever = Retriever(stores, chatbot)
