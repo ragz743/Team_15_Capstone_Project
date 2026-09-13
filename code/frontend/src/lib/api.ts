@@ -2,7 +2,7 @@
  *  HTTP client for the AWN backend.
  */
 
-const API_BASE = import.meta.env.VITE_API_BASE ?? "";
+const API_BASE = import.meta.env?.VITE_API_BASE ?? "";
 /** A single turn in the chat transcript, matching backend ChatMessage. */
 export type ChatRole = "user" | "assistant" | "system";
 
@@ -35,7 +35,11 @@ async function parseErrorDetail(response: Response): Promise<string | undefined>
     if (typeof body.detail === "string") {
       return body.detail;
     }
-  } catch {
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err;
+    }
+    return undefined;
   }
   return undefined;
 }
@@ -48,7 +52,10 @@ function friendlyErrorMessage(status: number, detail: string | undefined): strin
     return detail;
   }
   if (status === 502 || status === 504) {
-    return "Cannot reach the AWN backend. Is uvicorn running on port 8000?";
+    return "The weather service could not complete your request. Please try again.";
+  }
+  if (status === 503) {
+    return "The weather service is temporarily unavailable. Please try again later.";
   }
   return `Backend returned ${status}`;
 }
@@ -85,7 +92,23 @@ export async function sendChat(
     throw new ApiError(response.status, friendlyErrorMessage(response.status, detail), detail);
   }
 
-  return (await response.json()) as ChatResponse;
+  let body: unknown;
+  try {
+    body = await response.json();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw err;
+    }
+    throw new ApiError(response.status, "The weather service returned an invalid response. Please try again.");
+  }
+  if (
+    typeof body !== "object" || body === null ||
+    !("reply" in body) || typeof body.reply !== "string" || !body.reply.trim() ||
+    !("model" in body) || typeof body.model !== "string"
+  ) {
+    throw new ApiError(response.status, "The weather service returned an invalid response. Please try again.");
+  }
+  return { reply: body.reply, model: body.model };
 }
 
 /** GET /api/health */
