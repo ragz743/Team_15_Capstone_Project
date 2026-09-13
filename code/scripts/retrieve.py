@@ -2,7 +2,6 @@
 
 import argparse
 
-# import sys
 import dotenv
 from backend.model_factory import ModelFactory
 from backend.retriever import Retriever
@@ -12,15 +11,20 @@ from backend.vector_store import PgVectorStore
 def main() -> None:
     """Manual retrieval script entry point."""
     parser = argparse.ArgumentParser(description="Run a RAG retrieval query.")
-    parser.add_argument("--table", default="daily_index", help="Vector store table to query (default: daily_index)")
     parser.add_argument("question", nargs="*", help="Question to ask")
     args = parser.parse_args()
 
     dotenv.load_dotenv()
     embedding_model, chatbot_model = ModelFactory.load_from_models_yaml()
 
-    store = PgVectorStore(embedding_model, table=args.table)
-    retriever = Retriever(store, chatbot_model)
+    # CLI now creates all three stores and passes them to Retriever class.
+    # The --table flag is removed.
+    stores = [
+        PgVectorStore(embedding_model, table="daily_index"),
+        PgVectorStore(embedding_model, table="live_index"),
+        PgVectorStore(embedding_model, table="forecast_index"),
+    ]
+    retriever = Retriever(stores, chatbot_model)
 
     question = " ".join(args.question) if args.question else input("Enter your question: ")
     response = retriever.retrieve(question)
