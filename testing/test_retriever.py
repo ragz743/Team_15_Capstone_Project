@@ -36,7 +36,7 @@ def test_retriever_calls_vector_store(mock_vector_store, mock_chatbot):
     """Check that retrieve calls each vector store with the question."""
     retriever = Retriever([mock_vector_store], mock_chatbot)
     retriever.retrieve("What is the temperature?")
-    mock_vector_store.similarity_search.assert_called_once_with("What is the temperature?")
+    mock_vector_store.similarity_search.assert_called_once_with("What is the temperature?", filter=None)
 
 
 def test_retriever_calls_chatbot(mock_vector_store, mock_chatbot):
