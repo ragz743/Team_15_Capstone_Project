@@ -49,3 +49,21 @@ for (const status of [502, 503, 504]) {
     await assert.rejects(sendChat(messages), { name: "ApiError", message: /weather service/ });
   });
 }
+
+test("reports a network failure", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => { throw new TypeError("Failed to fetch"); });
+  await assert.rejects(sendChat(messages), { name: "ApiError", message: /Network error/ });
+});
+
+for (const phase of ["connecting", "reading a reply", "reading an error"]) {
+  test(`preserves cancellation while ${phase}`, async (t) => {
+    const aborted = new DOMException("Cancelled", "AbortError");
+    t.mock.method(globalThis, "fetch", async () => {
+      if (phase === "connecting") throw aborted;
+      const response = Response.json({}, { status: phase === "reading an error" ? 502 : 200 });
+      t.mock.method(response, "json", async () => { throw aborted; });
+      return response;
+    });
+    await assert.rejects(sendChat(messages), (error) => error === aborted);
+  });
+}
