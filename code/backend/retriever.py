@@ -74,11 +74,19 @@ class Retriever:
     # Queries _vector_stores and assembles a labeled context ([Historical Data],
     # [Current Conditions], [Forecast Data]) so the LLM knows what type of data
     # it's reading
-    def retrieve(self, question: str) -> str:
-        """Search all vector stores for relevant context and pass it to the chatbot."""
+    def retrieve(self, question: str, filter: dict | None = None) -> str:
+        """Search all vector stores for relevant context and pass it to the chatbot.
+
+        Args:
+            question: The user's natural-language question.
+            filter: Optional metadata filter passed to every store's similarity_search.
+                Only documents whose metadata contains all key-value pairs are returned.
+                Example: {"station": "Pullman"} or {"county": "Whitman"}.
+
+        """
         sections: list[str] = []
         for store in self._vector_stores:
-            docs: list[Document] = store.similarity_search(question)
+            docs: list[Document] = store.similarity_search(question, filter=filter)
             if docs:
                 label = _TABLE_LABELS.get(store.table, store.table)
                 content = "\n\n".join(doc.page_content for doc in docs)

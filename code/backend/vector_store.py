@@ -9,6 +9,12 @@ from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from psycopg import sql
 
+_TIMESTAMP_KEYS: dict[str, str] = {
+    "daily_index": "date",
+    "live_index": "timestamp",
+    "forecast_index": "timestamp",
+}
+
 
 class PgVectorStore(VectorStore):
     """The local pgvector postgreSQL VectorStore class."""
@@ -16,11 +22,26 @@ class PgVectorStore(VectorStore):
     _embedding_model: _BaseEmbedding
     _vector_db: PgVectorConnection
     _table: str
+    _staleness_days: int | None
 
     _ALLOWED_TABLES = frozenset({"daily_index", "live_index", "forecast_index"})
 
-    def __init__(self, embedding_model: _BaseEmbedding, table: str = "daily_index") -> None:
-        """Create an instance of the PgVectorStore class."""
+    def __init__(
+        self,
+        embedding_model: _BaseEmbedding,
+        table: str = "daily_index",
+        staleness_days: int | None = None,
+    ) -> None:
+        """Create an instance of the PgVectorStore class.
+
+        Args:
+            embedding_model: Model used to embed query strings.
+            table: Which index table to search.
+            staleness_days: When set, similarity_search excludes documents whose
+                metadata timestamp is older than this many days. Useful for
+                filtering out defunct stations from live_index.
+
+        """
         if table not in self._ALLOWED_TABLES:
             msg = f"unsupported vector store table: {table}"
             raise ValueError(msg)
@@ -28,6 +49,7 @@ class PgVectorStore(VectorStore):
         self._embedding_model = embedding_model
         self._vector_db = PgVectorConnection()
         self._table = table
+        self._staleness_days = staleness_days
 
     @property
     def table(self) -> str:
@@ -66,17 +88,41 @@ class PgVectorStore(VectorStore):
         raise NotImplementedError
 
     # Embeds the query string, then runs pgvector's <-> L2 nearest-neighbour operation and returns top-k results
-    # as Document objects.
-    def similarity_search(self, query: str, k: int = 4, **kwargs) -> list[Document]:
-        # TODO: Implement metadata filtering later.
-        # raise NotImplementedError
-        """Return a list of documents found during semantic search."""
+    # as Document objects. Optional filter (JSONB containment) and staleness_days (date cutoff) are combined
+    # into a WHERE clause before ranking — both may be active simultaneously.
+    def similarity_search(self, query: str, k: int = 4, filter: dict | None = None, **kwargs) -> list[Document]:
+        """Return a list of documents found during semantic search.
+
+        Args:
+            query: Natural-language query string to embed and search.
+            k: Maximum number of results to return.
+            filter: Optional dict of metadata key-value pairs; only rows whose
+                metadata contains all pairs (JSONB @> containment) are returned.
+            **kwargs: Ignored; present for LangChain VectorStore interface compatibility.
+
+        """
         query_vec, _ = self._embedding_model.embed_document(Document(page_content=query))
         vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
-        rows = self._vector_db.simple_query(
-            f"SELECT document, metadata FROM {self._table} ORDER BY embedding <-> %s LIMIT %s".encode(),
-            (vec_str, k),
-        )
+
+        where_clauses: list[str] = []
+        query_vars: list = []
+
+        if filter:
+            where_clauses.append("metadata @> %s::jsonb")
+            query_vars.append(json.dumps(filter))
+
+        if self._staleness_days is not None:
+            ts_key = _TIMESTAMP_KEYS[self._table]
+            where_clauses.append("(metadata->>%s)::date >= CURRENT_DATE - (%s * INTERVAL '1 day')")
+            query_vars.extend([ts_key, self._staleness_days])
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+        query_sql = (
+            f"SELECT document, metadata FROM {self._table} {where_sql}ORDER BY embedding <-> %s LIMIT %s"
+        ).encode()
+        query_vars.extend([vec_str, k])
+
+        rows = self._vector_db.simple_query(query_sql, tuple(query_vars))
         return [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
 
     # @warnings.deprecated("not supported for this project.")
