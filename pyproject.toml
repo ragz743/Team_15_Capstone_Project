@@ -28,7 +28,6 @@ dependencies = [
 dev = [
     "pre-commit",
     "ruff",
-    "black",
     "isort",
     "pyright",
     "pytest",
