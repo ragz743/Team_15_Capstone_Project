@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sendChat } from "../src/lib/api.ts";
+import { ApiError, sendChat } from "../src/lib/api.ts";
 
 const messages = [{ role: "user" as const, content: "Weather in Pullman?" }];
 
@@ -20,3 +20,32 @@ test("sends the conversation and cancellation signal, and returns the answer", a
   assert.equal(new Headers(options.headers).get("Content-Type"), "application/json");
   assert.equal(options.signal, controller.signal);
 });
+
+for (const body of [null, {}, { reply: 72, model: "test" }, { reply: " \n", model: "test" }, { reply: "72°F" }]) {
+  test(`rejects malformed successful response: ${JSON.stringify(body)}`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () => Response.json(body));
+    await assert.rejects(sendChat(messages), { name: "ApiError", message: /invalid response/ });
+  });
+}
+
+test("rejects a non-JSON successful response", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response("<html>proxy page</html>"));
+  await assert.rejects(sendChat(messages), { name: "ApiError", message: /invalid response/ });
+});
+
+test("preserves a useful backend error", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Please enter a weather related question." }, { status: 400 }));
+  await assert.rejects(sendChat(messages), (error) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 400);
+    assert.equal(error.detail, "Please enter a weather related question.");
+    return true;
+  });
+});
+
+for (const status of [502, 503, 504]) {
+  test(`handles a non-JSON ${status} response`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () => new Response("proxy error", { status }));
+    await assert.rejects(sendChat(messages), { name: "ApiError", message: /weather service/ });
+  });
+}
