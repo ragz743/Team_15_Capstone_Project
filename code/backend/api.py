@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     """Payload for POST /api/chat."""
 
     messages: list[ChatMessage] = Field(min_length=1)
+    filter: dict | None = None
 
 
 class ChatResponse(BaseModel):
@@ -161,7 +162,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
     try:
-        reply = _retriever.retrieve(question)
+        reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
         logger.exception("Retriever invocation failed")
         raise HTTPException(status_code=502, detail=f"Retrieval error: {exc}") from exc
