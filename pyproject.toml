@@ -28,11 +28,13 @@ dependencies = [
 dev = [
     "pre-commit",
     "ruff",
-    "black",
     "isort",
     "pyright",
     "pytest",
     "httpx",
+    "pytest-cov",
+    "pytest-html",
+    "requests",
 ]
 
 [project.scripts]

@@ -25,12 +25,16 @@ class EmbeddingOpenRouter(_BaseEmbedding):
             config.pop("temperature", None)
             kwargs = {**config, **kwargs}
 
+        model_kwargs = kwargs.pop("model_kwargs", {})
+        model_kwargs["encoding_format"] = "float"
+
         self._model = OpenAIEmbeddings(
             model=model_name,
             api_key=os.getenv("OPENROUTER_API_KEY"),  # type: ignore (can't get SecretStr type)
             base_url=self._BASE_URL,
             check_embedding_ctx_length=False,
             # dimensions=self._VECTOR_DIMENSIONS,
+            model_kwargs=model_kwargs,
             **kwargs,
         )
 
