@@ -56,7 +56,7 @@ def main() -> None:
     stores = [
         PgVectorStore(embedding_model, table="daily_index"),
         PgVectorStore(embedding_model, table="live_index", staleness_days=30),
-        PgVectorStore(embedding_model, table="forecast_index"),
+        PgVectorStore(embedding_model, table="forecast_index", staleness_days=2),
     ]
     retriever = Retriever(stores, chatbot_model)
 
