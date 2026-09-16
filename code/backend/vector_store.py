@@ -15,6 +15,9 @@ _TIMESTAMP_KEYS: dict[str, str] = {
     "forecast_index": "timestamp",
 }
 
+# Allowlist for keys interpolated into SQL by distinct_metadata_values.
+_FILTERABLE_KEYS = frozenset({"station", "county", "state", "id"})
+
 
 class PgVectorStore(VectorStore):
     """The local pgvector postgreSQL VectorStore class."""
@@ -55,6 +58,16 @@ class PgVectorStore(VectorStore):
     def table(self) -> str:
         """Return the name of the index table this store queries."""
         return self._table
+
+    def distinct_metadata_values(self, key: str) -> list[str]:
+        """Return every distinct value stored under a metadata key in this table."""
+        if key not in _FILTERABLE_KEYS:
+            msg = f"unsupported metadata key: {key}"
+            raise ValueError(msg)
+
+        query = f"SELECT DISTINCT metadata->>'{key}' FROM {self._table}".encode()
+        rows = self._vector_db.simple_query(query, ())
+        return [row[0] for row in rows if row[0]]
 
     # Batches embedding via embed_documents, then inserts each (embedding, document, metadata) row
     # Metadata is json.dumps(..., default=str) to safely serialize date values from DailyLoader.
