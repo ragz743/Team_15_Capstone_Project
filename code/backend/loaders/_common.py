@@ -1,6 +1,7 @@
 """The common Metadata table type to be called from other loaders during table selection."""
 
 import itertools
+from decimal import Decimal
 from typing import NamedTuple, Self, Sequence
 
 from backend.databases.awn_main_connection import AWNDatabaseConnection
@@ -73,11 +74,34 @@ def query_stations() -> list[MetadataQueryResult]:
         return [MetadataQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_metadata, ())]
 
 
+def _format_cell(value: object) -> str:
+    """Render one measurement, trimming float noise to a single decimal place.
+
+    MySQL hands back Decimal for measurement columns despite the float
+    annotations on the query result tuples, so both types are handled here.
+    """
+    if isinstance(value, (float, Decimal)):
+        return f"{value:.1f}"
+    return str(value)
+
+
 def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
-    """Convert a collection of named tuple object into a markdown table."""
-    columns = zip(tuples[0]._fields, units, strict=True)
+    """Convert a collection of named tuple object into a markdown table.
+
+    Columns where every station reading is None are dropped entirely. A station
+    that does not report a measurement should have no column for it rather than
+    a column of nulls, which the chatbot may otherwise fill with a plausible
+    invented number.
+    """
+    fields = tuples[0]._fields
+    keep = [i for i in range(len(fields)) if any(row[i] is not None for row in tuples)]
+    # Every column was null; fall back to the full set so the table is never empty.
+    if not keep:
+        keep = list(range(len(fields)))
+
+    columns = [(fields[i], units[i]) for i in keep]
     header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"
-    rows = ["| " + " | ".join(map(str, row)) + " |\n" for row in tuples]
+    divider = "| " + " | ".join(itertools.repeat("---", len(keep))) + " |\n"
+    rows = ["| " + " | ".join(_format_cell(row[i]) for i in keep) + " |\n" for row in tuples]
 
     return header + divider + "".join(rows)
