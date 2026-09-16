@@ -154,8 +154,9 @@ class ForecastLoader(_BaseLoader):
         stations_forecast = self._query_station_current_forecast(metadata_results)
         for meta, forecast_rows, units in [(m, r, u) for m, r, u in stations_forecast if r]:
             init_time = forecast_rows[0].forecast_time
+            header = f"Station: {meta.station} (ID: {meta.unit_id}) — {meta.county} County, {meta.state}\n\n"
             d = Document(
-                page_content=_common.to_markdown_table(forecast_rows, units),
+                page_content=header + _common.to_markdown_table(forecast_rows, units),
                 metadata={
                     "id": meta.unit_id,
                     "station": meta.station,
