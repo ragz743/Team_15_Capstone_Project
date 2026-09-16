@@ -36,7 +36,7 @@ def test_retriever_calls_vector_store(mock_vector_store, mock_chatbot):
     """Check that retrieve calls each vector store with the question."""
     retriever = Retriever([mock_vector_store], mock_chatbot)
     retriever.retrieve("What is the temperature?")
-    mock_vector_store.similarity_search.assert_called_once_with("What is the temperature?", filter=None)
+    mock_vector_store.similarity_search.assert_called_once_with("What is the temperature?", k=8, filter=None)
 
 
 def test_retriever_calls_chatbot(mock_vector_store, mock_chatbot):
@@ -65,8 +65,8 @@ def test_retriever_queries_all_stores(mock_chatbot):
     retriever = Retriever([store_a, store_b], mock_chatbot)
     retriever.retrieve("What is the wind speed?")
 
-    store_a.similarity_search.assert_called_once_with("What is the wind speed?", filter=None)
-    store_b.similarity_search.assert_called_once_with("What is the wind speed?", filter=None)
+    store_a.similarity_search.assert_called_once_with("What is the wind speed?", k=8, filter=None)
+    store_b.similarity_search.assert_called_once_with("What is the wind speed?", k=8, filter=None)
 
 
 def test_retriever_passes_filter_to_stores(mock_chatbot):
@@ -78,7 +78,7 @@ def test_retriever_passes_filter_to_stores(mock_chatbot):
     retriever = Retriever([store], mock_chatbot)
     retriever.retrieve("Temperature in Pullman?", filter={"station": "Pullman"})
 
-    store.similarity_search.assert_called_once_with("Temperature in Pullman?", filter={"station": "Pullman"})
+    store.similarity_search.assert_called_once_with("Temperature in Pullman?", k=8, filter={"station": "Pullman"})
 
 
 def test_retriever_handles_empty_store_results(mock_chatbot):
@@ -117,7 +117,7 @@ def test_retriever_accepts_single_store(mock_chatbot):
     retriever = Retriever(store, mock_chatbot)
     retriever.retrieve("Will it rain tomorrow?")
 
-    store.similarity_search.assert_called_once_with("Will it rain tomorrow?", filter=None)
+    store.similarity_search.assert_called_once_with("Will it rain tomorrow?", k=8, filter=None)
 
 
 def test_retriever_prompt_contains_question(mock_vector_store, mock_chatbot):
@@ -138,9 +138,7 @@ def test_retriever_prompt_contains_context(mock_vector_store, mock_chatbot):
     assert "Humidity: 45%" in prompt_arg
 
 
-# ---------------------------------------------------------------------------
-# retrieve CLI script — _is_stale, _refresh, main()
-# ---------------------------------------------------------------------------
+# retrieve CLI tests: _is_stale, _refresh, main()
 
 
 def test_is_stale_returns_true_when_no_rows_today():
