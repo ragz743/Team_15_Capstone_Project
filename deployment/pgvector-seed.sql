@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS daily_index (
     metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
 );
 
+-- unique index so re-indexing upserts by (station_id, date) instead of appending duplicates
+CREATE UNIQUE INDEX IF NOT EXISTS daily_index_station_date_idx
+    ON daily_index ((metadata->>'id'), (metadata->>'date'));
+
 -- live index table
 -- Will hold only the most up to date information
 -- for each station (entry with maximum timestamp)

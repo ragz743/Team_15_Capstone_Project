@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     """Payload for POST /api/chat."""
 
     messages: list[ChatMessage] = Field(min_length=1)
+    filter: dict | None = None
 
 
 class ChatResponse(BaseModel):
@@ -70,10 +71,18 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
 
     temperature = float(os.getenv("OPENROUTER_CHAT_TEMPERATURE", "0"))
 
+    # Builds embedding model and chatbot
     embedding_model = EmbeddingOpenRouter(embedding_model_name)
-    vector_store = PgVectorStore(embedding_model)
     chatbot = ChatbotOpenRouter({"model": chat_model_name, "temperature": temperature})
-    retriever = Retriever(vector_store, chatbot)
+
+    # Builds all three stores: daily_index, live_index, forecast_index
+    stores = [
+        PgVectorStore(embedding_model, table="daily_index"),
+        PgVectorStore(embedding_model, table="live_index", staleness_days=30),
+        PgVectorStore(embedding_model, table="forecast_index", staleness_days=2),
+    ]
+    retriever = Retriever(stores, chatbot)
+
     return retriever, chatbot, chat_model_name, embedding_model_name
 
 
@@ -153,7 +162,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
     try:
-        reply = _retriever.retrieve(question)
+        reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
         logger.exception("Retriever invocation failed")
         raise HTTPException(status_code=502, detail=f"Retrieval error: {exc}") from exc
