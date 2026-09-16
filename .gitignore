@@ -81,6 +81,7 @@ coverage.xml
 .pytest_cache/
 cover/
 e2e_report.html
+accuracy_report.html
 
 # Translations
 *.mo
