@@ -40,6 +40,7 @@ def _pg_connect():
         user=PG_USER,
         password=PG_PASSWORD,
         dbname=PG_DB,
+        connect_timeout=3,
     )
 
 
