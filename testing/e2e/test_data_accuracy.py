@@ -19,11 +19,11 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_URL = "http://localhost:8000"
-PG_HOST = "localhost"
-PG_PORT = 5432
+PG_HOST = os.getenv("PG_HOST", "localhost")
+PG_PORT = int(os.getenv("PG_PORT", "5432"))
 PG_DB = "vectorstore"
-PG_USER = os.getenv("PG_USER", "admin")
-PG_PASSWORD = os.getenv("PG_PASSWORD", "qwer1234")
+PG_USER = os.getenv("PG_USER", "awn")
+PG_PASSWORD = os.getenv("PG_PASSWORD", "changeme")
 
 # How much numeric difference is acceptable (in original units)
 # Note: F for temp, % for humidity, inches for percip, mph for wind
