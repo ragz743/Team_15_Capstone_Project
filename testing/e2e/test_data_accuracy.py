@@ -52,15 +52,18 @@ def _is_api_ready() -> bool:
 
 
 def _has_indexed_data() -> bool:
+    conn = None
     try:
         conn = _pg_connect()
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM daily_index")
         row = cur.fetchone()
-        conn.close()
         return row is not None and row[0] > 0
     except Exception:
         return False
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def _chat(question: str) -> str:
