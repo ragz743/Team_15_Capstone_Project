@@ -186,17 +186,17 @@ def test_daily_temperature_accuracy(station: str):
     """Test accuracy of daily temperature data for a station."""
     record = _get_station_daily(station)
     if record is None:
-        pytest.skip(f"No live data for station: {station}")
+        pytest.skip(f"No daily data for station: {station}")
 
     actual_temp = _parse_value_from_document(record["document"], column_index=1)
     if actual_temp is None:
-        pytest.skip(f"Could not parse temperature from live document for {station}")
+        pytest.skip(f"Could not parse temperature from daily document for {station}")
 
-    question = f"What is the current temperature in {station}?"
+    question = f"What was the average temperature in {station} recently?"
     reply = _chat(question)
 
     print(f"\nStation: {station}")
-    print(f"DB value (live air_temp): {actual_temp}F")
+    print(f"DB value (avg_air_temp): {actual_temp}F")
     print(f"Chatbot reply: {reply}")
 
     numbers = _extract_numbers(reply)
@@ -204,7 +204,7 @@ def test_daily_temperature_accuracy(station: str):
 
     assert reported is not None, f"No number found in reply for {station}"
     assert abs(actual_temp - reported) <= TEMP_TOLERANCE, (
-        f"Live temperature mismatch for {station}: "
+        f"Daily temperature mismatch for {station}: "
         f"DB={actual_temp}F, Chatbot={reported}F, "
         f"diff={abs(actual_temp - reported):.2f}F (tolerance={TEMP_TOLERANCE}F)"
     )
