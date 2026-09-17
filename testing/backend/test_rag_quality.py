@@ -17,10 +17,12 @@ class ScriptedRetriever:
         """Initialize the scripted retriever with a pre-set response."""
         self.response = response
         self.last_question: str | None = None
+        self.last_filter: dict | None = None
 
-    def retrieve(self, question: str) -> str:
+    def retrieve(self, question: str, filter: dict | None = None, **kwargs) -> str:
         """Return the pre-set response and record the incoming question."""
         self.last_question = question
+        self.last_filter = filter
         return self.response
 
 
