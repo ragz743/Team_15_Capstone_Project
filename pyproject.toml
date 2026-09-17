@@ -35,7 +35,6 @@ dev = [
     "pytest-cov",
     "pytest-html",
     "requests",
-    "psycopg2-binary",
 ]
 
 [project.scripts]
