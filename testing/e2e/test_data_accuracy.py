@@ -87,6 +87,7 @@ def _closest_number(numbers: list[float], target: float) -> float | None:
 
 
 def _get_station_daily(station: str) -> dict | None:
+    conn = None
     try:
         conn = _pg_connect()
         cur = conn.cursor()
@@ -97,17 +98,18 @@ def _get_station_daily(station: str) -> dict | None:
             WHERE metadata->>'station' = %s
             ORDER BY metadata->>'date' DESC
             LIMIT 1
-        """,
+            """,
             (station,),
         )
         row = cur.fetchone()
-        conn.close()
         if not row:
             return None
-        return {"document": row[0], "metadata": json.loads(row[1])}
+        return {"document": row[0], "metadata": row[1]}
     except Exception:
         return None
-
+    finally:
+        if conn is not None:
+            conn.close()
 
 def _get_station_live(station: str) -> dict | None:
     try:
