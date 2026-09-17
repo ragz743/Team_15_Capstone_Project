@@ -65,9 +65,9 @@ def query_stations() -> list[MetadataQueryResult]:
         REL_HUMIDITY, PRECIP, WIND_SPEED, WIND_DIR
         FROM METADATA
         WHERE
-        COUNTY = 'Whitman' OR
+        (COUNTY = 'Whitman' OR
         COUNTY = 'Spokane' OR
-        COUNTY = 'Douglas' AND
+        COUNTY = 'Douglas') AND
         ACTIVE_STATION = "Y";
         """
     with AWNDatabaseConnection() as awn_conn:
