@@ -42,6 +42,7 @@ class ChatRequest(BaseModel):
     """Payload for POST /api/chat."""
 
     messages: list[ChatMessage] = Field(min_length=1)
+    filter: dict[str, str] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -71,9 +72,13 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     temperature = float(os.getenv("OPENROUTER_CHAT_TEMPERATURE", "0"))
 
     embedding_model = EmbeddingOpenRouter(embedding_model_name)
-    vector_store = PgVectorStore(embedding_model)
+    stores = [
+        PgVectorStore(embedding_model, table="daily_index"),
+        PgVectorStore(embedding_model, table="live_index", staleness_days=30),
+        PgVectorStore(embedding_model, table="forecast_index", staleness_days=2),
+    ]
     chatbot = ChatbotOpenRouter({"model": chat_model_name, "temperature": temperature})
-    retriever = Retriever(vector_store, chatbot)
+    retriever = Retriever(stores, chatbot)
     return retriever, chatbot, chat_model_name, embedding_model_name
 
 
@@ -154,7 +159,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
-        reply = _retriever.retrieve(question)
+        reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
         logger.exception("Retriever invocation failed")
         raise HTTPException(

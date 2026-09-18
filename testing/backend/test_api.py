@@ -17,7 +17,7 @@ class FakeRetriever:
         """Create a fake retriever."""
         self.question: str | None = None
 
-    def retrieve(self, question: str) -> str:
+    def retrieve(self, question: str, filter: dict | None = None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
         return f"retrieved: {question}"
@@ -37,7 +37,7 @@ def test_chat_returns_no_data_without_generating_an_answer(monkeypatch: MonkeyPa
 
     assert response.status_code == 200
     assert "No matching weather records" in response.json()["reply"]
-    store.similarity_search.assert_called_once_with("Weather in Pullman?")
+    store.similarity_search.assert_called_once_with("Weather in Pullman?", k=8, filter=None)
     chatbot.invoke.assert_not_called()
 
 

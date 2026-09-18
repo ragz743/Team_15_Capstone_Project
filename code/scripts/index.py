@@ -18,4 +18,6 @@ def main() -> None:
         loader = loader_class(embedding_model)
         loader.index()
 
-    pass
+
+if __name__ == "__main__":
+    main()

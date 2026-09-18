@@ -66,6 +66,10 @@ class DailyLoader(_BaseLoader):
     insert_sql = b"""
     INSERT INTO daily_index (embedding, document, metadata)
     VALUES (%s, %s, %s)
+    ON CONFLICT ((metadata->>'id'), (metadata->>'date'))
+    DO UPDATE SET
+        embedding = EXCLUDED.embedding,
+        document  = EXCLUDED.document
     RETURNING id;
     """
 
@@ -111,8 +115,9 @@ class DailyLoader(_BaseLoader):
         metadata_results = _common.query_stations()
         stations_daily = self._query_station_daily(metadata_results)
         for meta, station in stations_daily:
+            header = f"Station: {meta.station} (ID: {meta.unit_id}) — {meta.county} County, {meta.state}\n\n"
             d = Document(
-                page_content=_common.to_markdown_table((station,), DailyQueryResult.get_units()),
+                page_content=header + _common.to_markdown_table((station,), DailyQueryResult.get_units()),
                 metadata={
                     "id": meta.unit_id,
                     "date": station.date,
