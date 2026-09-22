@@ -19,6 +19,8 @@ from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from openai import RateLimitError
+from openrouter.errors import TooManyRequestsResponseError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("awn.api")
@@ -137,6 +139,17 @@ app.add_middleware(
 )
 
 
+def _retrieval_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
+        return HTTPException(
+            status_code=503,
+            detail="The answer provider is rate-limiting requests. Please try again later.",
+        )
+    return HTTPException(
+        status_code=502, detail="The weather service could not complete your request. Please try again."
+    )
+
+
 @app.get("/api/health")
 def health() -> dict[str, object]:
     """Readiness probe used by the frontend and ops tooling."""
@@ -171,11 +184,8 @@ def chat(request: ChatRequest) -> ChatResponse:
     try:
         reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
-        logger.exception("Retriever invocation failed")
-        raise HTTPException(
-            status_code=502,
-            detail="The weather service could not complete your request. Please try again.",
-        ) from exc
+        logger.error("Retriever invocation failed (%s)", type(exc).__name__)
+        raise _retrieval_error(exc) from exc
 
     if not reply.strip():
         raise HTTPException(
