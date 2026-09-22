@@ -19,7 +19,7 @@ from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
@@ -41,6 +41,7 @@ class ChatMessage(BaseModel):
 class ChatRequest(BaseModel):
     """Payload for POST /api/chat."""
 
+    model_config = ConfigDict(extra="forbid")
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
     filter: dict[str, str] | None = None
 
@@ -49,6 +50,8 @@ class ChatRequest(BaseModel):
         """Bound transcript size without discarding the active request."""
         if sum(len(message.content) for message in self.messages) > 32000:
             raise ValueError("Conversation exceeds 32000 characters")
+        if self.filter and (len(self.filter) > 4 or any(len(v) > 100 for v in self.filter.values())):
+            raise ValueError("Invalid metadata filter")
         return self
 
 
