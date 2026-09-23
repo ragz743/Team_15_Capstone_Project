@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from abc import ABC
+from abc import ABC, abstractmethod
 from types import TracebackType
 from typing import Any, ClassVar, Generator, NamedTuple, Self, Sequence
 
@@ -87,3 +87,8 @@ class AWNDatabaseConnectionBase(ABC):
         """
         results = self.simple_query(query_schema, (self._DB_NAME, table_name))
         return [SchemaQueryResult.from_tuple(tup) for tup in results]
+
+    @abstractmethod
+    def format_table_name(self, station_id: int) -> str:
+        """From a station id return the string name of the table specific to the DB."""
+        raise NotImplementedError

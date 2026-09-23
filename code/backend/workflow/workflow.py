@@ -6,6 +6,7 @@ from typing import Annotated, Literal, TypedDict
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_fc_connection import AWNForecastDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
+from backend.loaders import _common
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -51,6 +52,7 @@ class ChatState(TypedDict):
     messages: Annotated[list, message.add_messages]
     sub_queries: list[QueryClassification]
     nearest_station_id: int
+    nearest_station_schema: str
 
 
 class ClassifierChatbot:
@@ -113,13 +115,22 @@ class ChatbotWorkflow:
 
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
+        nearest_station_id = self._nearest_station_search(
+            location_coord,
+            county,
+        )
+        schema = self.current_db.query_schema(f"station{nearest_station_id}")
         initial_state: ChatState = {
-            "messages": [("user", user_input)],
+            "messages": [
+                # messages follow format ("role", "content")
+                # roles are somewhat predefined by langgraph framework
+                # where "system" is internal info only for LLMs to see
+                # and "user" is for user content to be presented to LLM
+                ("user", user_input),
+            ],
             "sub_queries": [],
-            "nearest_station_id": self._nearest_station_search(
-                location_coord,
-                county,
-            ),
+            "nearest_station_id": nearest_station_id,
+            "nearest_station_schema": _common.to_markdown_table(schema, ["", "", "", "", ""]),
         }
         result = self.graph.invoke(initial_state)
 
@@ -139,18 +150,18 @@ class ChatbotWorkflow:
         graph.add_node("_chatbot_summarize", self._chatbot_summarize)
 
         # connect nodes with edges
-        graph.add_edge(START, "query_classifier")
-        graph.add_conditional_edges("query_classifier", self._route_query)
+        graph.add_edge(START, "_query_classifier")
+        graph.add_conditional_edges("_query_classifier", self._route_query)
         for node in self._query_handlers.values():
-            graph.add_edge(node, "chatbot_summarize")
-        graph.add_edge("chatbot_summarize", END)
+            graph.add_edge(node, "_chatbot_summarize")
+        graph.add_edge("_chatbot_summarize", END)
 
         return graph.compile(checkpointer=self.checkpointer)
 
     def _nearest_station_search(self, location_coord: tuple[float, float], county: str) -> int:
         """Given a coordinate, find the nearest AWN station id to query against."""
         latitude, longitude = location_coord
-        metadata_query = """
+        nearest_id_query = """
         SELECT
             UNIT_ID,
             STATION_NAME,
@@ -171,7 +182,7 @@ class ChatbotWorkflow:
         LIMIT 1;
         """
         params = (latitude, longitude, latitude, county)
-        results = self.current_db.simple_query(metadata_query, params)
+        results = self.current_db.simple_query(nearest_id_query, params)
 
         if not results:
             msg = f"No nearest station returned with search args:(lat, lng)=({latitude}, {longitude}), county={county}"
@@ -186,14 +197,17 @@ class ChatbotWorkflow:
 
     def _query_historical(self, state: ChatState) -> dict:
         """Perform a historical weather data query."""
+        _table = self.historical_daily_db.format_table_name(state["nearest_station_id"])
         raise NotImplementedError
 
     def _query_current(self, state: ChatState) -> dict:
         """Perform a current weather data query."""
+        _table = self.current_db.format_table_name(state["nearest_station_id"])
         raise NotImplementedError
 
     def _query_forecast(self, state: ChatState) -> dict:
         """Perform a forecasted weather data query."""
+        _table = self.forecast_db.format_table_name(state["nearest_station_id"])
         raise NotImplementedError
 
     def _query_miscellaneous(self, state: ChatState) -> dict:
@@ -208,6 +222,8 @@ class ChatbotWorkflow:
                 {
                     "messages": [("user", sub_query.reworded_query)],
                     "nearest_station_id": state["nearest_station_id"],
+                    "nearest_station_schema": state["nearest_station_schema"],
+                    "sub_queries": [sub_query],
                 },
             )
             for sub_query in state["sub_queries"]
