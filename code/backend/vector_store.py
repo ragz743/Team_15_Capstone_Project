@@ -4,6 +4,7 @@ import json
 
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._embedding_base import _BaseEmbedding
+from backend.weather_query import Station
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
@@ -99,6 +100,17 @@ class PgVectorStore(VectorStore):
     def aadd_documents(self, documents, **kwargs):
         """Async add or update documents in the vector store."""
         raise NotImplementedError
+
+    def stations(self) -> list[Station]:
+        """Read current station identities without caching failed or empty catalogs."""
+        rows = self._vector_db.simple_query(
+            (
+                f"SELECT DISTINCT metadata->>'id', metadata->>'station', metadata->>'county' FROM {self._table} "
+                "WHERE metadata->>'id' IS NOT NULL AND metadata->>'station' IS NOT NULL ORDER BY 2, 1"
+            ).encode(),
+            (),
+        )
+        return [Station(str(row[0]), str(row[1]), str(row[2] or "")) for row in rows]
 
     # Embeds the query string, then runs pgvector's <-> L2 nearest-neighbour operation and returns top-k results
     # as Document objects. Optional filter (JSONB containment) and staleness_days (date cutoff) are combined
