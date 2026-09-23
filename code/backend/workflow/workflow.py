@@ -131,12 +131,12 @@ class ChatbotWorkflow:
         graph = StateGraph(ChatState)
 
         # add all nodes
-        graph.add_node("query_classifier", self._query_classifier)
-        graph.add_node("query_historical", self._query_historical)
-        graph.add_node("query_current", self._query_current)
-        graph.add_node("query_forecast", self._query_forecast)
-        graph.add_node("query_miscellaneous", self._query_miscellaneous)
-        graph.add_node("chatbot_summarize", self._chatbot_summarize)
+        graph.add_node("_query_classifier", self._query_classifier)
+        graph.add_node("_query_historical", self._query_historical)
+        graph.add_node("_query_current", self._query_current)
+        graph.add_node("_query_forecast", self._query_forecast)
+        graph.add_node("_query_miscellaneous", self._query_miscellaneous)
+        graph.add_node("_chatbot_summarize", self._chatbot_summarize)
 
         # connect nodes with edges
         graph.add_edge(START, "query_classifier")
@@ -207,6 +207,7 @@ class ChatbotWorkflow:
                 self._query_handlers[sub_query.query_type],
                 {
                     "messages": [("user", sub_query.reworded_query)],
+                    "nearest_station_id": state["nearest_station_id"],
                 },
             )
             for sub_query in state["sub_queries"]
