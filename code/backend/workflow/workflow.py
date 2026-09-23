@@ -50,6 +50,7 @@ class ChatState(TypedDict):
 
     messages: Annotated[list, message.add_messages]
     sub_queries: list[QueryClassification]
+    nearest_station_id: int
 
 
 class ClassifierChatbot:
@@ -110,9 +111,16 @@ class ChatbotWorkflow:
         self.historical_daily_db = AWNDailyDatabaseConnection()
         self.forecast_db = AWNForecastDatabaseConnection()
 
-    def run(self, user_input: str, location_coord: tuple[float, float]) -> str:
+    def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
-        initial_state = {"messages": [("user", user_input)]}
+        initial_state: ChatState = {
+            "messages": [("user", user_input)],
+            "sub_queries": [],
+            "nearest_station_id": self._nearest_station_search(
+                location_coord,
+                county,
+            ),
+        }
         result = self.graph.invoke(initial_state)
 
         # return last message in the chain
@@ -139,9 +147,9 @@ class ChatbotWorkflow:
 
         return graph.compile(checkpointer=self.checkpointer)
 
-    def _nearest_station_search(self, location_coords: tuple[float, float], county: str) -> int:
-        """Given a coordinate, find the nearest AWN station to query against."""
-        latitude, longitude = location_coords
+    def _nearest_station_search(self, location_coord: tuple[float, float], county: str) -> int:
+        """Given a coordinate, find the nearest AWN station id to query against."""
+        latitude, longitude = location_coord
         metadata_query = """
         SELECT
             UNIT_ID,
@@ -170,7 +178,7 @@ class ChatbotWorkflow:
             raise ValueError(msg)
 
         station_id, *_ = next(results)
-        return station_id
+        return int(station_id)
 
     def _query_classifier(self, state: ChatState) -> dict:
         """Given user input classify it before taking action."""

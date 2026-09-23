@@ -15,9 +15,9 @@ def load_environment_vars() -> None:
 @pytest.mark.parametrize(
     ("location_coords", "county", "expected_station_id"),
     [
-        ((46.7319, -117.1510), "whitman", "100093"),
-        ((47.3936, -120.4299), "chelan", "330037"),
-        ((48.7319, -122.5026), "whatcom", "330061"),
+        ((46.7319, -117.1510), "whitman", 100093),
+        ((47.3936, -120.4299), "chelan", 330037),
+        ((48.7319, -122.5026), "whatcom", 330061),
     ],
 )
 def test_nearest_station_search(location_coords: tuple[float, float], county: str, expected_station_id) -> None:
