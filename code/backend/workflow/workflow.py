@@ -3,6 +3,9 @@
 from datetime import datetime
 from typing import Annotated, Literal, TypedDict
 
+from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
+from backend.databases.awn_fc_connection import AWNForecastDatabaseConnection
+from backend.databases.awn_main_connection import AWNDatabaseConnection
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -103,7 +106,11 @@ class ChatbotWorkflow:
         self.graph = self._build_graph()
         self.classifier_chat_model = ClassifierChatbot()
 
-    def run(self, user_input: str) -> str:
+        self.current_db = AWNDatabaseConnection()
+        self.historical_daily_db = AWNDailyDatabaseConnection()
+        self.forecast_db = AWNForecastDatabaseConnection()
+
+    def run(self, user_input: str, location_coord: tuple[float, float]) -> str:
         """Process user input through the graph and return a response."""
         initial_state = {"messages": [("user", user_input)]}
         result = self.graph.invoke(initial_state)
@@ -132,6 +139,39 @@ class ChatbotWorkflow:
 
         return graph.compile(checkpointer=self.checkpointer)
 
+    def _nearest_station_search(self, location_coords: tuple[float, float], county: str) -> int:
+        """Given a coordinate, find the nearest AWN station to query against."""
+        latitude, longitude = location_coords
+        metadata_query = """
+        SELECT
+            UNIT_ID,
+            STATION_NAME,
+            COUNTY,
+            STATION_LATDEG,
+            STATION_LNGDEG,
+            111320 * SQRT(
+                POW(STATION_LATDEG - %s, 2) +
+                POW((STATION_LNGDEG - %s) * COS(RADIANS(%s)), 2)
+            ) AS distance_meters
+        FROM METADATA
+        WHERE
+        ACTIVE_STATION = 'Y'
+        AND UPPER(COUNTY) = UPPER(%s)
+        AND STATION_LATDEG IS NOT NULL
+        AND STATION_LNGDEG IS NOT NULL
+        ORDER BY distance_meters ASC
+        LIMIT 1;
+        """
+        params = (latitude, longitude, latitude, county)
+        results = self.current_db.simple_query(metadata_query, params)
+
+        if not results:
+            msg = f"No nearest station returned with search args:(lat, lng)=({latitude}, {longitude}), county={county}"
+            raise ValueError(msg)
+
+        station_id, *_ = next(results)
+        return station_id
+
     def _query_classifier(self, state: ChatState) -> dict:
         """Given user input classify it before taking action."""
         return self.classifier_chat_model.classify(state)
@@ -157,7 +197,9 @@ class ChatbotWorkflow:
         answers = [
             types.Send(
                 self._query_handlers[sub_query.query_type],
-                {"messages": [("user", sub_query.reworded_query)]},
+                {
+                    "messages": [("user", sub_query.reworded_query)],
+                },
             )
             for sub_query in state["sub_queries"]
         ]
