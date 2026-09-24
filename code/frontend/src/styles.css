@@ -243,6 +243,7 @@ button {
 }
 
 .message-bubble p {
+  white-space: pre-wrap;
   font-size: 0.98rem;
   line-height: 1.45;
   font-weight: 500;

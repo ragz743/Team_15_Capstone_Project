@@ -78,19 +78,30 @@ class Retriever:
             return str(exc)
 
         sections: list[str] = []
+        sources: list[str] = []
         for store in self._vector_stores:
             docs: list[Document] = store.similarity_search(question, k=_SEARCH_K, filter=filter, selection=selection)
             if docs:
                 label = _TABLE_LABELS.get(store.table, store.table)
                 content = "\n\n".join(_document_context(doc) for doc in docs)
                 sections.append(f"[{label}]\n{content}")
+                sources.extend(_source_label(doc, store.table) for doc in docs)
 
         if not sections:
             return NO_DATA
 
         context: str = "\n\n".join(sections)
         prompt: str = RAG_PROMPT_TEMPLATE.format(context=context, question=question)
-        return self._chatbot.invoke([prompt])
+        answer = self._chatbot.invoke([prompt])
+        if not answer.strip():
+            return answer
+        labels = "\n".join(dict.fromkeys(sources))
+        return (
+            answer
+            + "\n\nRetrieved records:\n"
+            + labels
+            + "\nThese records may not cover every station or day you requested."
+        )
 
 
 def _document_context(doc: Document) -> str:
@@ -105,3 +116,20 @@ def _document_context(doc: Document) -> str:
     )
     identity = "\n".join(f"{label}: {doc.metadata[key]}" for key, label in fields if doc.metadata.get(key))
     return f"{identity}\n{doc.page_content}" if identity else doc.page_content
+
+
+def _source_label(doc: Document, table: str) -> str:
+    metadata = doc.metadata
+    if table == "forecast_index":
+        times = metadata["dates"]
+        kind = "forecast"
+    else:
+        key = {"daily_index": "date", "live_index": "timestamp"}[table]
+        times = [metadata[key]]
+        kind = "observation"
+    county = metadata.get("county")
+    return (
+        f"{metadata['station']} (station {metadata['id']})"
+        + (f", {county} County" if county else "")
+        + f": {', '.join(str(value) for value in times)} ({kind})"
+    )
