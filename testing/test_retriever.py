@@ -17,6 +17,7 @@ SELECTION = WeatherQuery(("100093",), date(2026, 9, 9), date(2026, 9, 9))
 def mock_vector_store():
     """Create a mock vector store."""
     store = MagicMock(spec=PgVectorStore)
+    store.table = "daily_index"
     store.stations.return_value = STATIONS
     store.similarity_search.return_value = [
         Document(
@@ -62,21 +63,32 @@ def test_retriever_calls_chatbot(mock_vector_store, mock_chatbot):
 
 
 def test_retriever_returns_chatbot_response(mock_vector_store, mock_chatbot):
-    """Check that retrieve returns the chatbot response."""
+    """Append one source label for duplicate records from the same station and day."""
     retriever = Retriever([mock_vector_store], mock_chatbot)
     response = retriever.retrieve("What is the temperature at Pullman on 2026-09-09?")
-    assert response == "The temperature at Pullman is 72F."
+    assert response == (
+        "The temperature at Pullman is 72F.\n\nRetrieved records:\n"
+        "Pullman (station 100093), Whitman County: 2026-09-09 (observation)\n"
+        "These records may not cover every station or day you requested."
+    )
 
 
 def test_retriever_queries_all_stores(mock_chatbot):
     """Check that retrieve calls similarity_search on every store in the list."""
     store_a = MagicMock()
     store_a.stations.return_value = STATIONS
-    store_a.similarity_search.return_value = [Document(page_content="Rain: 0.2 in", metadata={})]
+    store_a.similarity_search.return_value = [
+        Document(page_content="Rain: 0.2 in", metadata={"id": "100093", "station": "Pullman", "date": "2026-09-09"})
+    ]
     store_a.table = "daily_index"
     store_b = MagicMock()
     store_b.stations.return_value = STATIONS
-    store_b.similarity_search.return_value = [Document(page_content="Wind: 12 mph", metadata={})]
+    store_b.similarity_search.return_value = [
+        Document(
+            page_content="Wind: 12 mph",
+            metadata={"id": "100093", "station": "Pullman", "timestamp": "2026-09-09 12:00:00"},
+        )
+    ]
     store_b.table = "live_index"
 
     retriever = Retriever([store_a, store_b], mock_chatbot)
@@ -123,7 +135,9 @@ def test_retriever_context_includes_section_label(mock_chatbot):
     """Check that the prompt sent to the chatbot contains a labeled section header."""
     store = MagicMock()
     store.stations.return_value = STATIONS
-    store.similarity_search.return_value = [Document(page_content="Temp: 65F", metadata={})]
+    store.similarity_search.return_value = [
+        Document(page_content="Temp: 65F", metadata={"id": "100093", "station": "Pullman", "date": "2026-09-09"})
+    ]
     store.table = "daily_index"
 
     retriever = Retriever([store], mock_chatbot)
