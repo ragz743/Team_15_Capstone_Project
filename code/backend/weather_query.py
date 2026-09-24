@@ -206,7 +206,13 @@ def _dates(question: str, today: date) -> tuple[date, date]:
     return start, end
 
 
-def resolve_weather_query(question: str, stations: list[Station], *, today: date | None = None) -> WeatherQuery:
+def resolve_weather_query(
+    question: str,
+    stations: list[Station],
+    *,
+    today: date | None = None,
+    metadata_filter: dict[str, str] | None = None,
+) -> WeatherQuery:
     """Resolve one indexed location and a calendar day/range in Washington time."""
     if re.search(
         r"\b(?:except|excluding|not|before|after|since|until)\b|\d{1,2}:\d{2}|\d\s*(?:am|pm)\b", question, re.IGNORECASE
@@ -218,6 +224,30 @@ def resolve_weather_query(question: str, stations: list[Station], *, today: date
         raise QueryClarificationError(
             "No stations are available in the indexed data. Weather records must be indexed first."
         )
-    ids, county = _location(question, stations)
+    try:
+        ids, county = _location(question, stations)
+    except MissingLocationError:
+        if not metadata_filter or not set(metadata_filter) & {"station", "county", "id"}:
+            raise
+        ids, county = (), None
+    if metadata_filter:
+        if set(metadata_filter) - {"station", "county", "state", "id"}:
+            raise QueryClarificationError("Unsupported metadata filter. Use station, county, state or id.")
+        candidates = stations
+        for key, value in metadata_filter.items():
+            if key in {"station", "county", "id"}:
+                attr = "name" if key == "station" else key
+                candidates = [s for s in candidates if str(getattr(s, attr)).casefold() == value.casefold()]
+        allowed = {s.id for s in candidates}
+        if not allowed:
+            raise QueryClarificationError("The supplied filter does not match an indexed location.")
+        if ids and not set(ids).issubset(allowed):
+            raise QueryClarificationError(
+                "The location conflicts with the supplied filter. Please use matching constraints."
+            )
+        if not ids:
+            ids, county = tuple(sorted(allowed)), metadata_filter.get("county")
+        if len(ids) > 1 and not county:
+            raise QueryClarificationError("Please choose one station or one county for this question.")
     start, end = _dates(question, today or datetime.now(ZoneInfo("America/Los_Angeles")).date())
     return WeatherQuery(ids, start, end, county)
