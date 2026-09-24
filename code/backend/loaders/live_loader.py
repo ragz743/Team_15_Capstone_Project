@@ -42,10 +42,10 @@ class LiveQueryResult(NamedTuple):
 
     @classmethod
     def from_dict(cls, d: dict[str, object]) -> Self:
-        """Create a DailyQueryResult from a tuple."""
+        """Create a live observation from database fields."""
         return cls(
             # lots of type ignores, types based on MySQL - annoying but ok for now!
-            d["TSTAMP"].strftime("%Y-%m-%d"),  # type: ignore
+            d["TSTAMP"].strftime("%Y-%m-%d %H:%M:%S"),  # type: ignore
             d.get("AIR_TEMP"),  # type: ignore
             d.get("REL_HUMIDITY"),  # type: ignore
             d.get("PRECIP"),  # type: ignore
