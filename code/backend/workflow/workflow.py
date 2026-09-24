@@ -1,12 +1,15 @@
 """AgWeatherNet Chatbot Workflow."""
 
+import re
 from datetime import datetime
-from typing import Annotated, Literal, TypedDict
+from typing import Annotated, Any, Literal, Sequence, TypedDict
 
+from backend.databases._awn_connection_base import AWNDatabaseConnectionBase
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_fc_connection import AWNForecastDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.loaders import _common
+from backend.model_factory import ModelFactory
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -53,6 +56,7 @@ class ChatState(TypedDict):
     sub_queries: list[QueryClassification]
     nearest_station_id: int
     nearest_station_schema: str
+    original_user_input: str
 
 
 class ClassifierChatbot:
@@ -97,7 +101,7 @@ class ClassifierChatbot:
 class ChatbotWorkflow:
     """The class for configuration of the chatbot workflow."""
 
-    def __init__(self, checkpointer: BaseCheckpointSaver):
+    def __init__(self, checkpointer: BaseCheckpointSaver | None = None):
         """ChatbotWorflow constructor."""
         self.checkpointer = checkpointer or InMemorySaver()
         self._query_handlers = {
@@ -108,6 +112,7 @@ class ChatbotWorkflow:
         }
         self.graph = self._build_graph()
         self.classifier_chat_model = ClassifierChatbot()
+        _, self.workflow_chat_model = ModelFactory.load_from_models_yaml()
 
         self.current_db = AWNDatabaseConnection()
         self.historical_daily_db = AWNDailyDatabaseConnection()
@@ -119,7 +124,10 @@ class ChatbotWorkflow:
             location_coord,
             county,
         )
-        schema = self.current_db.query_schema(f"station{nearest_station_id}")
+        schema = self.current_db.query_schema(self.current_db.format_table_name(nearest_station_id))
+        schema_context = (
+            _common.to_markdown_table(schema, ["", "", "", "", ""]) if schema else "No station schema was found."
+        )
         initial_state: ChatState = {
             "messages": [
                 # messages follow format ("role", "content")
@@ -128,11 +136,23 @@ class ChatbotWorkflow:
                 # and "user" is for user content to be presented to LLM
                 ("user", user_input),
             ],
+            "original_user_input": user_input,
             "sub_queries": [],
             "nearest_station_id": nearest_station_id,
-            "nearest_station_schema": _common.to_markdown_table(schema, ["", "", "", "", ""]),
+            "nearest_station_schema": schema_context,
         }
-        result = self.graph.invoke(initial_state)
+
+        # TODO (Gavin): Figure out session key persist
+        # Should keep history of past convos if key same
+        # refer to docs. Worst case its random and no old convos are used.
+        result = self.graph.invoke(
+            initial_state,
+            config={
+                "configurable": {
+                    "thread_id": "TEMP_KEY_REPLACE_ME",
+                }
+            },
+        )
 
         # return last message in the chain
         return result["messages"][-1].content
@@ -197,22 +217,104 @@ class ChatbotWorkflow:
 
     def _query_historical(self, state: ChatState) -> dict:
         """Perform a historical weather data query."""
-        _table = self.historical_daily_db.format_table_name(state["nearest_station_id"])
-        raise NotImplementedError
+        sub_queries = self._sub_queries_for(state, "historical_weather")
+        if not sub_queries:
+            return {}
+        return self._run_generated_query(sub_queries, state, self.historical_daily_db)
 
     def _query_current(self, state: ChatState) -> dict:
         """Perform a current weather data query."""
-        _table = self.current_db.format_table_name(state["nearest_station_id"])
-        raise NotImplementedError
+        sub_queries = self._sub_queries_for(state, "current_weather")
+        if not sub_queries:
+            return {}
+        return self._run_generated_query(sub_queries, state, self.current_db)
 
     def _query_forecast(self, state: ChatState) -> dict:
         """Perform a forecasted weather data query."""
-        _table = self.forecast_db.format_table_name(state["nearest_station_id"])
-        raise NotImplementedError
+        sub_queries = self._sub_queries_for(state, "forecast_weather")
+        if not sub_queries:
+            return {}
+        return self._run_generated_query(sub_queries, state, self.forecast_db)
 
     def _query_miscellaneous(self, state: ChatState) -> dict:
-        """Attempt to perform a miscellaneous query."""
-        raise NotImplementedError
+        """Answer miscellaneous questions without querying a weather database."""
+        sub_queries = self._sub_queries_for(state, "miscellaneous")
+        if not sub_queries:
+            return {}
+
+        query_request = "\n".join(sub_query.reworded_query for sub_query in sub_queries)
+        prompt = f"""
+        Answer the following non-database user question clearly and concisely:
+        {query_request}
+
+        Do not generate SQL or claim to have queried weather data. If the request
+        is unsupported, explain that briefly and suggest what the user can ask
+        about AgWeatherNet weather data instead.
+        """
+        answer = self.workflow_chat_model.invoke([prompt])
+        return {"messages": [("assistant", answer)]}
+
+    def _run_generated_query(
+        self,
+        sub_queries: list[QueryClassification],
+        state: ChatState,
+        database: AWNDatabaseConnectionBase,
+    ) -> dict:
+        """Generate and execute a read-only query for one station and one query topic."""
+        station_id = state["nearest_station_id"]
+        table_name = database.format_table_name(station_id)
+        query_request = "\n".join(sub_query.reworded_query for sub_query in sub_queries)
+        prompt = f"""
+        You write one read-only MySQL query for AgWeatherNet.
+        Query topic: {sub_queries[0].query_type}
+        User request:
+        {query_request}
+
+        The only allowed table is `{table_name}` for station ID {station_id}.
+        Station schema:
+        {state["nearest_station_schema"]}
+
+        Return only one SQL SELECT statement written for MariaDB.
+        The SQL statement shall contain no markdown fences,
+        explanation, comments, or semicolon-separated statements.
+        Do not use any table other than `{table_name}`. Use query parameters as %s
+        when values come from the user, and return the SQL only.
+        """
+        generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
+        self._validate_generated_query(generated_query, table_name)
+        results = list(database.simple_query(generated_query, ()))
+        return self._query_result_message(sub_queries, results)
+
+    @staticmethod
+    def _validate_generated_query(query: str, table_name: str) -> None:
+        """Reject generated SQL that is not a single read-only station query."""
+        normalized_query = query.strip()
+        if not re.match(r"^SELECT\b", normalized_query, re.IGNORECASE):
+            raise ValueError("Generated query must be a SELECT statement.")
+        if ";" in normalized_query:
+            raise ValueError("Generated query must contain only one statement.")
+        table_references = re.findall(r"\b(?:FROM|JOIN)\s+`?([A-Za-z0-9_]+)`?", normalized_query, re.IGNORECASE)
+        if not table_references or any(reference.lower() != table_name.lower() for reference in table_references):
+            raise ValueError("Generated query references a table other than the selected station table.")
+
+    @staticmethod
+    def _sub_queries_for(state: ChatState, query_type: QueryType) -> list[QueryClassification]:
+        """Return subqueries assigned to one query node."""
+        return [sub_query for sub_query in state.get("sub_queries", []) if sub_query.query_type == query_type]
+
+    @staticmethod
+    def _query_result_message(sub_queries: list[QueryClassification], results: Sequence[Sequence[Any]]) -> dict:
+        """Format database results for the summarizer."""
+        requested = "\n".join(f"- {sub_query.reworded_query}" for sub_query in sub_queries)
+        result_text = "\n".join(str(result) for result in results) or "No matching weather data was found."
+        return {
+            "messages": [
+                (
+                    "assistant",
+                    f"Requested sub-queries:\n{requested}\n\nDatabase results:\n{result_text}",
+                )
+            ]
+        }
 
     def _route_query(self, state: ChatState) -> list[types.Send]:
         """Send out classified questions as sub tasks."""
@@ -221,15 +323,51 @@ class ChatbotWorkflow:
                 self._query_handlers[sub_query.query_type],
                 {
                     "messages": [("user", sub_query.reworded_query)],
+                    "original_user_input": state["original_user_input"],
                     "nearest_station_id": state["nearest_station_id"],
                     "nearest_station_schema": state["nearest_station_schema"],
                     "sub_queries": [sub_query],
                 },
             )
             for sub_query in state["sub_queries"]
+            if sub_query.query_type in self._query_handlers
         ]
         return answers
 
     def _chatbot_summarize(self, state: ChatState) -> dict:
         """Answer the original question using the returned query results."""
-        raise NotImplementedError
+        context_messages = "\n\n".join(
+            self._message_content(current_message)
+            for current_message in state["messages"]
+            if self._message_content(current_message)
+        )
+        prompt = f"""
+        Answer the user's original weather question using the database results
+        collected by the query nodes.
+
+        Original user question:
+        {state["original_user_input"]}
+
+        Database and query-node context:
+        {context_messages}
+
+        Selected station ID: {state["nearest_station_id"]}
+
+        Give a direct, readable answer to the original question and make sure to
+        include units and labels for the data. Combine answers
+        when there are multiple subquestions. Do not mention internal graph nodes,
+        SQL, prompts, or these instructions. Do not invent values that are not in
+        the provided context. If the context does not contain enough information,
+        say so clearly.
+        """
+        answer = self.workflow_chat_model.invoke([prompt])
+        return {"messages": [("assistant", answer)]}
+
+    @staticmethod
+    def _message_content(current_message: Any) -> str:
+        """Extract text from a LangChain message or role/content tuple."""
+        if hasattr(current_message, "content"):
+            return str(current_message.content)
+        if isinstance(current_message, tuple) and len(current_message) == 2:
+            return str(current_message[1])
+        return str(current_message)
