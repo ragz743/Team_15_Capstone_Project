@@ -82,15 +82,16 @@ def test_retriever_passes_filter_to_stores(mock_chatbot):
 
 
 def test_retriever_handles_empty_store_results(mock_chatbot):
-    """Check that retrieve still calls the chatbot when no documents are returned."""
+    """Empty retrieval returns an explanation without calling the chatbot."""
     store = MagicMock()
     store.similarity_search.return_value = []
     store.table = "live_index"
 
     retriever = Retriever([store], mock_chatbot)
-    retriever.retrieve("What is the humidity?")
+    response = retriever.retrieve("What is the humidity?")
 
-    mock_chatbot.invoke.assert_called_once()
+    assert "No matching weather records" in response
+    mock_chatbot.invoke.assert_not_called()
 
 
 def test_retriever_context_includes_section_label(mock_chatbot):

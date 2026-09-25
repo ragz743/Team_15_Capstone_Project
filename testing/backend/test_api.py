@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import backend.api as api
+from backend.retriever import Retriever
+from backend.vector_store import PgVectorStore
 from fastapi.testclient import TestClient
+from pytest import MonkeyPatch
 
 
 class FakeRetriever:
@@ -17,6 +22,24 @@ class FakeRetriever:
         """Return a deterministic response for API tests."""
         self.question = question
         return f"retrieved: {question}"
+
+
+def test_chat_returns_no_data_without_generating_an_answer(monkeypatch: MonkeyPatch) -> None:
+    """Pass the real retriever's no-data response through the HTTP endpoint."""
+    store = MagicMock(spec=PgVectorStore)
+    store.similarity_search.return_value = []
+    chatbot = MagicMock()
+    monkeypatch.setattr(api, "_retriever", Retriever(store, chatbot))
+    monkeypatch.setattr(api, "_chatbot_model_name", "test-chat-model")
+
+    response = TestClient(api.app).post(
+        "/api/chat", json={"messages": [{"role": "user", "content": "Weather in Pullman?"}]}
+    )
+
+    assert response.status_code == 200
+    assert "No matching weather records" in response.json()["reply"]
+    store.similarity_search.assert_called_once_with("Weather in Pullman?", k=8, filter=None)
+    chatbot.invoke.assert_not_called()
 
 
 def test_health_returns_readiness_metadata(monkeypatch) -> None:
