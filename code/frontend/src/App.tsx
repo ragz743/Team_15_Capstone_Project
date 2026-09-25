@@ -43,6 +43,7 @@ export default function App() {
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      abortRef.current = null;
     };
   }, []);
 
@@ -50,7 +51,7 @@ export default function App() {
     event.preventDefault();
 
     const text = draft.trim();
-    if (!text || isSending) {
+    if (!text || abortRef.current) {
       return;
     }
 
@@ -80,6 +81,9 @@ export default function App() {
 
     try {
       const { reply } = await sendChat(historyForApi, controller.signal);
+      if (abortRef.current !== controller) {
+        return;
+      }
       setMessages((previous) =>
         previous.map((m) =>
           m.id === pendingAssistant.id
@@ -88,6 +92,9 @@ export default function App() {
         ),
       );
     } catch (err) {
+      if (abortRef.current !== controller) {
+        return;
+      }
       if (err instanceof DOMException && err.name === "AbortError") {
         setMessages((previous) => previous.filter((m) => m.id !== pendingAssistant.id));
         return;
@@ -113,8 +120,8 @@ export default function App() {
     } finally {
       if (abortRef.current === controller) {
         abortRef.current = null;
+        setIsSending(false);
       }
-      setIsSending(false);
     }
   }
 
