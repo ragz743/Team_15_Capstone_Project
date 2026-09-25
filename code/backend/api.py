@@ -19,6 +19,8 @@ from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from openai import RateLimitError
+from openrouter.errors import TooManyRequestsResponseError
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("awn.api")
@@ -141,6 +143,25 @@ app.add_middleware(
 )
 
 
+def _retrieval_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
+        if "free-models-per-day" in str(exc):
+            return HTTPException(
+                status_code=503,
+                detail=(
+                    "The model provider's daily free allowance has been reached. "
+                    "Please try again after the allowance resets."
+                ),
+            )
+        return HTTPException(
+            status_code=503,
+            detail="The answer provider is rate-limiting requests. Please try again later.",
+        )
+    return HTTPException(
+        status_code=502, detail="The weather service could not complete your request. Please try again."
+    )
+
+
 @app.get("/api/health")
 def health() -> dict[str, object]:
     """Readiness probe used by the frontend and ops tooling."""
@@ -161,20 +182,27 @@ def chat(request: ChatRequest) -> ChatResponse:
     if _retriever is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Retriever is not initialized. Check server logs, pgvector, "
-                "OPENROUTER_API_KEY, and OPENROUTER_EMBEDDING_MODEL."
-            ),
+            detail="The weather service is temporarily unavailable. Please try again later.",
         )
 
     question = _latest_user_message(request.messages)
     if question is None:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
+    question = question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Please enter a weather related question.")
+
     try:
         reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
-        logger.exception("Retriever invocation failed")
-        raise HTTPException(status_code=502, detail=f"Retrieval error: {exc}") from exc
+        logger.error("Retriever invocation failed (%s)", type(exc).__name__)
+        raise _retrieval_error(exc) from exc
+
+    if not reply.strip():
+        raise HTTPException(
+            status_code=502,
+            detail="The weather service returned an empty answer. Please try again.",
+        )
 
     return ChatResponse(reply=reply, model=_chatbot_model_name)

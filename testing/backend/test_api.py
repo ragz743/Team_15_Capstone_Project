@@ -13,7 +13,7 @@ class FakeRetriever:
         """Create a fake retriever."""
         self.question: str | None = None
 
-    def retrieve(self, question: str) -> str:
+    def retrieve(self, question: str, filter: dict | None = None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
         return f"retrieved: {question}"
