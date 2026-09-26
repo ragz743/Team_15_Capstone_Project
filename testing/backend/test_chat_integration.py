@@ -1,35 +1,54 @@
 """Exercise the HTTP chat contract using controlled weather records and model responses."""
 
+from datetime import date
 from unittest.mock import MagicMock
 
 import backend.api as api
 import pytest
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
+from backend.weather_query import Station, WeatherQuery
 from fastapi.testclient import TestClient
 from langchain_core.documents import Document
 from pytest import MonkeyPatch
+
+STATIONS = [Station("100093", "Pullman", "Whitman")]
+SELECTION = WeatherQuery(("100093",), date(2026, 9, 9), date(2026, 9, 9))
 
 
 def test_chat_passes_retrieved_weather_to_model_and_returns_reply(monkeypatch: MonkeyPatch) -> None:
     """Exercise API and real retriever together without external services."""
     store = MagicMock(spec=PgVectorStore)
-    store.similarity_search.return_value = [Document(page_content="Pullman, 2026-09-09: temperature 72°F.")]
+    store.table = "daily_index"
+    store.stations.return_value = STATIONS
+    store.similarity_search.return_value = [
+        Document(
+            page_content="Pullman, 2026-09-09: temperature 72°F.",
+            metadata={"id": "100093", "station": "Pullman", "county": "Whitman", "date": "2026-09-09"},
+        )
+    ]
     chatbot = MagicMock()
     chatbot.invoke.return_value = "Pullman's temperature on September 9 was 72°F."
     monkeypatch.setattr(api, "_retriever", Retriever(store, chatbot))
     monkeypatch.setattr(api, "_chatbot_model_name", "test-model")
 
     response = TestClient(api.app).post(
-        "/api/chat", json={"messages": [{"role": "user", "content": "  Temperature in Pullman?  "}]}
+        "/api/chat", json={"messages": [{"role": "user", "content": "  Temperature in Pullman on 2026-09-09?  "}]}
     )
 
     assert response.status_code == 200
-    assert response.json() == {"reply": chatbot.invoke.return_value, "model": "test-model"}
-    store.similarity_search.assert_called_once_with("Temperature in Pullman?", k=8, filter=None)
+    assert response.json() == {
+        "reply": chatbot.invoke.return_value + "\n\nRetrieved records:\n"
+        "Pullman (station 100093), Whitman County: 2026-09-09 (observation)\n"
+        "These records may not cover every station or day you requested.",
+        "model": "test-model",
+    }
+    store.similarity_search.assert_called_once_with(
+        "Temperature in Pullman on 2026-09-09?", k=8, filter=None, selection=SELECTION
+    )
     prompt = chatbot.invoke.call_args.args[0][0]
     assert "Pullman, 2026-09-09: temperature 72°F." in prompt
-    assert "Temperature in Pullman?" in prompt
+    assert "Temperature in Pullman on 2026-09-09?" in prompt
 
 
 @pytest.mark.parametrize("content", ["", " ", "\n\t"])
@@ -64,10 +83,17 @@ def test_chat_reports_retrieval_failure_without_internal_details(monkeypatch: Mo
 @pytest.mark.parametrize("reply", ["", " \n"])
 def test_chat_rejects_empty_model_reply(monkeypatch: MonkeyPatch, reply: str) -> None:
     """Do not present a blank assistant bubble as a successful answer."""
-    retriever = MagicMock()
-    retriever.retrieve.return_value = reply
-    monkeypatch.setattr(api, "_retriever", retriever)
-    response = TestClient(api.app).post("/api/chat", json={"messages": [{"role": "user", "content": "Weather?"}]})
+    store, chatbot = stores()[0], MagicMock()
+    store.similarity_search.return_value = [
+        Document(
+            page_content="Temperature: 72 F", metadata={"id": "100093", "station": "Pullman", "date": "2026-09-09"}
+        )
+    ]
+    chatbot.invoke.return_value = reply
+    monkeypatch.setattr(api, "_retriever", Retriever(store, chatbot))
+    response = TestClient(api.app).post(
+        "/api/chat", json={"messages": [{"role": "user", "content": "Weather at Pullman on 2026-09-09?"}]}
+    )
     assert response.status_code == 502
     assert "empty answer" in response.json()["detail"]
 
@@ -78,7 +104,7 @@ def stores():
     for table in ("daily_index", "live_index", "forecast_index"):
         store = MagicMock(spec=PgVectorStore)
         store.table = table
-        store.distinct_metadata_values.return_value = []
+        store.stations.return_value = STATIONS
         store.similarity_search.return_value = []
         result.append(store)
     return result
@@ -89,19 +115,38 @@ def test_answer_uses_records_from_any_store(monkeypatch, matching_store):
     """An empty index does not hide a match from another index."""
     indexes = stores()
     indexes[matching_store].similarity_search.return_value = [
-        Document(page_content="Station: Pullman\nTemperature: 72 F")
+        Document(
+            page_content="Station: Pullman\nTemperature: 72 F",
+            metadata={
+                "id": "100093",
+                "station": "Pullman",
+                "county": "Whitman",
+                "date": "2026-09-09",
+                "timestamp": "2026-09-09 12:00:00",
+                "dates": ["2026-09-09"],
+            },
+        )
     ]
     model = MagicMock()
     model.invoke.return_value = "At Pullman the temperature was 72 F."
     monkeypatch.setattr(api, "_retriever", Retriever(indexes, model))
     monkeypatch.setattr(api, "_chatbot_model_name", "test-model")
     response = TestClient(api.app).post(
-        "/api/chat", json={"messages": [{"role": "user", "content": "Temperature at Pullman?"}]}
+        "/api/chat", json={"messages": [{"role": "user", "content": "Temperature at Pullman on 2026-09-09?"}]}
     )
     assert response.status_code == 200
-    assert response.json() == {"reply": model.invoke.return_value, "model": "test-model"}
+    source = ["2026-09-09 (observation)", "2026-09-09 12:00:00 (observation)", "2026-09-09 (forecast)"][matching_store]
+    assert response.json() == {
+        "reply": model.invoke.return_value
+        + "\n\nRetrieved records:\n"
+        + f"Pullman (station 100093), Whitman County: {source}\n"
+        + "These records may not cover every station or day you requested.",
+        "model": "test-model",
+    }
     for index in indexes:
-        index.similarity_search.assert_called_once_with("Temperature at Pullman?", k=8, filter=None)
+        index.similarity_search.assert_called_once_with(
+            "Temperature at Pullman on 2026-09-09?", k=8, filter=None, selection=SELECTION
+        )
     model.invoke.assert_called_once()
     assert "Station: Pullman" in model.invoke.call_args.args[0][0]
 
@@ -111,7 +156,7 @@ def test_all_empty_stores_skip_the_answer_model(monkeypatch):
     indexes, model = stores(), MagicMock()
     monkeypatch.setattr(api, "_retriever", Retriever(indexes, model))
     response = TestClient(api.app).post(
-        "/api/chat", json={"messages": [{"role": "user", "content": "Temperature at Pullman?"}]}
+        "/api/chat", json={"messages": [{"role": "user", "content": "Temperature at Pullman on 2026-09-09?"}]}
     )
     assert response.status_code == 200
     assert "No matching weather records" in response.json()["reply"]
@@ -119,14 +164,14 @@ def test_all_empty_stores_skip_the_answer_model(monkeypatch):
     model.invoke.assert_not_called()
 
 
-@pytest.mark.parametrize("operation", ["distinct_metadata_values", "similarity_search"])
+@pytest.mark.parametrize("operation", ["stations", "similarity_search"])
 def test_database_failure_is_not_no_data(monkeypatch, operation):
     """Failed catalog or weather queries remain service errors."""
     indexes, model = stores(), MagicMock()
     getattr(indexes[1], operation).side_effect = RuntimeError("private connection details")
     monkeypatch.setattr(api, "_retriever", Retriever(indexes, model))
     response = TestClient(api.app).post(
-        "/api/chat", json={"messages": [{"role": "user", "content": "Temperature at Pullman?"}]}
+        "/api/chat", json={"messages": [{"role": "user", "content": "Temperature at Pullman on 2026-09-09?"}]}
     )
     assert response.status_code == 502
     assert "private connection details" not in response.text
@@ -134,18 +179,22 @@ def test_database_failure_is_not_no_data(monkeypatch, operation):
     model.invoke.assert_not_called()
 
 
-def test_api_filter_reaches_every_store(monkeypatch):
+@pytest.mark.parametrize("metadata_filter", [{"id": "100093"}, {"station": "Pullman"}, {"county": "Whitman"}])
+def test_api_filter_reaches_every_store(monkeypatch, metadata_filter):
     """The HTTP metadata filter reaches all three searches."""
     indexes = stores()
     monkeypatch.setattr(api, "_retriever", Retriever(indexes, MagicMock()))
     response = TestClient(api.app).post(
         "/api/chat",
-        json={"messages": [{"role": "user", "content": "Temperature?"}], "filter": {"id": "100093"}},
+        json={"messages": [{"role": "user", "content": "Temperature on 2026-09-09?"}], "filter": metadata_filter},
     )
     assert response.status_code == 200
+    selection = WeatherQuery(SELECTION.station_ids, SELECTION.start, SELECTION.end, metadata_filter.get("county"))
     for index in indexes:
-        index.similarity_search.assert_called_once_with("Temperature?", k=8, filter={"id": "100093"})
-        index.distinct_metadata_values.assert_not_called()
+        index.similarity_search.assert_called_once_with(
+            "Temperature on 2026-09-09?", k=8, filter=metadata_filter, selection=selection
+        )
+        index.stations.assert_called_once_with()
 
 
 def test_startup_configures_all_indexes(monkeypatch):
@@ -161,3 +210,82 @@ def test_startup_configures_all_indexes(monkeypatch):
         {"table": "live_index", "staleness_days": 30},
         {"table": "forecast_index", "staleness_days": 2},
     ]
+
+
+def test_location_and_date_reach_sql_and_answer_context(monkeypatch: MonkeyPatch) -> None:
+    """Preserve each record's identity through the user-facing endpoint."""
+    connection, embedding = MagicMock(), MagicMock()
+    embedding.embed_document.return_value = ([0.0, 0.0, 0.0], Document(page_content="query"))
+    monkeypatch.setattr("backend.vector_store.PgVectorConnection", lambda: connection)
+    store = PgVectorStore(embedding)
+    connection.simple_query.side_effect = [
+        [("1", "Pullman", "Whitman"), ("2", "Colfax", "Whitman")],
+        [
+            (
+                "temperature 72°F",
+                {
+                    "id": "1",
+                    "station": "Pullman",
+                    "county": "Whitman",
+                    "date": "2026-09-09",
+                    "latitude": "private coordinate",
+                },
+            ),
+            ("temperature 60°F", {"id": "2", "station": "Colfax", "county": "Whitman", "date": "2026-09-09"}),
+        ],
+    ]
+    chatbot = MagicMock()
+    chatbot.invoke.return_value = "At Pullman on 2026-09-09, temperature was 72°F."
+    monkeypatch.setattr(api, "_retriever", Retriever(store, chatbot))
+    monkeypatch.setattr(api, "_chatbot_model_name", "fixture")
+    response = TestClient(api.app).post(
+        "/api/chat", json={"messages": [{"role": "user", "content": "Whitman County on 2026-09-09"}]}
+    )
+    assert response.status_code == 200
+    assert response.json()["reply"] == (
+        chatbot.invoke.return_value + "\n\nRetrieved records:\n"
+        "Pullman (station 1), Whitman County: 2026-09-09 (observation)\n"
+        "Colfax (station 2), Whitman County: 2026-09-09 (observation)\n"
+        "These records may not cover every station or day you requested."
+    )
+    assert "private coordinate" not in response.json()["reply"]
+    query, params = connection.simple_query.call_args.args
+    assert params[:3] == (["1", "2"], "2026-09-09", "2026-09-09")
+    assert b"ANY(%s)" in query
+    prompt = chatbot.invoke.call_args.args[0][0]
+    for value in ("Station: Pullman", "Station ID: 1", "Station: Colfax", "Observation date: 2026-09-09"):
+        assert value in prompt
+    assert "private coordinate" not in prompt
+
+
+def test_forecast_sources_only_list_retained_dates(monkeypatch: MonkeyPatch) -> None:
+    """Excluded forecast days cannot reappear in the sources below the answer."""
+    connection, embedding, chatbot = MagicMock(), MagicMock(), MagicMock()
+    embedding.embed_document.return_value = ([0.0, 0.0, 0.0], Document(page_content="query"))
+    monkeypatch.setattr("backend.vector_store.PgVectorConnection", lambda: connection)
+    store = PgVectorStore(embedding, table="forecast_index")
+    connection.simple_query.side_effect = [
+        [("1", "Pullman", "Whitman")],
+        [
+            (
+                "| forecast_time | air_temp in F |\n| --- | --- |\n"
+                "| 2026-09-09 12:00:00 | 72 |\n| 2026-09-10 12:00:00 | 85 |",
+                {
+                    "id": "1",
+                    "station": "Pullman",
+                    "county": "Whitman",
+                    "dates": ["2026-09-09", "2026-09-10"],
+                    "timestamp": "2026-09-09 12:00:00",
+                },
+            )
+        ],
+    ]
+    chatbot.invoke.return_value = "The forecast temperature is 85°F."
+    monkeypatch.setattr(api, "_retriever", Retriever(store, chatbot))
+    response = TestClient(api.app).post(
+        "/api/chat", json={"messages": [{"role": "user", "content": "Pullman on 2026-09-10"}]}
+    )
+    assert response.status_code == 200
+    assert "Pullman (station 1), Whitman County: 2026-09-10 (forecast)" in response.json()["reply"]
+    assert "2026-09-09" not in response.json()["reply"]
+    assert "2026-09-09" not in chatbot.invoke.call_args.args[0][0]
