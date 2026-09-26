@@ -31,6 +31,7 @@ dev = [
     "pyright",
     "pytest",
     "httpx",
+    "github-copilot-sdk",
 ]
 
 [project.scripts]
