@@ -99,11 +99,7 @@ class Retriever:
         values: dict[str, set[str]] = {"station": set(), "county": set()}
         for store in self._vector_stores:
             for key in values:
-                try:
-                    values[key].update(store.distinct_metadata_values(key))
-                except Exception:
-                    # A store may be empty or unreachable; fall back to no filter.
-                    continue
+                values[key].update(store.distinct_metadata_values(key))
 
         self._known_values = {key: sorted(vals, key=len, reverse=True) for key, vals in values.items()}
         return self._known_values
@@ -148,6 +144,12 @@ class Retriever:
                 label = _TABLE_LABELS.get(store.table, store.table)
                 content = "\n\n".join(doc.page_content for doc in docs)
                 sections.append(f"[{label}]\n{content}")
+
+        if not sections:
+            return (
+                "No matching weather records were found in the indexed data. "
+                "I cannot provide an answer to this question."
+            )
 
         context: str = "\n\n".join(sections)
         prompt: str = RAG_PROMPT_TEMPLATE.format(context=context, question=question)

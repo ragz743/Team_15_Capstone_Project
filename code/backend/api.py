@@ -19,7 +19,9 @@ from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from openai import RateLimitError
+from openrouter.errors import TooManyRequestsResponseError
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
@@ -35,14 +37,24 @@ class ChatMessage(BaseModel):
     """A single turn in the chat transcript sent from the frontend."""
 
     role: Literal["user", "assistant", "system"]
-    content: str = Field(min_length=1)
+    content: str = Field(min_length=1, max_length=4000)
 
 
 class ChatRequest(BaseModel):
     """Payload for POST /api/chat."""
 
-    messages: list[ChatMessage] = Field(min_length=1)
-    filter: dict | None = None
+    model_config = ConfigDict(extra="forbid")
+    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
+    filter: dict[str, str] | None = None
+
+    @model_validator(mode="after")
+    def bounded_request(self):
+        """Bound transcript size without discarding the active request."""
+        if sum(len(message.content) for message in self.messages) > 32000:
+            raise ValueError("Conversation exceeds 32000 characters")
+        if self.filter and (len(self.filter) > 4 or any(len(v) > 100 for v in self.filter.values())):
+            raise ValueError("Invalid metadata filter")
+        return self
 
 
 class ChatResponse(BaseModel):
@@ -131,6 +143,25 @@ app.add_middleware(
 )
 
 
+def _retrieval_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
+        if "free-models-per-day" in str(exc):
+            return HTTPException(
+                status_code=503,
+                detail=(
+                    "The model provider's daily free allowance has been reached. "
+                    "Please try again after the allowance resets."
+                ),
+            )
+        return HTTPException(
+            status_code=503,
+            detail="The answer provider is rate-limiting requests. Please try again later.",
+        )
+    return HTTPException(
+        status_code=502, detail="The weather service could not complete your request. Please try again."
+    )
+
+
 @app.get("/api/health")
 def health() -> dict[str, object]:
     """Readiness probe used by the frontend and ops tooling."""
@@ -151,20 +182,27 @@ def chat(request: ChatRequest) -> ChatResponse:
     if _retriever is None:
         raise HTTPException(
             status_code=503,
-            detail=(
-                "Retriever is not initialized. Check server logs, pgvector, "
-                "OPENROUTER_API_KEY, and OPENROUTER_EMBEDDING_MODEL."
-            ),
+            detail="The weather service is temporarily unavailable. Please try again later.",
         )
 
     question = _latest_user_message(request.messages)
     if question is None:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
+    question = question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Please enter a weather related question.")
+
     try:
         reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
-        logger.exception("Retriever invocation failed")
-        raise HTTPException(status_code=502, detail=f"Retrieval error: {exc}") from exc
+        logger.error("Retriever invocation failed (%s)", type(exc).__name__)
+        raise _retrieval_error(exc) from exc
+
+    if not reply.strip():
+        raise HTTPException(
+            status_code=502,
+            detail="The weather service returned an empty answer. Please try again.",
+        )
 
     return ChatResponse(reply=reply, model=_chatbot_model_name)
