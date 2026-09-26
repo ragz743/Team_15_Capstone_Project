@@ -9,6 +9,7 @@ from secrets import token_urlsafe
 from uuid import UUID, uuid4
 
 import psycopg
+from backend.chat_turn import PreparedChatTurn
 from backend.conversation_context import ConversationContext
 from backend.databases.pgvector import PgVectorConnection
 from psycopg.rows import dict_row
@@ -31,6 +32,7 @@ class AcceptedTurn:
     context: ConversationContext
     completed: dict | None = None
     requested_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    prepared: PreparedChatTurn | None = None
 
 
 def _connect() -> psycopg.Connection:
@@ -215,7 +217,30 @@ class ConversationStore:
                 attempt,
                 ConversationContext.model_validate(chat["context"]),
                 requested_at=requested_at,
+                prepared=PreparedChatTurn.model_validate(existing["prepared_turn"])
+                if existing and existing["prepared_turn"] is not None
+                else None,
             )
+
+    def prepare(self, owner: UUID, conversation: UUID, request: UUID, attempt: UUID, turn: PreparedChatTurn) -> None:
+        """Persist resolved input once, only while this attempt owns the turn."""
+        snapshot = turn.model_dump(mode="json")
+        with self._cursor() as cur:
+            cur.execute(
+                "SELECT id FROM conversations WHERE id = %s AND owner_id = %s FOR UPDATE", (conversation, owner)
+            )
+            if not cur.fetchone():
+                raise ConversationNotFoundError
+            cur.execute(
+                "UPDATE conversation_turns SET prepared_turn = %s "
+                "WHERE conversation_id = %s AND request_id = %s AND attempt_id = %s AND status = 'pending' "
+                "AND (prepared_turn IS NULL OR prepared_turn = %s) RETURNING request_id",
+                (Jsonb(snapshot), conversation, request, attempt, Jsonb(snapshot)),
+            )
+            if not cur.fetchone():
+                raise TurnConflictError(
+                    "This request was superseded or its resolved inputs changed. Reload the conversation."
+                )
 
     def complete(
         self,
@@ -269,3 +294,72 @@ class ConversationStore:
                 "AND t.request_id = %s AND t.attempt_id = %s AND t.status = 'pending'",
                 (owner, conversation, request, attempt),
             )
+
+    def history_window(self, owner: UUID, conversation: UUID, *, before: datetime) -> list[dict]:
+        """Provide six earlier turns for interpretation, excluding future replies and other owners."""
+        with self._cursor() as cur:
+            cur.execute("SELECT id FROM conversations WHERE id = %s AND owner_id = %s", (conversation, owner))
+            if not cur.fetchone():
+                raise ConversationNotFoundError
+            cur.execute(
+                "SELECT t.user_content, CASE WHEN t.completed_at <= %s THEN t.assistant_content END AS answer "
+                "FROM conversation_turns t JOIN conversations c ON c.id = t.conversation_id "
+                "WHERE c.owner_id = %s AND c.id = %s AND t.requested_at < %s "
+                "ORDER BY t.ordinal DESC LIMIT 6",
+                (before, owner, conversation, before),
+            )
+            return [
+                {"user": row["user_content"][:1200], "assistant": (row["answer"] or "")[:2000]}
+                for row in reversed(cur.fetchall())
+            ]
+
+    def search_history(
+        self,
+        owner: UUID,
+        conversation: UUID,
+        *,
+        before: datetime,
+        scope: str,
+        terms: list[str],
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> list[dict]:
+        """Search literal topic alternatives within owned messages as they existed at acceptance."""
+        if scope not in {"all", "current", "previous"} or len(terms) > 8:
+            raise ValueError("Invalid history search scope")
+        if any(not term.strip() or len(term) > 80 for term in terms):
+            raise ValueError("Invalid history search term")
+        with self._cursor() as cur:
+            cur.execute("SELECT id FROM conversations WHERE id = %s AND owner_id = %s", (conversation, owner))
+            if not cur.fetchone():
+                raise ConversationNotFoundError
+            cur.execute(
+                "WITH owned AS ("
+                "SELECT c.id AS conversation_id, c.title, t.ordinal, t.user_content, t.requested_at, "
+                "CASE WHEN t.completed_at <= %(before)s THEN t.assistant_content END AS assistant_content, "
+                "CASE WHEN t.completed_at <= %(before)s THEN t.context END AS context "
+                "FROM conversations c JOIN conversation_turns t ON t.conversation_id = c.id "
+                "WHERE c.owner_id = %(owner)s AND t.requested_at < %(before)s) "
+                "SELECT * FROM owned o WHERE "
+                "(%(scope)s = 'all' OR (%(scope)s = 'current' AND o.conversation_id = %(conversation)s) "
+                "OR (%(scope)s = 'previous' AND o.conversation_id = "
+                "(SELECT conversation_id FROM owned WHERE conversation_id <> %(conversation)s "
+                "ORDER BY requested_at DESC, conversation_id DESC, ordinal DESC LIMIT 1))) "
+                "AND (%(start)s::timestamptz IS NULL OR o.requested_at >= %(start)s) "
+                "AND (%(end)s::timestamptz IS NULL OR o.requested_at < %(end)s) "
+                "AND (cardinality(%(terms)s::text[]) = 0 OR EXISTS "
+                "(SELECT 1 FROM unnest(%(terms)s::text[]) AS term WHERE "
+                "strpos(lower(o.user_content), lower(term)) > 0 OR "
+                "strpos(lower(coalesce(o.assistant_content, '')), lower(term)) > 0)) "
+                "ORDER BY o.requested_at DESC, o.conversation_id DESC, o.ordinal DESC LIMIT 13",
+                {
+                    "owner": owner,
+                    "conversation": conversation,
+                    "before": before,
+                    "scope": scope,
+                    "terms": terms,
+                    "start": start,
+                    "end": end,
+                },
+            )
+            return cur.fetchall()
