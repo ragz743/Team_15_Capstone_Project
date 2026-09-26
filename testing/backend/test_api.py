@@ -67,6 +67,7 @@ def test_health_returns_readiness_metadata(monkeypatch) -> None:
         "status": "ok",
         "chatbot_ready": True,
         "retriever_ready": True,
+        "history_ready": False,
         "model": "test-chat-model",
         "embedding_model": "test-embedding-model",
         "has_api_key": True,

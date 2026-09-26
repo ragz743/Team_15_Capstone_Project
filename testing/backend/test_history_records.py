@@ -74,7 +74,8 @@ def test_history_acceptance_cutoff_ignores_later_messages_and_completions(store,
     old, current = store.create(owner)["id"], store.create(owner)["id"]
     request = uuid4()
     accepted = store.begin(owner, old, request, "Frost question before the cutoff")
-    cutoff = datetime.now(UTC)
+    with database() as conn:
+        cutoff = conn.execute("SELECT clock_timestamp()").fetchone()[0]
     store.complete(owner, old, request, accepted.attempt_id, "Reply after the cutoff", "fixture", ConversationContext())
     completed(store, owner, old, "Question after cutoff", "Later")
     rows = store.search_history(owner, current, before=cutoff, scope="previous", terms=[])
