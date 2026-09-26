@@ -18,6 +18,7 @@ class PgVectorConnection:
         self,
         host: str | None = None,
         port: int | None = None,
+        connect_timeout: int | None = None,
     ):
         """Create a pgvector database connection."""
         host = host if host is not None else os.getenv("PG_HOST", "localhost")
@@ -28,6 +29,9 @@ class PgVectorConnection:
             "port": port,
             "dbname": self._DB_NAME,
         }
+
+        if connect_timeout is not None:
+            conn_info["connect_timeout"] = connect_timeout
 
         user = os.getenv("PG_USER")
         password = os.getenv("PG_PASSWORD")

@@ -1,10 +1,15 @@
 """Code for the data retriever controller class, Retriever."""
 
+from datetime import date
+
+from backend.chat_turn import AnsweredTurn, PreparedChatTurn
+from backend.conversation_context import ConversationContext, resolve_turn
 from backend.models._chatbot_base import _BaseChatbot
 from backend.vector_store import PgVectorStore
 from backend.weather_query import (
     QueryClarificationError,
     Station,
+    WeatherQuery,
     resolve_weather_query,
 )
 from langchain_core.documents import Document
@@ -113,6 +118,36 @@ class Retriever:
         except QueryClarificationError as exc:
             return str(exc)
 
+        return self._answer(question, selection, filter)
+
+    def prepare_turn(
+        self, question: str, context: ConversationContext | None = None, *, today: date | None = None
+    ) -> PreparedChatTurn:
+        """Resolve and freeze saved weather context before calling external services."""
+        stations = self.stations()
+        if not stations:
+            return PreparedChatTurn(
+                outcome="no_data", question=question, context=context or ConversationContext(), reply=NO_DATA
+            )
+        turn = resolve_turn(question, stations, context, today=today)
+        if turn.clarification:
+            return PreparedChatTurn(
+                outcome="needs_clarification", question=question, context=turn.context, reply=turn.clarification
+            )
+        return PreparedChatTurn(
+            outcome="weather", question=turn.question, context=turn.context, selection=turn.selection
+        )
+
+    def answer_result(self, turn: PreparedChatTurn) -> AnsweredTurn:
+        """Retrieve fresh weather using the accepted constraints, never saved assistant text."""
+        if turn.reply is not None:
+            assert turn.outcome != "weather"
+            return AnsweredTurn(reply=turn.reply, outcome=turn.outcome)
+        assert turn.selection is not None
+        reply = self._answer(turn.question, turn.selection)
+        return AnsweredTurn(reply=reply, outcome="no_data" if reply == NO_DATA else "success")
+
+    def _answer(self, question: str, selection: WeatherQuery, filter: dict | None = None) -> str:
         sections: list[str] = []
         sources: list[str] = []
         for store in self._vector_stores:

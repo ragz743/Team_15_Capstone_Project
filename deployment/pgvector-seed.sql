@@ -39,3 +39,7 @@ CREATE TABLE IF NOT EXISTS forecast_index (
     document TEXT,          -- document text to be retrieved during search
     metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
 );
+
+-- The same migration upgrades existing volumes without changing weather indexes.
+\ir migrations/001_conversations.sql
+\ir migrations/002_turn_snapshots.sql

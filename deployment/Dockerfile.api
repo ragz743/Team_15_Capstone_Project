@@ -10,6 +10,7 @@ COPY pyproject.toml README.md ./
 COPY code/__init__.py ./code/__init__.py
 COPY code/backend ./code/backend
 COPY code/scripts ./code/scripts
+COPY deployment/migrations ./deployment/migrations
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .
