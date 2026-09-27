@@ -3,7 +3,8 @@
 import asyncio
 
 from backend.models._chatbot_base import _BaseChatbot
-from copilot import CopilotClient, PermissionHandler
+from copilot import CopilotClient
+from copilot.rpc import PermissionDecisionReject
 from copilot.session_events import AssistantMessageData
 
 
@@ -19,7 +20,7 @@ class ChatbotCopilot(_BaseChatbot):
         """Asynchronously invoke copilot model returning the response."""
         async with self._client as client:
             async with await client.create_session(
-                on_permission_request=PermissionHandler.approve_all,
+                on_permission_request=(lambda _req, _invok: PermissionDecisionReject()),  # deny all
                 model=self._model,
             ) as session:
                 response = await session.send_and_wait(messages)
@@ -42,4 +43,4 @@ class ChatbotCopilot(_BaseChatbot):
         """Pass a list of messages and gets responses from the model."""
         # Copilot sdk calls must be async, Chatbot base is currently synchronous
         # so solution for now is to force async calls to be sequential w/ wrapper
-        return asyncio.run(self._async_invoke("/n".join(messages)))
+        return asyncio.run(self._async_invoke("\n".join(messages)))

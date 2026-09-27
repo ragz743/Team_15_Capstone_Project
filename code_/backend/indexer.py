@@ -18,7 +18,8 @@ class Indexer:
     ):
         """Create an instance of the Indexer class."""
         self._loader = loader
-        self._vector_store = PgVectorStore(ModelFactory.load_embedding_model())
+        embedding_model, _ = ModelFactory.load_from_models_yaml()
+        self._vector_store = PgVectorStore(embedding_model)
 
     def index(self) -> None:
         """Index all records extracted by the loader and processed by the splitter into the vectorstore."""
