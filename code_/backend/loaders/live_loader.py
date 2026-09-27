@@ -45,7 +45,7 @@ class LiveQueryResult(NamedTuple):
         """Create a DailyQueryResult from a tuple."""
         return cls(
             # lots of type ignores, types based on MySQL - annoying but ok for now!
-            d["TSTAMP"].strftime("%Y-%m-%d"),  # type: ignore
+            d["TSTAMP"].strftime("%Y-%m-%d %H:%M:%S"),  # type: ignore
             d.get("AIR_TEMP"),  # type: ignore
             d.get("REL_HUMIDITY"),  # type: ignore
             d.get("PRECIP"),  # type: ignore
@@ -114,8 +114,9 @@ class LiveLoader(_BaseLoader):
         metadata_results = _common.query_stations()
         stations_live = self._query_station_most_recent(metadata_results)
         for meta, station in stations_live:
+            header = f"Station: {meta.station} (ID: {meta.unit_id}) — {meta.county} County, {meta.state}\n\n"
             d = Document(
-                page_content=_common.to_markdown_table((station,), LiveQueryResult.get_units()),
+                page_content=header + _common.to_markdown_table((station,), LiveQueryResult.get_units()),
                 metadata={
                     "id": meta.unit_id,
                     "station": meta.station,

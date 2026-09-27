@@ -51,7 +51,7 @@ def test_similarity_search_queries_daily_index(monkeypatch) -> None:
     assert connection is not None
     assert connection.query is not None
     assert b"daily_index" in connection.query
-    assert b"<=>" in connection.query
+    assert b"<->" in connection.query
     assert connection.query_vars == ("[0.1,0.2,0.3]", 2)
     assert documents == [Document(page_content="Weather context", metadata={"station": "Pullman"})]
 

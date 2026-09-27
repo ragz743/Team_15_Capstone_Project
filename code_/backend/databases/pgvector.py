@@ -67,7 +67,8 @@ class PgVectorConnection:
         cursor = self.conn.cursor()
 
         # execute the query and save changes before exit
-        id = cursor.execute(sql_query, query_vars).fetchone()
+        cursor.execute(sql_query, query_vars)
+        id = cursor.fetchone()
         self.conn.commit()
 
         return str(id)

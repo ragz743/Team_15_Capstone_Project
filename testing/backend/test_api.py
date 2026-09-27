@@ -12,10 +12,12 @@ class FakeRetriever:
     def __init__(self) -> None:
         """Create a fake retriever."""
         self.question: str | None = None
+        self.filter: dict | None = None
 
-    def retrieve(self, question: str) -> str:
+    def retrieve(self, question: str, filter: dict | None = None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
+        self.filter = filter
         return f"retrieved: {question}"
 
 

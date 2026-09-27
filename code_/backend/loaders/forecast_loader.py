@@ -17,20 +17,24 @@ from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.documents import Document
 
 
-class ForecastQueryResult(NamedTuple):
-    """The results for the loader forecast query."""
+class PrimaryForecastQueryResult(NamedTuple):
+    """Result from the primary forecast table (fcst_{unit_id}_{year})."""
 
     forecast_time: str
     air_temp: float
+    solar_rad: int
+    soil_temp_8in: float
 
     @classmethod
     def from_tuple(cls, row: Sequence) -> Self:
-        """Create a LiveQueryResult from a tuple."""
+        """Create a PrimaryForecastQueryResult from a row tuple."""
         match row:
-            case (tstamp, air_temp):
+            case (forecast_time, air_temp, solar_rad, soil_temp_8in):
                 return cls(
-                    tstamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    forecast_time.strftime("%Y-%m-%d %H:%M:%S"),
                     air_temp,
+                    solar_rad,
+                    soil_temp_8in,
                 )
             case _:
                 msg = f"unrecognized tuple structure: {row}"
@@ -38,8 +42,41 @@ class ForecastQueryResult(NamedTuple):
 
     @staticmethod
     def get_units() -> list[str]:
-        """Get the units for each field of the result type."""
-        return ["", "F"]
+        """Return units for each field."""
+        return ["", "F", "W/m²", "F"]
+
+
+class FallbackForecastQueryResult(NamedTuple):
+    """Result from the fallback forecast table (forecast{unit_id}) — full weather suite."""
+
+    forecast_time: str
+    air_temp: float
+    rel_humidity: float
+    wind_speed: float
+    wind_dir: float
+    precip: float
+
+    @classmethod
+    def from_tuple(cls, row: Sequence) -> Self:
+        """Create a FallbackForecastQueryResult from a row tuple."""
+        match row:
+            case (tstamp, air_temp, rel_humidity, wind_speed, wind_dir, precip):
+                return cls(
+                    tstamp.strftime("%Y-%m-%d %H:%M:%S"),
+                    air_temp,
+                    rel_humidity,
+                    wind_speed,
+                    wind_dir,
+                    precip,
+                )
+            case _:
+                msg = f"unrecognized tuple structure: {row}"
+                raise ValueError(msg)
+
+    @staticmethod
+    def get_units() -> list[str]:
+        """Return units for each field."""
+        return ["", "F", "%", "mph", "degrees", "inches"]
 
 
 class ForecastLoader(_BaseLoader):
@@ -59,52 +96,53 @@ class ForecastLoader(_BaseLoader):
     """
 
     def __init__(self, embedding_model: _BaseEmbedding) -> None:
-        """Create and instance of the ForecastLoader class."""
+        """Create an instance of the ForecastLoader class."""
         self._embedding_model = embedding_model
 
     def _query_station_current_forecast(
         self,
         stations: list[MetadataQueryResult],
-    ) -> list[tuple[MetadataQueryResult, list[ForecastQueryResult]]]:
-        """Query the current forecast for a station."""
-        result: list[tuple[MetadataQueryResult, list[ForecastQueryResult]]] = []
+    ) -> list[tuple[MetadataQueryResult, list, list[str]]]:
+        """Query the current forecast for each station.
+
+        Returns tuples of (station_metadata, forecast_rows, units) so the
+        caller does not need to know which table schema was used.
+        """
+        result: list[tuple[MetadataQueryResult, list, list[str]]] = []
         with AWNForecastDatabaseConnection() as awn_conn, AWNForecastFallbackDatabaseConnection() as fallback_conn:
-            # query grabs most recent set of forecasts for a station
-            limit = "LIMIT 4"
             for s in stations:
                 try:
                     table = f"fcst_{s.unit_id}_{self._year}"
                     query_forecast = f"""
-                        SELECT Forecast_time, AIR_TEMP
+                        SELECT Forecast_time, AIR_TEMP, SOLAR_RAD, SOIL_TEMP_8_IN
                         FROM {table}
                         WHERE Init_time = (SELECT MAX(Init_time) FROM {table})
-                        {limit};
+                        LIMIT 24;
                         """
-                    forecast_table = [
-                        ForecastQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_forecast, ())
+                    rows = [
+                        PrimaryForecastQueryResult.from_tuple(tup) for tup in awn_conn.simple_query(query_forecast, ())
                     ]
+                    result.append((s, rows, PrimaryForecastQueryResult.get_units()))
 
-                    result.append((s, forecast_table))
-
-                except mysql.connector.Error:  # query from fallback if table does not exist
+                except mysql.connector.Error:
                     try:
                         table = f"forecast{s.unit_id}"
                         query_forecast = f"""
-                            SELECT INDATE, INTIME, AIR_TEMP
+                            SELECT TSTAMP, AIR_TEMP, REL_HUMIDITY, WIND_SPEED, WIND_DIR, PRECIP
                             FROM {table}
                             WHERE
                                 INDATE = (SELECT MAX(INDATE) FROM {table}) AND
                                 INTIME = (SELECT MAX(INTIME) FROM {table})
-                            {limit};
+                            LIMIT 24;
                             """
-                        forecast_table = [
-                            ForecastQueryResult.from_tuple((datetime.combine(date, time), air_temp))
-                            for date, time, air_temp in fallback_conn.simple_query(query_forecast, ())
+                        rows = [
+                            FallbackForecastQueryResult.from_tuple(tup)
+                            for tup in fallback_conn.simple_query(query_forecast, ())
                         ]
+                        result.append((s, rows, FallbackForecastQueryResult.get_units()))
 
-                        result.append((s, forecast_table))
                     except mysql.connector.Error:
-                        pass  # there is not a forecast table for this station :(
+                        pass  # no forecast table for this station
 
         return result
 
@@ -114,11 +152,11 @@ class ForecastLoader(_BaseLoader):
         docs: list[Document] = []
         metadata_results = _common.query_stations()
         stations_forecast = self._query_station_current_forecast(metadata_results)
-        for meta, forecast_table in [(m, s) for m, s in stations_forecast if s]:
-            init_time = forecast_table[0].forecast_time  # each forecast made at the same time, just use one
+        for meta, forecast_rows, units in [(m, r, u) for m, r, u in stations_forecast if r]:
+            init_time = forecast_rows[0].forecast_time
+            header = f"Station: {meta.station} (ID: {meta.unit_id}) — {meta.county} County, {meta.state}\n\n"
             d = Document(
-                # each forecast gets a summary, leave a blank line between for LLM readability
-                page_content=_common.to_markdown_table(forecast_table, ForecastQueryResult.get_units()),
+                page_content=header + _common.to_markdown_table(forecast_rows, units),
                 metadata={
                     "id": meta.unit_id,
                     "station": meta.station,

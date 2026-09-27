@@ -21,7 +21,7 @@ Given [initial context]
 When [action performed]
 Then [expected outcome]
 
-Scenario 2: Negative/Edge Case 
+Scenario 2: Negative/Edge Case
 Given [initial context]
 When [invalid/edge action]
 Then [expected outcome]

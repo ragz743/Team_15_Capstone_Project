@@ -29,10 +29,10 @@ Here are links to the issues that we completed in this sprint:
  * [#23 Docker Compose Setup](https://github.com/ragz743/Team_15_Capstone_Project/issues/23)
  * [#24 PyTest Setup and Config](https://github.com/ragz743/Team_15_Capstone_Project/issues/24)
  * [#25 Environment Variable Management](https://github.com/ragz743/Team_15_Capstone_Project/issues/25)
- 
+
  ## Incomplete Issues/User Stories
  Here are links to issues we worked on but did not complete in this sprint:
- 
+
  * [#17 Document Splitting RAG Stage](https://github.com/ragz743/Team_15_Capstone_Project/issues/17) Implemented but ultimately determined to be unnecessary for the current prototype architecture.
  * [#18 Integrate Embedding Model and Store Vectors in Vector DB](https://github.com/ragz743/Team_15_Capstone_Project/issues/18) Currently in progress but was not completed within the sprint timeline.
 
@@ -45,19 +45,19 @@ Please review the following code files, which were actively developed during thi
  * [databases folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/databases)
  * [loaders folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/loaders)
  * [models folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/models)
- 
+
 ## Retrospective Summary
 Here's what went well:
   * Presentations for the client were well-prepared and effective
   * Moved from initial concept to a defined system architecture
   * Advanced from planning to a functional prototype with UI
   * Improved clarity on technical direction and implementation strategy
- 
+
 Here's what we'd like to improve:
    * Task distribution needs improvement for better efficiency
    * Communication and coordination could be clearer to reduce duplicate work and ensure alignment across components
 
-  
+
 Here are changes we plan to implement in the next sprint:
    * Complete implementing the prototype
    * Refine chatbot UI for demo readiness and usability
