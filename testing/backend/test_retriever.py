@@ -94,8 +94,8 @@ def test_retriever_detects_station_filter_automatically(mock_chatbot) -> None:
     """Check that a station mentioned in the question is detected and applied as a filter."""
     store = MagicMock()
     store.table = "live_index"
-    store.distinct_metadata_values.side_effect = (
-        lambda key: ["Pullman", "Pullman NE"] if key == "station" else ["Whitman"]
+    store.distinct_metadata_values.side_effect = lambda key: (
+        ["Pullman", "Pullman NE"] if key == "station" else ["Whitman"]
     )
     store.similarity_search.return_value = []
 
@@ -124,16 +124,17 @@ def test_retriever_prefers_station_over_county_filter(mock_chatbot) -> None:
 
 
 def test_retriever_handles_empty_store_results(mock_chatbot) -> None:
-    """Check that retrieve still calls the chatbot when no documents are returned."""
+    """Empty retrieval returns an explanation without calling the chatbot."""
     store = MagicMock()
     store.table = "live_index"
     store.distinct_metadata_values.return_value = []
     store.similarity_search.return_value = []
 
     retriever = Retriever([store], mock_chatbot)
-    retriever.retrieve("What is the humidity?")
+    response = retriever.retrieve("What is the humidity?")
 
-    mock_chatbot.invoke.assert_called_once()
+    assert "No matching weather records" in response
+    mock_chatbot.invoke.assert_not_called()
 
 
 def test_retriever_context_includes_section_label(mock_chatbot) -> None:
@@ -391,18 +392,22 @@ def test_load_known_values_caches_result(mock_chatbot) -> None:
     assert store.distinct_metadata_values.call_count == 2
 
 
-def test_load_known_values_handles_store_exceptions(mock_chatbot) -> None:
-    """Check that _load_known_values gracefully continues when a store throws an exception."""
+def test_load_known_values_retries_after_store_error(mock_chatbot) -> None:
+    """Propagate catalog failures and reload every store after recovery."""
     broken_store = MagicMock()
     broken_store.distinct_metadata_values.side_effect = RuntimeError("DB connection lost")
 
     working_store = MagicMock()
     working_store.distinct_metadata_values.side_effect = lambda key: ["Pullman"] if key == "station" else []
 
-    retriever = Retriever([broken_store, working_store], mock_chatbot)
+    retriever = Retriever([working_store, broken_store], mock_chatbot)
+    with pytest.raises(RuntimeError, match="DB connection lost"):
+        retriever._load_known_values()
+
+    broken_store.distinct_metadata_values.side_effect = lambda key: ["Spokane"] if key == "station" else []
     known = retriever._load_known_values()
 
-    assert known["station"] == ["Pullman"]
+    assert set(known["station"]) == {"Pullman", "Spokane"}
 
 
 def test_detect_filter_returns_none_when_no_match(mock_chatbot) -> None:

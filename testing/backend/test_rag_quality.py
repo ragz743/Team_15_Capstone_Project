@@ -97,9 +97,8 @@ def test_out_of_scope_question_is_refused(client, question: str) -> None:
     c, _ = client("I don't have data to answer that question.")
     reply = _chat(c, question).lower()
 
-    assert any(phrase in reply for phrase in REFUSAL_PHRASES), (
-        f"Expected a refusal for out-of-scope question: '{question}'\nGot: '{reply}'"
-    )
+    message = f"Expected a refusal for out-of-scope question: '{question}'\nGot: '{reply}'"
+    assert any(phrase in reply for phrase in REFUSAL_PHRASES), message
 
 
 def test_multi_turn_uses_latest_question(client) -> None:
