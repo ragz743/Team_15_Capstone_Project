@@ -2,7 +2,7 @@
 
 ## Running Tests
 - make sure you have activated your python virtual environment and installed packages
-    - see code/README.md for details on how to set up project
+    - see code_/README.md for details on how to set up project
 - call command `pytest` from the command line to run all tests
     - test discovery configured in `pyproject.toml`
 
@@ -43,7 +43,7 @@ The `-v` flag enables verbose output so you can see each test result!
 To generate an HTML coverage report:
 
 ```bash
-pytest testing/backend/ --cov=code/backend --cov-report=html
+pytest testing/backend/ --cov=code_/backend --cov-report=html
 ```
 
 Then open the report:
@@ -52,7 +52,7 @@ Then open the report:
 open htmlcov/index.html
 ```
 
-The coverage report will show which parts of `code/backend` are covered by the unit tests.
+The coverage report will show which parts of `code_/backend` are covered by the unit tests.
 
 ## 3. Run E2E Tests
 

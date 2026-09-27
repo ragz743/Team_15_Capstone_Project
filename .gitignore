@@ -44,8 +44,8 @@ eggs/
 .eggs/
 lib/
 lib64/
-!code/frontend/**/lib/
-!code/frontend/**/lib/**
+!code_frontend/**/lib/
+!code_frontend/**/lib/**
 parts/
 sdist/
 var/
