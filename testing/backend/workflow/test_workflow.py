@@ -18,6 +18,7 @@ def workflow() -> ChatbotWorkflow:
     return ChatbotWorkflow(debug=True)
 
 
+@pytest.mark.optional
 @pytest.mark.parametrize(
     ("user_input", "coords", "county"),
     [

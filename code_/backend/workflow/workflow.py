@@ -323,7 +323,7 @@ class ChatbotWorkflow:
             when values come from the user, and return the SQL only.{retry_instructions}
             """
             generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
-            self._log_event(node_name, "generated_sql", generated_query)
+            self._log_event(node_name, "generated_sql", "\n" + generated_query)
             try:
                 self._validate_generated_query(generated_query, table_name)
                 results = list(database.simple_query(generated_query, ()))

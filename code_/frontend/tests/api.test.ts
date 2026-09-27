@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ApiError, sendChat, type ChatMessage } from "../src/lib/api.ts";
+import { ApiError, sendChat, type ChatMessage } from "../../../code/frontend/src/lib/api.ts";
 
 const messages = [{ role: "user" as const, content: "Weather in Pullman?" }];
 
