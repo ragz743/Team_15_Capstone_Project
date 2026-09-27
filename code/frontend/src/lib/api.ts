@@ -33,7 +33,17 @@ async function parseErrorDetail(response: Response): Promise<string | undefined>
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") {
-      return body.detail;
+      return response.status === 422 ? body.detail.trim() || undefined : body.detail;
+    }
+    if (response.status === 422 && Array.isArray(body.detail)) {
+      const details = body.detail
+        .filter((error: unknown): error is { msg: string } =>
+          typeof error === "object" && error !== null &&
+          "msg" in error && typeof error.msg === "string",
+        )
+        .map(error => error.msg.trim())
+        .filter(Boolean);
+      return details.join("; ") || undefined;
     }
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -50,6 +60,9 @@ async function parseErrorDetail(response: Response): Promise<string | undefined>
 function friendlyErrorMessage(status: number, detail: string | undefined): string {
   if (detail) {
     return detail;
+  }
+  if (status === 422) {
+    return "The chat request is invalid. Please check your message and try again.";
   }
   if (status === 502 || status === 504) {
     return "The weather service could not complete your request. Please try again.";

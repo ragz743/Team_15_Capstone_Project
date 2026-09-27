@@ -43,6 +43,67 @@ test("preserves a useful backend error", async (t) => {
   });
 });
 
+test("displays FastAPI validation messages for a rejected chat request", async (t) => {
+  const detail = [
+    {
+      type: "string_too_long",
+      loc: ["body", "messages", 0, "content"],
+      msg: "String should have at most 4000 characters",
+      input: "a".repeat(4001),
+      ctx: { max_length: 4000 },
+    },
+    {
+      type: "extra_forbidden",
+      loc: ["body", "extra"],
+      msg: "Extra inputs are not permitted",
+      input: "unexpected field",
+    },
+  ];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ detail }, { status: 422 }));
+
+  await assert.rejects(sendChat(messages), (error) => {
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.status, 422);
+    assert.equal(error.detail, "String should have at most 4000 characters; Extra inputs are not permitted");
+    assert.equal(error.message, error.detail);
+    return true;
+  });
+});
+
+test("ignores invalid entries alongside a readable validation message", async (t) => {
+  const detail = [null, {}, { msg: 12 }, { msg: " " }, { msg: "Conversation exceeds 32000 characters" }];
+  t.mock.method(globalThis, "fetch", async () => Response.json({ detail }, { status: 422 }));
+
+  await assert.rejects(sendChat(messages), {
+    name: "ApiError",
+    message: "Conversation exceeds 32000 characters",
+  });
+});
+
+for (const body of [{ detail: [] }, { detail: [{ msg: null }] }, { detail: " " }, {}]) {
+  test(`explains a 422 response without readable details: ${JSON.stringify(body)}`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () => Response.json(body, { status: 422 }));
+    await assert.rejects(sendChat(messages), {
+      name: "ApiError",
+      message: "The chat request is invalid. Please check your message and try again.",
+    });
+  });
+}
+
+test("explains a non-JSON 422 response", async (t) => {
+  t.mock.method(globalThis, "fetch", async () => new Response("Invalid request", { status: 422 }));
+  await assert.rejects(sendChat(messages), {
+    name: "ApiError",
+    message: "The chat request is invalid. Please check your message and try again.",
+  });
+});
+
+test("preserves a string validation detail", async (t) => {
+  const detail = "Please enter a weather related question.";
+  t.mock.method(globalThis, "fetch", async () => Response.json({ detail }, { status: 422 }));
+  await assert.rejects(sendChat(messages), { name: "ApiError", message: detail, detail });
+});
+
 for (const status of [502, 503, 504]) {
   test(`handles a non-JSON ${status} response`, async (t) => {
     t.mock.method(globalThis, "fetch", async () => new Response("proxy error", { status }));
