@@ -38,7 +38,7 @@ dev = [
 index = "scripts.index:main"
 
 [tool.setuptools.packages.find]
-where = ["code"]
+where = ["code_"]
 
 [tool.black]
 line-length = 120
@@ -66,6 +66,7 @@ venv = ".venv/"
 [tool.pytest.ini_options]
 minversion = "9.0.2"
 addopts = "-q" # flags to pass to pytest implicitly
+log_file_level = "INFO"
 testpaths = [ # the directories pytest will search for tests per test discover rules
     "testing",
 ]

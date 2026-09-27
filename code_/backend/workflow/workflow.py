@@ -1,5 +1,6 @@
 """AgWeatherNet Chatbot Workflow."""
 
+import logging
 import re
 from datetime import datetime
 from typing import Annotated, Any, Literal, Sequence, TypedDict
@@ -23,6 +24,8 @@ QueryType = Literal[
     "historical_weather",
     "miscellaneous",
 ]
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class QueryClassification(BaseModel):
@@ -101,9 +104,14 @@ class ClassifierChatbot:
 class ChatbotWorkflow:
     """The class for configuration of the chatbot workflow."""
 
-    def __init__(self, checkpointer: BaseCheckpointSaver | None = None):
+    def __init__(
+        self,
+        checkpointer: BaseCheckpointSaver | None = None,
+        debug: bool = False,
+    ):
         """ChatbotWorflow constructor."""
         self.checkpointer = checkpointer or InMemorySaver()
+        self._debug = debug
         self._query_handlers = {
             "current_weather": "_query_current",
             "forecast_weather": "_query_forecast",
@@ -184,10 +192,6 @@ class ChatbotWorkflow:
         nearest_id_query = """
         SELECT
             UNIT_ID,
-            STATION_NAME,
-            COUNTY,
-            STATION_LATDEG,
-            STATION_LNGDEG,
             111320 * SQRT(
                 POW(STATION_LATDEG - %s, 2) +
                 POW((STATION_LNGDEG - %s) * COS(RADIANS(%s)), 2)
@@ -213,28 +217,36 @@ class ChatbotWorkflow:
 
     def _query_classifier(self, state: ChatState) -> dict:
         """Given user input classify it before taking action."""
-        return self.classifier_chat_model.classify(state)
+        update = self.classifier_chat_model.classify(state)
+        self._log_state_update("_query_classifier", state, update)
+        return update
 
     def _query_historical(self, state: ChatState) -> dict:
         """Perform a historical weather data query."""
         sub_queries = self._sub_queries_for(state, "historical_weather")
         if not sub_queries:
             return {}
-        return self._run_generated_query(sub_queries, state, self.historical_daily_db)
+        update = self._run_generated_query(sub_queries, state, self.historical_daily_db, "_query_historical")
+        self._log_state_update("_query_historical", state, update)
+        return update
 
     def _query_current(self, state: ChatState) -> dict:
         """Perform a current weather data query."""
         sub_queries = self._sub_queries_for(state, "current_weather")
         if not sub_queries:
             return {}
-        return self._run_generated_query(sub_queries, state, self.current_db)
+        update = self._run_generated_query(sub_queries, state, self.current_db, "_query_current")
+        self._log_state_update("_query_current", state, update)
+        return update
 
     def _query_forecast(self, state: ChatState) -> dict:
         """Perform a forecasted weather data query."""
         sub_queries = self._sub_queries_for(state, "forecast_weather")
         if not sub_queries:
             return {}
-        return self._run_generated_query(sub_queries, state, self.forecast_db)
+        update = self._run_generated_query(sub_queries, state, self.forecast_db, "_query_forecast")
+        self._log_state_update("_query_forecast", state, update)
+        return update
 
     def _query_miscellaneous(self, state: ChatState) -> dict:
         """Answer miscellaneous questions without querying a weather database."""
@@ -252,13 +264,16 @@ class ChatbotWorkflow:
         about AgWeatherNet weather data instead.
         """
         answer = self.workflow_chat_model.invoke([prompt])
-        return {"messages": [("assistant", answer)]}
+        update = {"messages": [("assistant", answer)]}
+        self._log_state_update("_query_miscellaneous", state, update)
+        return update
 
     def _run_generated_query(
         self,
         sub_queries: list[QueryClassification],
         state: ChatState,
         database: AWNDatabaseConnectionBase,
+        node_name: str,
     ) -> dict:
         """Generate and execute a read-only query for one station and one query topic."""
         station_id = state["nearest_station_id"]
@@ -281,9 +296,30 @@ class ChatbotWorkflow:
         when values come from the user, and return the SQL only.
         """
         generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
+        self._log_event(node_name, "generated_sql", generated_query)
         self._validate_generated_query(generated_query, table_name)
         results = list(database.simple_query(generated_query, ()))
-        return self._query_result_message(sub_queries, results)
+        self._log_event(node_name, "database_query_results", repr(results))
+        return self._query_result_message(sub_queries, generated_query, results)
+
+    def _log_state_update(self, node_name: str, state: ChatState, update: dict) -> None:
+        """Log the most recent message associated with a node's state update."""
+        if not self._debug:
+            return
+        messages = update.get("messages") or state.get("messages", [])
+        if messages:
+            most_recent_message = self._message_content(messages[-1])
+            self._log_event(
+                node_name,
+                "chat_state_update",
+                f"most_recent_message={most_recent_message!r}; updated_fields={list(update)}",
+            )
+
+    def _log_event(self, node_name: str, event: str, details: str) -> None:
+        """Emit a timestamped INFO event when workflow debugging is enabled."""
+        if self._debug:
+            timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+            _LOGGER.info("time=%s node=%s event=%s details=%s", timestamp, node_name, event, details)
 
     @staticmethod
     def _validate_generated_query(query: str, table_name: str) -> None:
@@ -303,7 +339,11 @@ class ChatbotWorkflow:
         return [sub_query for sub_query in state.get("sub_queries", []) if sub_query.query_type == query_type]
 
     @staticmethod
-    def _query_result_message(sub_queries: list[QueryClassification], results: Sequence[Sequence[Any]]) -> dict:
+    def _query_result_message(
+        sub_queries: list[QueryClassification],
+        generated_sql_query: str,
+        results: Sequence[Sequence[Any]],
+    ) -> dict:
         """Format database results for the summarizer."""
         requested = "\n".join(f"- {sub_query.reworded_query}" for sub_query in sub_queries)
         result_text = "\n".join(str(result) for result in results) or "No matching weather data was found."
@@ -311,7 +351,13 @@ class ChatbotWorkflow:
             "messages": [
                 (
                     "assistant",
-                    f"Requested sub-queries:\n{requested}\n\nDatabase results:\n{result_text}",
+                    "\n\n".join(
+                        (
+                            f"Requested sub-queries:\n{requested}",
+                            f"SQL query used:\n{generated_sql_query}",
+                            f"Database results:\n{result_text}",
+                        )
+                    ),
                 )
             ]
         }
@@ -361,7 +407,9 @@ class ChatbotWorkflow:
         say so clearly.
         """
         answer = self.workflow_chat_model.invoke([prompt])
-        return {"messages": [("assistant", answer)]}
+        update = {"messages": [("assistant", answer)]}
+        self._log_state_update("_chatbot_summarize", state, update)
+        return update
 
     @staticmethod
     def _message_content(current_message: Any) -> str:

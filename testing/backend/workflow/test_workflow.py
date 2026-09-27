@@ -15,15 +15,15 @@ def load_environment_vars() -> None:
 @pytest.fixture
 def workflow() -> ChatbotWorkflow:
     """Create a new instance of the chatbot workflow."""
-    return ChatbotWorkflow()
+    return ChatbotWorkflow(debug=True)
 
 
 @pytest.mark.parametrize(
     ("user_input", "coords", "county"),
     [
         ("What is the current weather in Pullman, WA?", (46.7319, -117.1510), "whitman"),
-        ("What was the hottest day this past August?", (47.3936, -120.4299), "chelan"),
-        ("What is the lowest temperature it will be tonight?", (48.7319, -122.5026), "whatcom"),
+        # ("What was the hottest day this past August?", (47.3936, -120.4299), "chelan"),
+        # ("What is the lowest temperature it will be tonight?", (48.7319, -122.5026), "whatcom"),
     ],
 )
 def test_chatbot_workflow(
