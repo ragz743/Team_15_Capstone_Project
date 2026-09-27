@@ -16,6 +16,7 @@ from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph, message, state
+from mysql.connector.errors import ProgrammingError
 from pydantic import BaseModel, Field
 
 QueryType = Literal[
@@ -58,7 +59,6 @@ class ChatState(TypedDict):
     messages: Annotated[list, message.add_messages]
     sub_queries: list[QueryClassification]
     nearest_station_id: int
-    nearest_station_schema: str
     original_user_input: str
 
 
@@ -104,6 +104,8 @@ class ClassifierChatbot:
 class ChatbotWorkflow:
     """The class for configuration of the chatbot workflow."""
 
+    _MAX_SQL_ATTEMPTS = 3
+
     def __init__(
         self,
         checkpointer: BaseCheckpointSaver | None = None,
@@ -132,10 +134,6 @@ class ChatbotWorkflow:
             location_coord,
             county,
         )
-        schema = self.current_db.query_schema(self.current_db.format_table_name(nearest_station_id))
-        schema_context = (
-            _common.to_markdown_table(schema, ["", "", "", "", ""]) if schema else "No station schema was found."
-        )
         initial_state: ChatState = {
             "messages": [
                 # messages follow format ("role", "content")
@@ -147,7 +145,6 @@ class ChatbotWorkflow:
             "original_user_input": user_input,
             "sub_queries": [],
             "nearest_station_id": nearest_station_id,
-            "nearest_station_schema": schema_context,
         }
 
         # TODO (Gavin): Figure out session key persist
@@ -279,28 +276,74 @@ class ChatbotWorkflow:
         station_id = state["nearest_station_id"]
         table_name = database.format_table_name(station_id)
         query_request = "\n".join(sub_query.reworded_query for sub_query in sub_queries)
-        prompt = f"""
-        You write one read-only MySQL query for AgWeatherNet.
-        Query topic: {sub_queries[0].query_type}
-        User request:
-        {query_request}
+        retry_context: tuple[str, str] | None = None
+        db = None
+        match node_name:
+            case "_query_current":
+                db = self.current_db
+            case "_query_historical":
+                db = self.historical_daily_db
+            case "_query_forecast":
+                db = self.forecast_db
+            case _:
+                msg = f"unrecognized query node '{node_name}'"
+                raise ValueError(msg)
+        schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
+        schema_context = (
+            _common.to_markdown_table(schema, ["", "", "", "", ""]) if schema else "No station schema was found."
+        )
 
-        The only allowed table is `{table_name}` for station ID {station_id}.
-        Station schema:
-        {state["nearest_station_schema"]}
+        for attempt in range(1, self._MAX_SQL_ATTEMPTS + 1):
+            retry_instructions = ""
+            if retry_context is not None:
+                last_query, last_error = retry_context
+                retry_instructions = f"""
 
-        Return only one SQL SELECT statement written for MariaDB.
-        The SQL statement shall contain no markdown fences,
-        explanation, comments, or semicolon-separated statements.
-        Do not use any table other than `{table_name}`. Use query parameters as %s
-        when values come from the user, and return the SQL only.
-        """
-        generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
-        self._log_event(node_name, "generated_sql", generated_query)
-        self._validate_generated_query(generated_query, table_name)
-        results = list(database.simple_query(generated_query, ()))
-        self._log_event(node_name, "database_query_results", repr(results))
-        return self._query_result_message(sub_queries, generated_query, results)
+                Your previous SQL attempt failed. Correct it using the error below.
+                Last attempted query:
+                {last_query}
+                Error message:
+                {last_error}
+                """
+
+            prompt = f"""
+            You write one read-only MySQL query for AgWeatherNet.
+            Query topic: {sub_queries[0].query_type}
+            User request:
+            {query_request}
+
+            The only allowed table is `{table_name}` for station ID {station_id}.
+            Station schema:
+            {schema_context}
+
+            Return only one SQL SELECT statement written for MariaDB.
+            The SQL statement shall contain no markdown fences,
+            explanation, comments, or semicolon-separated statements.
+            Do not use any table other than `{table_name}`. Use query parameters as %s
+            when values come from the user, and return the SQL only.{retry_instructions}
+            """
+            generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
+            self._log_event(node_name, "generated_sql", generated_query)
+            try:
+                self._validate_generated_query(generated_query, table_name)
+                results = list(database.simple_query(generated_query, ()))
+            except ProgrammingError as error:
+                retry_context = (generated_query, str(error))
+                self._log_event(
+                    node_name,
+                    "sql_attempt_failed",
+                    f"attempt={attempt}/{self._MAX_SQL_ATTEMPTS} query={generated_query!r} error={error!r}",
+                )
+                if attempt == self._MAX_SQL_ATTEMPTS:
+                    raise error
+                continue  # try again
+
+            # Successful attempts do not carry failed-query context to downstream nodes.
+            retry_context = None
+            self._log_event(node_name, "database_query_results", repr(results))
+            return self._query_result_message(sub_queries, generated_query, results)
+
+        raise RuntimeError("SQL query attempts ended without a result.")
 
     def _log_state_update(self, node_name: str, state: ChatState, update: dict) -> None:
         """Log the most recent message associated with a node's state update."""
@@ -326,12 +369,12 @@ class ChatbotWorkflow:
         """Reject generated SQL that is not a single read-only station query."""
         normalized_query = query.strip()
         if not re.match(r"^SELECT\b", normalized_query, re.IGNORECASE):
-            raise ValueError("Generated query must be a SELECT statement.")
+            raise ProgrammingError("Generated query must be a SELECT statement.")
         if ";" in normalized_query:
-            raise ValueError("Generated query must contain only one statement.")
+            raise ProgrammingError("Generated query must contain only one statement.")
         table_references = re.findall(r"\b(?:FROM|JOIN)\s+`?([A-Za-z0-9_]+)`?", normalized_query, re.IGNORECASE)
         if not table_references or any(reference.lower() != table_name.lower() for reference in table_references):
-            raise ValueError("Generated query references a table other than the selected station table.")
+            raise ProgrammingError("Generated query references a table other than the selected station table.")
 
     @staticmethod
     def _sub_queries_for(state: ChatState, query_type: QueryType) -> list[QueryClassification]:
@@ -371,7 +414,6 @@ class ChatbotWorkflow:
                     "messages": [("user", sub_query.reworded_query)],
                     "original_user_input": state["original_user_input"],
                     "nearest_station_id": state["nearest_station_id"],
-                    "nearest_station_schema": state["nearest_station_schema"],
                     "sub_queries": [sub_query],
                 },
             )
