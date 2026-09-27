@@ -22,9 +22,15 @@ def workflow() -> ChatbotWorkflow:
 @pytest.mark.parametrize(
     ("user_input", "coords", "county"),
     [
-        ("What is the current weather in Pullman, WA?", (46.7319, -117.1510), "whitman"),
-        ("What was the hottest day this past August?", (47.3936, -120.4299), "chelan"),
-        ("What is the lowest temperature it will be tonight?", (48.7319, -122.5026), "whatcom"),
+        ("How’s the frost risk looking for my sweet cherries this week?", (46.7319, -117.1510), "whitman"),
+        ("How much rain did we get yesterday?", (46.7319, -117.1510), "whitman"),
+        ("How’s frost looking?", (46.7319, -117.1510), "whitman"),
+        ("What was the high temperature yesterday?", (46.7319, -117.1510), "whitman"),
+        ("Should I irrigate my grapes tomorrow?", (46.7319, -117.1510), "whitman"),
+        ("Any pest risks for apples right now?", (46.7319, -117.1510), "whitman"),
+        ("What’s the 7-day weather outlook?", (46.7319, -117.1510), "whitman"),
+        ("How’s the cattle comfort index today?", (46.7319, -117.1510), "whitman"),
+        ("When should I spray my cherries?", (46.7319, -117.1510), "whitman"),
     ],
 )
 def test_chatbot_workflow(
