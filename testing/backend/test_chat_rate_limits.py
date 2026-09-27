@@ -15,16 +15,14 @@ from pytest import LogCaptureFixture, MonkeyPatch
 
 
 @pytest.mark.parametrize(
-    ("provider_message", "public_message"),
+    "provider_message",
     [
         pytest.param(
             "private provider detail",
-            "The answer provider is rate-limiting requests. Please try again later.",
             id="temporary",
         ),
         pytest.param(
             "Rate limit exceeded: free-models-per-day. private provider detail",
-            "The model provider's daily free allowance has been reached. Please try again after the allowance resets.",
             id="daily-allowance",
         ),
     ],
@@ -35,7 +33,6 @@ def test_provider_rate_limit_returns_service_unavailable(
     caplog: LogCaptureFixture,
     provider: str,
     provider_message: str,
-    public_message: str,
 ) -> None:
     """Return a useful error without exposing provider diagnostics."""
     provider_response = httpx.Response(429, request=httpx.Request("POST", "https://example.test"))
@@ -56,7 +53,7 @@ def test_provider_rate_limit_returns_service_unavailable(
     )
 
     assert response.status_code == 503
-    assert response.json() == {"detail": public_message}
+    assert response.json() == {"detail": "A model provider is rate-limiting requests. Please try again later."}
     assert "private provider detail" not in response.text
     assert "private provider detail" not in caplog.text
     retriever.retrieve.assert_called_once_with("Weather in Pullman?", filter=None)
