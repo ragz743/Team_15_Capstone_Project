@@ -78,7 +78,7 @@ uvicorn backend.api:app --reload --port 8000
 In another terminal:
 
 ```bash
-cd code/frontend
+cd code_/frontend
 npm install
 npm run dev
 ```

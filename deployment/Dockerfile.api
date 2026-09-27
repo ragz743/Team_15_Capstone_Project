@@ -7,9 +7,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml README.md ./
-COPY code/__init__.py ./code/__init__.py
-COPY code/backend ./code/backend
-COPY code/scripts ./code/scripts
+COPY code_/__init__.py ./code_/__init__.py
+COPY code_/backend ./code_/backend
+COPY code_/scripts ./code_/scripts
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .

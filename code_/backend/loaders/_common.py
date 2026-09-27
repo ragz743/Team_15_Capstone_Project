@@ -86,22 +86,13 @@ def _format_cell(value: object) -> str:
 
 
 def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
-    """Convert a collection of named tuple object into a markdown table.
-
-    Columns where every station reading is None are dropped entirely. A station
-    that does not report a measurement should have no column for it rather than
-    a column of nulls, which the chatbot may otherwise fill with a plausible
-    invented number.
-    """
-    fields = tuples[0]._fields
-    keep = [i for i in range(len(fields)) if any(row[i] is not None for row in tuples)]
-    # Every column was null; fall back to the full set so the table is never empty.
-    if not keep:
-        keep = list(range(len(fields)))
-
-    columns = [(fields[i], units[i]) for i in keep]
+    """Convert a collection of named tuple object into a markdown table."""
+    if len(tuples[0]) != len(units):
+        msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
+        raise ValueError(msg)
+    columns = zip(tuples[0]._fields, units, strict=True)
     header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(keep))) + " |\n"
-    rows = ["| " + " | ".join(_format_cell(row[i]) for i in keep) + " |\n" for row in tuples]
+    divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"
+    rows = ["| " + " | ".join(map(str, row)) + " |\n" for row in tuples]
 
     return header + divider + "".join(rows)

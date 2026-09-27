@@ -5,8 +5,8 @@
 env
 venv
 node_modules
-code/frontend/node_modules
-code/frontend/dist
+code_frontend/node_modules
+code_frontend/dist
 dist
 build
 **/__pycache__

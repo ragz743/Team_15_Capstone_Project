@@ -38,13 +38,13 @@ Here are links to the issues that we completed in this sprint:
 
 ## Code Files for Review
 Please review the following code files, which were actively developed during this sprint, for quality:
- * [indexer.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code/backend/indexer.py)
- * [model_factory.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code/backend/model_factory.py)
- * [retriever.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code/backend/retriever.py)
- * [vector_store.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code/backend/vector_store.py)
- * [databases folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/databases)
- * [loaders folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/loaders)
- * [models folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/models)
+ * [indexer.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code_/backend/indexer.py)
+ * [model_factory.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code_/backend/model_factory.py)
+ * [retriever.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code_/backend/retriever.py)
+ * [vector_store.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code_/backend/vector_store.py)
+ * [databases folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code_/backend/databases)
+ * [loaders folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code_/backend/loaders)
+ * [models folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code_/backend/models)
 
 ## Retrospective Summary
 Here's what went well:
