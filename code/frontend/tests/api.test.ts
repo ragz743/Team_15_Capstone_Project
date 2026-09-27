@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ApiError, sendChat } from "../src/lib/api.ts";
+import { ApiError, sendChat, type ChatMessage } from "../src/lib/api.ts";
 
 const messages = [{ role: "user" as const, content: "Weather in Pullman?" }];
 
@@ -19,6 +19,96 @@ test("sends the conversation and cancellation signal, and returns the answer", a
   assert.deepEqual(JSON.parse(options.body), { messages });
   assert.equal(new Headers(options.headers).get("Content-Type"), "application/json");
   assert.equal(options.signal, controller.signal);
+});
+
+test("continues past twenty turns without changing the displayed transcript", async (t) => {
+  const transcript: ChatMessage[] = [];
+  const reply = { reply: "Pullman: 72°F.", model: "test-model" };
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json(reply));
+
+  for (let turn = 0; turn < 25; turn++) {
+    transcript.push({ role: "user", content: `Weather question ${turn}?` });
+    const snapshot = structuredClone(transcript);
+    await sendChat(transcript);
+
+    const options = fetchMock.mock.calls[turn].arguments[1];
+    assert.ok(typeof options?.body === "string");
+    const sent = JSON.parse(options.body).messages;
+    assert.deepEqual(sent, transcript.slice(-40));
+    assert.deepEqual(sent.at(-1), transcript.at(-1));
+    assert.deepEqual(transcript, snapshot);
+    transcript.push({ role: "assistant", content: reply.reply });
+  }
+});
+
+test("keeps the latest question within the total character budget", async (t) => {
+  const transcript: ChatMessage[] = Array.from({ length: 9 }, (_, index) => ({
+    role: index % 2 === 0 ? "user" : "assistant",
+    content: String(index).repeat(4000),
+  }));
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Answer", model: "test" }));
+
+  await sendChat(transcript);
+
+  const options = fetchMock.mock.calls[0].arguments[1];
+  assert.ok(typeof options?.body === "string");
+  assert.deepEqual(JSON.parse(options.body).messages, transcript.slice(-8));
+});
+
+for (const olderMessage of [
+  { role: "assistant" as const, content: "a".repeat(4001) },
+  { role: "user" as const, content: "a".repeat(4001) },
+  { role: "assistant" as const, content: "" },
+]) {
+  test(`can send a new question after an invalid ${olderMessage.role} message of length ${olderMessage.content.length}`, async (t) => {
+    const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Answer", model: "test" }));
+
+    await sendChat([...messages, olderMessage, ...messages]);
+
+    const options = fetchMock.mock.calls[0].arguments[1];
+    assert.ok(typeof options?.body === "string");
+    assert.deepEqual(JSON.parse(options.body).messages, messages);
+  });
+}
+
+test("counts Unicode characters the same way as the backend", async (t) => {
+  const transcript: ChatMessage[] = [
+    { role: "user", content: "Weather?" },
+    { role: "assistant", content: "🌞".repeat(4000) },
+    ...messages,
+  ];
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Answer", model: "test" }));
+
+  await sendChat(transcript);
+
+  const options = fetchMock.mock.calls[0].arguments[1];
+  assert.ok(typeof options?.body === "string");
+  assert.deepEqual(JSON.parse(options.body).messages, transcript);
+});
+
+test("preserves an oversized active question for backend validation", async (t) => {
+  const transcript: ChatMessage[] = [{ role: "user", content: "a".repeat(4001) }];
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Question is too long" }, { status: 422 }));
+
+  await assert.rejects(sendChat(transcript), { name: "ApiError", status: 422, message: "Question is too long" });
+
+  const options = fetchMock.mock.calls[0].arguments[1];
+  assert.ok(typeof options?.body === "string");
+  assert.deepEqual(JSON.parse(options.body).messages, transcript);
+});
+
+test("preserves the latest user turn even when later assistant messages exceed the cap", async (t) => {
+  const transcript: ChatMessage[] = [
+    ...messages,
+    ...Array.from({ length: 40 }, () => ({ role: "assistant" as const, content: "Answer" })),
+  ];
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Answer", model: "test" }));
+
+  await sendChat(transcript);
+
+  const options = fetchMock.mock.calls[0].arguments[1];
+  assert.ok(typeof options?.body === "string");
+  assert.deepEqual(JSON.parse(options.body).messages, messages);
 });
 
 for (const body of [null, {}, { reply: 72, model: "test" }, { reply: " \n", model: "test" }, { reply: "72°F" }]) {
