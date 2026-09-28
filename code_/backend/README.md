@@ -32,10 +32,10 @@ Open:
 http://localhost:8080
 ```
 
-Try a question like:
+Choose a point on the map, then try a question like:
 
 ```text
-what was the average temperature in Whitman county recently?
+What was the temperature here yesterday?
 ```
 
 The Docker setup starts three services:
@@ -103,7 +103,7 @@ Example request:
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"hello"}]}'
+  -d '{"messages":[{"role":"user","content":"Temperature here yesterday?"}],"point":{"latitude":46.73,"longitude":-117.18}}'
 ```
 
 Example response:
@@ -115,8 +115,26 @@ Example response:
 }
 ```
 
-The API accepts a message list from the frontend, but today it only sends the
-latest user message to `Retriever.retrieve()`.
+The API passes the latest question and preceding user/assistant messages to the
+weather interpreter. The browser chooses a map point; station filters are no longer
+accepted. The server selects its nearby indexed source and validates the model's
+structured dates before retrieval. The model can also ask for clarification or decline
+an unrelated request.
+
+The source catalog is cached for five minutes. Sources must have consistent Washington
+coordinates and be within 50 km of the requested point. Set `radius_km` on
+`StationCatalog` to adjust that limit. Missing records do not cause a switch to another
+source. The first lookup and expired cache refreshes still read indexed station metadata.
+
+The API continues to use `Retriever`. `ChatbotWorkflow` queries the AWN databases
+directly and requires county input and session handling. Connecting it to the API is
+a separate integration change.
+
+The CLI uses the same selection flow:
+
+```bash
+retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
+```
 
 ## Configuration
 

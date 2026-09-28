@@ -1,5 +1,6 @@
 """Controlled interpretation and source records for local retrieval tests."""
 
+import json
 from unittest.mock import MagicMock
 
 from backend.vector_store import PgVectorStore
@@ -8,6 +9,22 @@ from langchain_core.documents import Document
 
 POINT = RequestedPoint(latitude=46.73, longitude=-117.18)
 STATION = Station("1", "Pullman", "Whitman", "46.731", "117.181", "WA")
+
+
+def intent_json(**changes) -> str:
+    """Return a valid provider response with explicit overrides."""
+    return json.dumps(
+        {
+            "action": "query",
+            "location": "selected",
+            "data_kind": "both",
+            "start": "2026-09-09",
+            "end": "2026-09-09",
+            "question": "Temperature here on 2026-09-09?",
+            "message": "",
+            **changes,
+        }
+    )
 
 
 def weather_stores():

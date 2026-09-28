@@ -56,7 +56,7 @@ def test_provider_rate_limit_returns_service_unavailable(
     assert response.json() == {"detail": "A model provider is rate-limiting requests. Please try again later."}
     assert "private provider detail" not in response.text
     assert "private provider detail" not in caplog.text
-    retriever.retrieve.assert_called_once_with("Weather in Pullman?", point=None)
+    retriever.retrieve.assert_called_once_with("Weather in Pullman?", point=None, history=[])
 
 
 def test_other_retrieval_errors_keep_generic_response(monkeypatch: MonkeyPatch, caplog: LogCaptureFixture) -> None:
@@ -73,4 +73,4 @@ def test_other_retrieval_errors_keep_generic_response(monkeypatch: MonkeyPatch, 
     assert response.json() == {"detail": "The weather service could not complete your request. Please try again."}
     assert "private provider detail" not in response.text
     assert "private provider detail" not in caplog.text
-    retriever.retrieve.assert_called_once_with("Weather in Pullman?", point=None)
+    retriever.retrieve.assert_called_once_with("Weather in Pullman?", point=None, history=[])

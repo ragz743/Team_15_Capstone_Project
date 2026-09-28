@@ -3,12 +3,14 @@
 from backend.models._chatbot_base import _BaseChatbot
 from backend.station_catalog import StationCatalog
 from backend.vector_store import PgVectorStore
-from backend.weather_query import (
-    QueryClarificationError,
-    RequestedPoint,
-    resolve_point_query,
+from backend.weather_intent import WeatherIntent, WeatherInterpreter
+from backend.weather_query import QueryClarificationError, RequestedPoint, WeatherQuery
+from backend.weather_records import (
+    TABLE_LABELS,
+    append_sources,
+    document_context,
+    source_label,
 )
-from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
 
 RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
@@ -42,10 +44,8 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
           station or a value.
         - Report timestamps exactly as they appear. If a row shows only a date,
           do not add a time of day.
-        - If the question names a county, city, or station, only discuss
-          stations whose header line matches it. Stations outside that area may
-          appear in the context — ignore them. If none of the stations in the
-          context match, say so instead of answering about a different area.
+        - The source was selected for the user chosen map point. Explain that
+          measurements come from the nearby source, not necessarily the exact point.
         - Always cite the station name and timestamp for every measurement
           you reference (e.g. "At Pullman Station on 2026-04-25 at 14:00").
         - Always include units for every numeric value (e.g. °F, %, mph, inches).
@@ -56,7 +56,7 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
         - If the context does not contain enough information to fully answer
           the question, say so clearly and state what is missing (e.g. the
           station name, time range, or specific metric).
-        - If the question is ambiguous — missing a station, unclear time
+        - If the question is ambiguous — unclear location, unclear time
           range, or unclear metric — ask a clarifying question instead of
           guessing.
 
@@ -73,90 +73,66 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
 NO_DATA = "No matching weather records were found in the indexed data. I cannot provide an answer to this question."
 _SEARCH_K = 8
 
-_TABLE_LABELS: dict[str, str] = {
-    "daily_index": "Historical Data",
-    "live_index": "Current Conditions",
-    "forecast_index": "Forecast Data",
-}
-
 
 class Retriever:
-    """The class responsible for vector store search and presentation to user process."""
+    """Coordinate location lookup, interpretation, retrieval and grounded answers."""
 
-    _vector_stores: list[PgVectorStore]
-    _chatbot: _BaseChatbot
-
-    def __init__(self, vector_stores: PgVectorStore | list[PgVectorStore], chatbot: _BaseChatbot) -> None:
-        """Create an instance of the Retriever class."""
+    def __init__(
+        self,
+        vector_stores: PgVectorStore | list[PgVectorStore],
+        chatbot: _BaseChatbot,
+        *,
+        catalog: StationCatalog | None = None,
+        interpreter: WeatherInterpreter | None = None,
+    ) -> None:
+        """Create the reusable catalog and interpretation boundary."""
         self._vector_stores = [vector_stores] if isinstance(vector_stores, PgVectorStore) else vector_stores
         self._chatbot = chatbot
-        self._catalog = StationCatalog(
-            lambda: (station for store in self._vector_stores for station in store.stations())
+        self._catalog = catalog or StationCatalog(
+            lambda: [station for store in self._vector_stores for station in store.stations()]
         )
+        self._interpreter = interpreter or WeatherInterpreter(chatbot)
 
-    def retrieve(self, question: str, *, point: RequestedPoint | None = None) -> str:
-        """Search records for the source nearest the chosen point."""
+    def retrieve(
+        self,
+        question: str,
+        *,
+        point: RequestedPoint | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Resolve a map point and validate the model interpretation before searching."""
         if point is None:
             return "Choose a point on the map before asking about the weather."
         try:
             station = self._catalog.resolve(point)
-            selection = resolve_point_query(question, station)
         except QueryClarificationError as exc:
             return str(exc)
-
-        sections: list[str] = []
-        sources: list[str] = []
-        for store in self._vector_stores:
-            docs: list[Document] = store.similarity_search(question, k=_SEARCH_K, selection=selection)
-            if docs:
-                label = _TABLE_LABELS.get(store.table, store.table)
-                content = "\n\n".join(_document_context(doc) for doc in docs)
-                sections.append(f"[{label}]\n{content}")
-                sources.extend(_source_label(doc, store.table) for doc in docs)
-
+        intent = self._interpreter.interpret(question, point, station, history=history)
+        if intent.action != "query":
+            return intent.message
+        if intent.location != "selected":
+            return "Your question refers to another or unclear location. Choose that point on the map, then ask again."
+        selection = intent.selection(station)
+        sections, sources = self._collect_records(intent, selection)
         if not sections:
             return NO_DATA
+        prompt = RAG_PROMPT_TEMPLATE.format(context="\n\n".join(sections), question=intent.question)
+        return append_sources(self._chatbot.invoke([prompt]), sources)
 
-        context: str = "\n\n".join(sections)
-        prompt: str = RAG_PROMPT_TEMPLATE.format(context=context, question=question)
-        answer = self._chatbot.invoke([prompt])
-        if not answer.strip():
-            return answer
-        labels = "\n".join(dict.fromkeys(sources))
-        return (
-            answer
-            + "\n\nRetrieved records:\n"
-            + labels
-            + "\nThese records may not cover every station or day you requested."
-        )
-
-
-def _document_context(doc: Document) -> str:
-    fields = (
-        ("station", "Station"),
-        ("id", "Station ID"),
-        ("county", "County"),
-        ("state", "State"),
-        ("date", "Observation date"),
-        ("timestamp", "Observation timestamp"),
-        ("dates", "Forecast dates"),
-    )
-    identity = "\n".join(f"{label}: {doc.metadata[key]}" for key, label in fields if doc.metadata.get(key))
-    return f"{identity}\n{doc.page_content}" if identity else doc.page_content
+    def _collect_records(self, intent: WeatherIntent, selection: WeatherQuery) -> tuple[list[str], list[str]]:
+        sections, sources = [], []
+        for store in self._vector_stores:
+            if not _uses_store(intent, store.table):
+                continue
+            docs = store.similarity_search(intent.question, k=_SEARCH_K, selection=selection)
+            if docs:
+                content = "\n\n".join(document_context(doc, store.table) for doc in docs)
+                sections.append(f"[{TABLE_LABELS[store.table]}]\n{content}")
+                sources.extend(source_label(doc, store.table) for doc in docs)
+        return sections, sources
 
 
-def _source_label(doc: Document, table: str) -> str:
-    metadata = doc.metadata
-    if table == "forecast_index":
-        times = metadata["dates"]
-        kind = "forecast"
-    else:
-        key = {"daily_index": "date", "live_index": "timestamp"}[table]
-        times = [metadata[key]]
-        kind = "observation"
-    county = metadata.get("county")
-    return (
-        f"{metadata['station']} (station {metadata['id']})"
-        + (f", {county} County" if county else "")
-        + f": {', '.join(str(value) for value in times)} ({kind})"
-    )
+def _uses_store(intent: WeatherIntent, table: str) -> bool:
+    if intent.data_kind == "both":
+        return True
+    return (table == "forecast_index") == (intent.data_kind == "forecast")

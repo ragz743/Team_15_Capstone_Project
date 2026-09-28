@@ -47,4 +47,4 @@ def test_valid_point_reaches_retrieval(monkeypatch):
         },
     )
     assert response.status_code == 200
-    retriever.retrieve.assert_called_once_with("Weather?", point=POINT)
+    retriever.retrieve.assert_called_once_with("Weather?", point=POINT, history=[])

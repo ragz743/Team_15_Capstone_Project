@@ -104,6 +104,13 @@ def _latest_user_message(messages: list[ChatMessage]) -> str | None:
     return None
 
 
+def _preceding_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == "user":
+            return [message.model_dump() for message in messages[:index] if message.role != "system"]
+    return []
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the retriever once at process start."""
@@ -185,7 +192,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
-        reply = _retriever.retrieve(question, point=request.point)
+        reply = _retriever.retrieve(question, point=request.point, history=_preceding_messages(request.messages))
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
         raise _retrieval_error(exc) from exc
