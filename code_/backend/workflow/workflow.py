@@ -128,6 +128,16 @@ class ChatbotWorkflow:
         self.historical_daily_db = AWNDailyDatabaseConnection()
         self.forecast_db = AWNForecastDatabaseConnection()
 
+    def close(self) -> None:
+        """Close all open connections."""
+        for db in (
+            self.current_db,
+            self.forecast_db,
+            self.historical_daily_db,
+        ):
+            if db.conn.is_connected():
+                db.conn.shutdown()
+
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
         nearest_station_id = self._nearest_station_search(
@@ -323,7 +333,7 @@ class ChatbotWorkflow:
             when values come from the user, and return the SQL only.{retry_instructions}
             """
             generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
-            self._log_event(node_name, "generated_sql", generated_query)
+            self._log_event(node_name, "generated_sql", "\n" + generated_query)
             try:
                 self._validate_generated_query(generated_query, table_name)
                 results = list(database.simple_query(generated_query, ()))

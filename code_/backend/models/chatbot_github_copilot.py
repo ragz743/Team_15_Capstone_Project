@@ -14,11 +14,10 @@ class ChatbotCopilot(_BaseChatbot):
     def __init__(self, kwargs) -> None:
         """Create an instance of the ChatbotOpenRouter."""
         self._model: str = kwargs.pop("model")
-        self._client = CopilotClient()
 
     async def _async_invoke(self, messages: str) -> str:
         """Asynchronously invoke copilot model returning the response."""
-        async with self._client as client:
+        async with CopilotClient() as client:
             async with await client.create_session(
                 on_permission_request=(lambda _req, _invok: PermissionDecisionReject()),  # deny all
                 model=self._model,
