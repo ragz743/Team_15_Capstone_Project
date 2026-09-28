@@ -14,8 +14,8 @@ from uuid import UUID
 
 import dotenv
 import psycopg
-from backend.chat_turn import AnsweredTurn, PreparedChatTurn
-from backend.conversation_context import TIMEZONE, ConversationContext
+from backend.chat_service import ChatServiceError, SavedChatService
+from backend.conversation_context import ConversationContext
 from backend.conversation_store import (
     ConversationNotFoundError,
     ConversationStore,
@@ -211,6 +211,22 @@ def _retrieval_error(exc: BaseException) -> HTTPException:
     )
 
 
+@app.exception_handler(ChatServiceError)
+async def chat_service_error(request: Request, exc: ChatServiceError):
+    """Distinguish saved history failures from weather retrieval failures."""
+    name = "Saved conversation service" if exc.operation == "history" else "The weather service"
+    if exc.reason == "unavailable":
+        error = HTTPException(status_code=503, detail=f"{name} is temporarily unavailable. Please try again later.")
+    elif exc.reason == "empty":
+        error = HTTPException(status_code=502, detail=f"{name} returned an empty answer. Please try again.")
+    else:
+        error = _retrieval_error(exc.__cause__ or exc)
+        if error.status_code == 502:
+            error.detail = f"{name} could not complete your request. Please try again."
+    logger.error("%s request failed (%s)", exc.operation, type(exc.__cause__ or exc).__name__)
+    return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+
+
 @app.exception_handler(ConversationNotFoundError)
 async def conversation_not_found(request: Request, exc: ConversationNotFoundError):
     """Use the same response for missing and foreign conversation IDs."""
@@ -285,113 +301,11 @@ def _saved_chat(payload: SavedChatRequest, request: Request, response: Response)
     if not question:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
     owner = _owner(request, response)
-    turn = _conversations.begin(
-        owner,
-        payload.conversation_id,
-        payload.request_id,
-        question,
-        request_input={"point": payload.point.model_dump()} if payload.point is not None else {},
+    service = SavedChatService(_conversations, _history_service, _retriever, _chatbot_model_name)
+    result = service.run(owner, payload.conversation_id, payload.request_id, question, point=payload.point)
+    return SavedChatResponse(
+        **result.response(), conversation_id=payload.conversation_id, request_id=payload.request_id
     )
-    if turn.completed is not None:
-        return SavedChatResponse(
-            **turn.completed,
-            context=turn.context,
-            conversation_id=payload.conversation_id,
-            request_id=payload.request_id,
-        )
-    try:
-        prepared = turn.prepared
-        if prepared is None:
-            if _history_service is None:
-                raise HTTPException(status_code=503, detail="Conversation understanding is temporarily unavailable.")
-            day = turn.requested_at.astimezone(TIMEZONE).date()
-            history = _history_service.prepare(
-                _conversations, owner, payload.conversation_id, question, accepted_at=turn.requested_at
-            )
-            if history.snapshot is not None:
-                prepared = PreparedChatTurn(
-                    outcome="history",
-                    question=question,
-                    context=turn.context,
-                    history=history.snapshot,
-                )
-            elif history.reply is not None:
-                prepared = PreparedChatTurn(
-                    outcome="needs_clarification" if history.intent.action == "clarify" else "history",
-                    question=question,
-                    context=turn.context,
-                    reply=history.reply,
-                )
-            else:
-                if _retriever is None:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="The weather service is temporarily unavailable. Please try again later.",
-                    )
-                context = turn.context
-                if history.intent.action == "reuse":
-                    question = history.intent.weather_question or question
-                    context = history.context or context
-                prepared = _retriever.prepare_turn(
-                    question,
-                    context,
-                    today=day,
-                    point=payload.point,
-                    history=history.recent if history.intent.action == "weather" else [],
-                )
-            _conversations.prepare(owner, payload.conversation_id, payload.request_id, turn.attempt_id, prepared)
-        context = prepared.context
-        if prepared.history is not None:
-            if _history_service is None:
-                raise HTTPException(status_code=503, detail="Saved conversation answers are temporarily unavailable.")
-            reply = _history_service.answer(prepared.question, prepared.history)
-            result = AnsweredTurn(reply=reply, outcome="history")
-            model = _history_service.model_name
-        elif prepared.reply is not None:
-            reply = prepared.reply
-            assert prepared.outcome != "weather"
-            result = AnsweredTurn(reply=reply, outcome=prepared.outcome)
-            model = "saved-history" if prepared.outcome == "history" else _chatbot_model_name
-        else:
-            if _retriever is None:
-                raise HTTPException(
-                    status_code=503, detail="The weather service is temporarily unavailable. Please try again later."
-                )
-            result = _retriever.answer_result(prepared)
-            reply = result.reply
-            model = _chatbot_model_name
-        if not reply.strip():
-            raise HTTPException(
-                status_code=502, detail="The weather service returned an empty answer. Please try again."
-            )
-        metadata = result.model_dump(mode="json", exclude={"reply"})
-        _conversations.complete(
-            owner,
-            payload.conversation_id,
-            payload.request_id,
-            turn.attempt_id,
-            reply,
-            model,
-            context,
-            metadata=metadata,
-        )
-        return SavedChatResponse(
-            reply=reply,
-            model=model,
-            context=context,
-            conversation_id=payload.conversation_id,
-            request_id=payload.request_id,
-            **metadata,
-        )
-    except Exception as exc:
-        try:
-            _conversations.fail(owner, payload.conversation_id, payload.request_id, turn.attempt_id)
-        except psycopg.Error:
-            logger.error("Could not record failed conversation turn")
-        if isinstance(exc, (HTTPException, ConversationNotFoundError, TurnConflictError, psycopg.Error)):
-            raise
-        logger.error("Saved conversation request failed (%s)", type(exc).__name__)
-        raise _retrieval_error(exc) from exc
 
 
 @app.get("/api/health")
