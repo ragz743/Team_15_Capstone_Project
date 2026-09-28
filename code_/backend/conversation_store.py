@@ -48,8 +48,10 @@ class ConversationStore:
         self._connect = connect
 
     @contextmanager
-    def _cursor(self):
+    def _cursor(self, *, read_only: bool = False):
         with self._connect() as conn, conn.cursor(row_factory=dict_row) as cursor:
+            if read_only:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             cursor.execute("SET LOCAL statement_timeout = '5s'")
             cursor.execute("SET LOCAL TIME ZONE 'UTC'")
             yield cursor
@@ -102,7 +104,7 @@ class ConversationStore:
 
     def get(self, owner: UUID, conversation: UUID, *, before: int | None = None) -> dict:
         """Load context and at most 40 ordered turns from the same database snapshot."""
-        with self._cursor() as cur:
+        with self._cursor(read_only=True) as cur:
             cur.execute(
                 "SELECT id, title, created_at, updated_at, context FROM conversations WHERE id = %s AND owner_id = %s",
                 (conversation, owner),

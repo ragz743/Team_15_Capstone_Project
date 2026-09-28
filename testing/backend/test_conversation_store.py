@@ -1,8 +1,10 @@
 """Verify persisted conversations without the API or model providers."""
 
 import os
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
@@ -164,3 +166,40 @@ print(json.dumps({"messages": [m["content"] for m in saved["messages"]], "contex
     recovered = json.loads(child.stdout)
     assert recovered["messages"] == ["Temperature at Pullman on 2026-09-10", "72 F"]
     assert recovered["context"]["start"] == "2026-09-10"
+
+
+def test_reload_keeps_messages_and_context_from_one_snapshot(store, database, completed, monkeypatch):
+    """A reply committed during reload must not pair new messages with old map context."""
+    owner, _ = store.create_owner()
+    chat = store.create(owner)["id"]
+    completed(store, owner, chat)
+    initial = store.get(owner, chat)
+    request = uuid4()
+    turn = store.begin(owner, chat, request, "Wind at the new point?")
+    context = ConversationContext.model_validate(
+        {**initial["context"], "station_ids": ["2"], "point": {"latitude": 47.2, "longitude": -120.5}}
+    )
+    reader = ConversationStore(database)
+    original_cursor = reader._cursor
+
+    @contextmanager
+    def complete_during_reload(**options):
+        with original_cursor(**options) as cursor:
+
+            def execute(query, parameters=None):
+                if query.startswith("SELECT t.*"):
+                    store.complete(owner, chat, request, turn.attempt_id, "New weather reply", "fixture", context)
+                return cursor.execute(query, parameters)
+
+            proxy = MagicMock(wraps=cursor)
+            proxy.execute.side_effect = execute
+            yield proxy
+
+    monkeypatch.setattr(reader, "_cursor", complete_during_reload)
+    reloaded = reader.get(owner, chat)
+    assert reloaded["context"] == initial["context"]
+    assert len(reloaded["messages"]) == 3
+    assert reloaded["messages"][-1]["status"] == "pending"
+    latest = store.get(owner, chat)
+    assert latest["context"] == context.model_dump(mode="json")
+    assert latest["messages"][-1]["content"] == "New weather reply"
