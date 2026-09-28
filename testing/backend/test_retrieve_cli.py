@@ -1,36 +1,51 @@
-"""CLI input and refresh behavior."""
+"""CLI map inputs and timestamp freshness behavior."""
 
+from datetime import date
 from unittest.mock import MagicMock, patch
 
+import pytest
+from scripts import retrieve
 from weather_fixtures import POINT
 
 
-def test_is_stale_returns_true_when_no_rows_today():
-    """_is_stale returns True when live_index has no record for today."""
-    from scripts.retrieve import _is_stale
-
-    mock_conn = MagicMock()
-    mock_conn.simple_query.return_value = [(0,)]
-    with patch("backend.databases.pgvector.PgVectorConnection", return_value=mock_conn):
-        assert _is_stale() is True
-
-
-def test_is_stale_returns_false_when_rows_exist_today():
-    """_is_stale returns False when live_index has at least one record for today."""
-    from scripts.retrieve import _is_stale
-
-    mock_conn = MagicMock()
-    mock_conn.simple_query.return_value = [(5,)]
-    with patch("backend.databases.pgvector.PgVectorConnection", return_value=mock_conn):
-        assert _is_stale() is False
+@pytest.mark.parametrize("exists", [True, False])
+def test_freshness_compares_timestamp_date_in_washington_and_closes_connection(monkeypatch, exists):
+    """Full observation timestamps must match without reindexing on every command."""
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.simple_query.return_value = [(exists,)]
+    monkeypatch.setattr("backend.databases.pgvector.PgVectorConnection", lambda: connection)
+    monkeypatch.setattr(retrieve, "washington_today", lambda: date(2026, 9, 9))
+    assert retrieve._is_stale() is not exists
+    query, params = connection.simple_query.call_args.args
+    assert b"left(metadata->>'timestamp', 10) = %s" in query
+    assert b"EXISTS" in query and params == ("2026-09-09",)
+    connection.__exit__.assert_called_once()
 
 
-def test_is_stale_returns_false_on_db_error():
-    """_is_stale returns False (non-blocking) when the database is unreachable."""
-    from scripts.retrieve import _is_stale
+def test_freshness_failure_closes_connection_without_triggering_refresh(monkeypatch):
+    """A failed read must not leak the connection or start writes to every index."""
+    connection = MagicMock()
+    connection.__enter__.return_value = connection
+    connection.simple_query.side_effect = RuntimeError("read failed")
+    monkeypatch.setattr("backend.databases.pgvector.PgVectorConnection", lambda: connection)
+    assert retrieve._is_stale() is False
+    connection.__exit__.assert_called_once()
 
-    with patch("backend.databases.pgvector.PgVectorConnection", side_effect=Exception("connection refused")):
-        assert _is_stale() is False
+
+def test_cli_passes_point_and_preserves_question(monkeypatch, capsys):
+    """Manual requests use the same point selection flow as browser requests."""
+    model, retriever = MagicMock(), MagicMock()
+    retriever.retrieve.return_value = "Weather response"
+    monkeypatch.setattr(retrieve.ModelFactory, "load_from_models_yaml", lambda: (model, model))
+    monkeypatch.setattr(retrieve, "PgVectorStore", MagicMock())
+    monkeypatch.setattr(retrieve, "Retriever", lambda *_: retriever)
+    monkeypatch.setattr(
+        "sys.argv", ["retrieve", "--no-refresh", "--latitude", "46.73", "--longitude", "-117.18", "Rain yesterday?"]
+    )
+    retrieve.main()
+    retriever.retrieve.assert_called_once_with("Rain yesterday?", point=POINT)
+    assert "Weather response" in capsys.readouterr().out
 
 
 def test_refresh_runs_all_three_loaders():

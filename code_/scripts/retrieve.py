@@ -1,13 +1,12 @@
 """Script for running a retrieval query manually."""
 
 import argparse
-from datetime import date
 
 import dotenv
 from backend.model_factory import ModelFactory
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
-from backend.weather_query import RequestedPoint
+from backend.weather_query import RequestedPoint, washington_today
 
 
 def _is_stale() -> bool:
@@ -15,15 +14,14 @@ def _is_stale() -> bool:
     try:
         from backend.databases.pgvector import PgVectorConnection
 
-        conn = PgVectorConnection()
-        rows = list(
-            conn.simple_query(
-                b"SELECT COUNT(*) FROM live_index WHERE metadata->>'timestamp' = %s",
-                (date.today().isoformat(),),
+        with PgVectorConnection() as conn:
+            rows = list(
+                conn.simple_query(
+                    b"SELECT EXISTS (SELECT 1 FROM live_index WHERE left(metadata->>'timestamp', 10) = %s)",
+                    (washington_today().isoformat(),),
+                )
             )
-        )
-        conn.conn.close()
-        return int(rows[0][0]) == 0
+        return not rows[0][0]
     except Exception:
         return False
 
