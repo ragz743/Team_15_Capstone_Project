@@ -130,6 +130,8 @@ The API continues to use `Retriever`. `ChatbotWorkflow` queries the AWN database
 directly and requires county input and session handling. Connecting it to the API is
 a separate integration change.
 
+For an existing database, apply `deployment/migrations/001_station_search_indexes.sql`
+when deploying the updated backend. Fresh databases receive these indexes from the seed.
 The CLI uses the same selection flow:
 
 ```bash
