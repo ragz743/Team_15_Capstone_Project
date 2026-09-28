@@ -100,6 +100,14 @@ def test_to_markdown_table_drops_all_none_columns() -> None:
     assert "74.8" in table
 
 
+def test_to_markdown_table_rejects_mismatched_units() -> None:
+    """Report a clear formatting error when headers and units have different lengths."""
+    rows = [SampleMeasurement("2026-09-16 12:00:00", 72.4, 0.1)]
+
+    with pytest.raises(ValueError, match="data and unit mismatch"):
+        _common.to_markdown_table(rows, [""])
+
+
 def test_format_cell_rounds_floats_and_decimals() -> None:
     """Verify _format_cell formats floats and Decimals to one decimal place."""
     assert _common._format_cell(12.3456) == "12.3"
