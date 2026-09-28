@@ -90,9 +90,13 @@ def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
     if len(tuples[0]) != len(units):
         msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
         raise ValueError(msg)
-    columns = zip(tuples[0]._fields, units, strict=True)
-    header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"
-    rows = ["| " + " | ".join(map(str, row)) + " |\n" for row in tuples]
+    columns = [
+        (index, name, unit)
+        for index, (name, unit) in enumerate(zip(tuples[0]._fields, units, strict=True))
+        if any(row[index] is not None for row in tuples)
+    ]
+    header = "| " + " | ".join(f"{name}{' in ' + unit if unit else ''}" for _, name, unit in columns) + " |\n"
+    divider = "| " + " | ".join(itertools.repeat("---", len(columns))) + " |\n"
+    rows = ["| " + " | ".join(_format_cell(row[index]) for index, _, _ in columns) + " |\n" for row in tuples]
 
     return header + divider + "".join(rows)
