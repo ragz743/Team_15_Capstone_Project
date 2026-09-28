@@ -142,6 +142,19 @@ def test_fallback_forecast_query_result_from_tuple() -> None:
     assert result.precip == 0.0
 
 
+@pytest.mark.parametrize(
+    ("result_type", "row"),
+    [
+        (PrimaryForecastQueryResult, (datetime(2026, 9, 16), 72.5)),
+        (FallbackForecastQueryResult, (datetime(2026, 9, 16), 70.0)),
+    ],
+)
+def test_forecast_query_result_from_tuple_rejects_wrong_row_shape(result_type, row) -> None:
+    """Reject primary and fallback forecast rows with an incorrect column count."""
+    with pytest.raises(ValueError, match="unrecognized tuple structure"):
+        result_type.from_tuple(row)
+
+
 def test_query_station_current_forecast_primary_success(monkeypatch, sample_metadata: MetadataQueryResult) -> None:
     """Check querying from primary forecast database when available."""
     tstamp = datetime(2026, 9, 16, 12, 0, 0)
@@ -197,6 +210,26 @@ def test_query_station_current_forecast_fallback_on_primary_error(
     assert isinstance(rows[0], FallbackForecastQueryResult)
     assert units == FallbackForecastQueryResult.get_units()
     assert f"FROM forecast{sample_metadata.unit_id}" in fallback_conn.queries[0]
+
+
+def test_query_station_current_forecast_skips_station_when_both_sources_fail(
+    monkeypatch,
+    sample_metadata: MetadataQueryResult,
+) -> None:
+    """Continue past a station when both primary and fallback forecast queries fail."""
+    primary_conn = FakeAWNForecastConnection(raise_error=True)
+    fallback_conn = FakeAWNFallbackConnection(raise_error=True)
+    monkeypatch.setattr(
+        "backend.loaders.forecast_loader.AWNForecastDatabaseConnection",
+        lambda: primary_conn,
+    )
+    monkeypatch.setattr(
+        "backend.loaders.forecast_loader.AWNForecastFallbackDatabaseConnection",
+        lambda: fallback_conn,
+    )
+    loader = ForecastLoader(embedding_model=FakeEmbeddingModel())  # type: ignore[arg-type]
+
+    assert loader._query_station_current_forecast([sample_metadata]) == []
 
 
 def test_load_builds_documents_correctly(monkeypatch, sample_metadata: MetadataQueryResult) -> None:
