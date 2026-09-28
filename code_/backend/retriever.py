@@ -1,6 +1,7 @@
 """Code for the data retriever controller class, Retriever."""
 
 from backend.models._chatbot_base import _BaseChatbot
+from backend.station_catalog import StationCatalog
 from backend.vector_store import PgVectorStore
 from backend.weather_query import (
     QueryClarificationError,
@@ -89,10 +90,13 @@ class Retriever:
         """Create an instance of the Retriever class."""
         self._vector_stores = [vector_stores] if isinstance(vector_stores, PgVectorStore) else vector_stores
         self._chatbot = chatbot
+        self._catalog = StationCatalog(
+            lambda: (station for store in self._vector_stores for station in store.stations())
+        )
 
     def stations(self) -> list[Station]:
-        """Build one catalog across all indexes, propagating database errors."""
-        return list(dict.fromkeys(station for store in self._vector_stores for station in store.stations()))
+        """Reuse the station catalog across questions until its next refresh."""
+        return self._catalog.stations()
 
     def retrieve(self, question: str, filter: dict | None = None) -> str:
         """Search all vector stores for relevant context and pass it to the chatbot.
