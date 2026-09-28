@@ -10,19 +10,30 @@ import logging
 import os
 from contextlib import asynccontextmanager
 from typing import Literal
+from uuid import UUID
 
 import dotenv
+import psycopg
+from backend.chat_service import ChatServiceError, SavedChatService
+from backend.conversation_context import ConversationContext
+from backend.conversation_store import (
+    ConversationNotFoundError,
+    ConversationStore,
+    TurnConflictError,
+)
+from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.models.embedding_openrouter import EmbeddingOpenRouter
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
 from backend.weather_query import RequestedPoint
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from openai import RateLimitError
 from openrouter.errors import TooManyRequestsResponseError
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
@@ -60,6 +71,35 @@ class ChatResponse(BaseModel):
     model: str
 
 
+class SavedChatRequest(BaseModel):
+    """One accepted message, with stable IDs for retries."""
+
+    model_config = ConfigDict(extra="forbid")
+    conversation_id: UUID
+    request_id: UUID
+    message: str = Field(min_length=1, max_length=4000)
+    point: RequestedPoint | None = None
+
+
+class SavedChatResponse(ChatResponse):
+    """Saved reply identity and the validated conversation context."""
+
+    context: ConversationContext
+    conversation_id: UUID
+    request_id: UUID
+    outcome: Literal["success", "history", "needs_clarification", "no_data"]
+
+
+_conversations = ConversationStore()
+_history_service: HistoryService | None = None
+_COOKIE = "awn_browser"
+_ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv("AWN_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    if origin.strip()
+]
+
+
 # initialized at startup.
 _chatbot: _BaseChatbot | None = None
 _retriever: Retriever | None = None
@@ -67,11 +107,15 @@ _chatbot_model_name: str = ""
 _embedding_model_name: str = ""
 
 
+def _chat_model() -> str:
+    return os.getenv("OPENROUTER_CHAT_MODEL", "").strip() or _DEFAULT_CHAT_MODEL
+
+
 def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     if not os.getenv("OPENROUTER_API_KEY"):
         logger.warning("OPENROUTER_API_KEY not set - /api/chat will fail until configured")
 
-    chat_model_name = os.getenv("OPENROUTER_CHAT_MODEL", "").strip() or _DEFAULT_CHAT_MODEL
+    chat_model_name = _chat_model()
     embedding_model_name = os.getenv("OPENROUTER_EMBEDDING_MODEL")
     if not embedding_model_name:
         msg = "OPENROUTER_EMBEDDING_MODEL must be set to initialize retrieval"
@@ -112,7 +156,17 @@ def _preceding_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
 async def lifespan(app: FastAPI):
     """Initialize the retriever once at process start."""
     global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name
+    global _history_service
     dotenv.load_dotenv()
+    try:
+        model_name = os.getenv("OPENROUTER_HISTORY_MODEL", "").strip() or _chat_model()
+        model = ChatbotOpenRouter(
+            {"model": model_name, "temperature": 0, "max_tokens": 1800, "request_timeout": 25000, "max_retries": 0}
+        )
+        _history_service = HistoryService(model, model_name)
+    except Exception:
+        logger.error("Failed to initialize conversation interpretation")
+        _history_service = None
     try:
         _retriever, _chatbot, _chatbot_model_name, _embedding_model_name = _build_retriever()
         logger.info(
@@ -139,14 +193,14 @@ app = FastAPI(
 # Dev only permissive CORS, NOT for production
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
-    allow_credentials=False,
+    allow_origins=_ALLOWED_ORIGINS,
+    allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
 
-def _retrieval_error(exc: Exception) -> HTTPException:
+def _retrieval_error(exc: BaseException) -> HTTPException:
     if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
         return HTTPException(
             status_code=503,
@@ -157,6 +211,103 @@ def _retrieval_error(exc: Exception) -> HTTPException:
     )
 
 
+@app.exception_handler(ChatServiceError)
+async def chat_service_error(request: Request, exc: ChatServiceError):
+    """Distinguish saved history failures from weather retrieval failures."""
+    name = "Saved conversation service" if exc.operation == "history" else "The weather service"
+    if exc.reason == "unavailable":
+        error = HTTPException(status_code=503, detail=f"{name} is temporarily unavailable. Please try again later.")
+    elif exc.reason == "empty":
+        error = HTTPException(status_code=502, detail=f"{name} returned an empty answer. Please try again.")
+    else:
+        error = _retrieval_error(exc.__cause__ or exc)
+        if error.status_code == 502:
+            error.detail = f"{name} could not complete your request. Please try again."
+    logger.error("%s request failed (%s)", exc.operation, type(exc.__cause__ or exc).__name__)
+    return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
+
+
+@app.exception_handler(ConversationNotFoundError)
+async def conversation_not_found(request: Request, exc: ConversationNotFoundError):
+    """Use the same response for missing and foreign conversation IDs."""
+    return JSONResponse(status_code=404, content={"detail": "Conversation not found."})
+
+
+@app.exception_handler(TurnConflictError)
+async def turn_conflict(request: Request, exc: TurnConflictError):
+    """Let callers retry or reload without duplicating a turn."""
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+
+@app.exception_handler(psycopg.Error)
+async def conversation_database_error(request: Request, exc: psycopg.Error):
+    """Keep database configuration and credentials out of client responses."""
+    logger.error("Conversation database unavailable (%s)", type(exc).__name__)
+    return JSONResponse(
+        status_code=503, content={"detail": "Saved conversations are temporarily unavailable. Please try again."}
+    )
+
+
+def _owner(request: Request, response: Response, *, create: bool = False) -> UUID:
+    origin = request.headers.get("origin")
+    same_origin = str(request.base_url).rstrip("/")
+    if origin and origin != same_origin and origin not in _ALLOWED_ORIGINS:
+        raise HTTPException(status_code=403, detail="This origin is not allowed.")
+    owner = _conversations.owner(request.cookies.get(_COOKIE))
+    if owner is None:
+        if not create:
+            raise ConversationNotFoundError
+        owner, token = _conversations.create_owner()
+        response.set_cookie(
+            _COOKIE,
+            token,
+            max_age=365 * 86400,
+            httponly=True,
+            samesite="lax",
+            path="/api",
+            secure=request.url.scheme == "https" or os.getenv("AWN_COOKIE_SECURE") == "true",
+        )
+    response.headers["Cache-Control"] = "no-store"
+    return owner
+
+
+@app.get("/api/conversations")
+def list_conversations(
+    request: Request, response: Response, before: AwareDatetime | None = None, before_id: UUID | None = None
+):
+    """List this browser's saved conversations and initialize its identity if needed."""
+    owner = _owner(request, response, create=True)
+    if (before is None) != (before_id is None):
+        raise HTTPException(status_code=422, detail="The history cursor needs both before and before_id.")
+    return {"conversations": _conversations.list_conversations(owner, before=before, before_id=before_id)}
+
+
+@app.post("/api/conversations", status_code=201)
+def create_conversation(request: Request, response: Response):
+    """Start a fresh context without deleting earlier conversations."""
+    return _conversations.create(_owner(request, response, create=True))
+
+
+@app.get("/api/conversations/{conversation_id}")
+def get_conversation(
+    conversation_id: UUID, request: Request, response: Response, before: int | None = Query(default=None, ge=1)
+):
+    """Resume an owned conversation with dated, ordered messages."""
+    return _conversations.get(_owner(request, response), conversation_id, before=before)
+
+
+def _saved_chat(payload: SavedChatRequest, request: Request, response: Response) -> SavedChatResponse:
+    question = payload.message.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Please enter a weather related question.")
+    owner = _owner(request, response)
+    service = SavedChatService(_conversations, _history_service, _retriever, _chatbot_model_name)
+    result = service.run(owner, payload.conversation_id, payload.request_id, question, point=payload.point)
+    return SavedChatResponse(
+        **result.response(), conversation_id=payload.conversation_id, request_id=payload.request_id
+    )
+
+
 @app.get("/api/health")
 def health() -> dict[str, object]:
     """Readiness probe used by the frontend and ops tooling."""
@@ -164,6 +315,7 @@ def health() -> dict[str, object]:
         "status": "ok",
         "chatbot_ready": _chatbot is not None,
         "retriever_ready": _retriever is not None,
+        "history_ready": _history_service is not None,
         "model": _chatbot_model_name or None,
         "embedding_model": _embedding_model_name or None,
         "has_api_key": bool(os.getenv("OPENROUTER_API_KEY")),
@@ -171,9 +323,11 @@ def health() -> dict[str, object]:
     }
 
 
-@app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+@app.post("/api/chat", response_model=SavedChatResponse | ChatResponse)
+def chat(request: ChatRequest | SavedChatRequest, raw: Request, response: Response) -> SavedChatResponse | ChatResponse:
     """Endpoint for the frontend to send a conversation and receive a reply."""
+    if isinstance(request, SavedChatRequest):
+        return _saved_chat(request, raw, response)
     if _retriever is None:
         raise HTTPException(
             status_code=503,

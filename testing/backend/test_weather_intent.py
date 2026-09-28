@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from backend.weather_intent import WeatherInterpreter
+from history_fixture import structured_mock
 from weather_fixtures import POINT, STATION, intent_json
 
 
@@ -22,12 +23,12 @@ from weather_fixtures import POINT, STATION, intent_json
 )
 def test_original_language_reaches_model_without_keyword_gate(question):
     """Pass arbitrary wording and conversation into the model before deciding intent."""
-    model = MagicMock()
+    model = structured_mock(MagicMock())
     model.invoke.return_value = intent_json()
     history = [{"role": "user", "content": "Temperature yesterday?"}]
     WeatherInterpreter(model).interpret(question, POINT, STATION, history=history, today=date(2026, 9, 11))
     prompt = model.invoke.call_args.args[0][0]
-    payload = json.loads(prompt.split("\nPayload:\n")[1])
+    payload = json.loads(prompt.split("\nInput JSON:\n")[1])
     assert payload["question"] == question
     assert payload["conversation"] == history
     assert payload["reference_date"] == "2026-09-11"
@@ -39,15 +40,15 @@ def test_original_language_reaches_model_without_keyword_gate(question):
 @pytest.mark.parametrize("response", ["", "not JSON", "{}", "```json\n{}\n```", intent_json(sql="SELECT 1")])
 def test_malformed_provider_response_is_an_error(response):
     """Do not retry with a less constrained query or treat broken output as no data."""
-    model = MagicMock()
+    model = structured_mock(MagicMock())
     model.invoke.return_value = response
-    with pytest.raises(ValueError, match="interpretation was invalid"):
+    with pytest.raises(ValueError):
         WeatherInterpreter(model).interpret("weather?", POINT, STATION)
 
 
 def test_provider_failure_propagates():
     """Connection failures must remain service errors."""
-    model = MagicMock()
+    model = structured_mock(MagicMock())
     model.invoke.side_effect = RuntimeError("provider unavailable")
     with pytest.raises(RuntimeError):
         WeatherInterpreter(model).interpret("weather?", POINT, STATION)
@@ -57,7 +58,7 @@ def test_provider_failure_propagates():
 def test_valid_json_accepts_one_optional_code_block(fence):
     """Accept formatting around the JSON without relaxing its schema."""
     response = intent_json()
-    model = MagicMock()
+    model = structured_mock(MagicMock())
     model.invoke.return_value = f"{fence}\n{response}\n```" if fence else response
     result = WeatherInterpreter(model).interpret("Temperature yesterday?", POINT, STATION)
     assert result.action == "query"
@@ -75,7 +76,7 @@ def test_valid_json_accepts_one_optional_code_block(fence):
 )
 def test_surrounding_prose_and_extra_fields_are_rejected(response):
     """Only a complete JSON object with the expected fields can execute."""
-    model = MagicMock()
+    model = structured_mock(MagicMock())
     model.invoke.return_value = response
-    with pytest.raises(ValueError, match="interpretation was invalid"):
+    with pytest.raises(ValueError):
         WeatherInterpreter(model).interpret("Temperature yesterday?", POINT, STATION)

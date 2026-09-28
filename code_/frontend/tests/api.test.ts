@@ -55,6 +55,15 @@ test("keeps the latest question within the total character budget", async (t) =>
   assert.deepEqual(JSON.parse(options.body).messages, transcript.slice(-8));
 });
 
+test("preserves the selected point when limiting conversation history", async (t) => {
+  const point = { latitude: 46.73, longitude: -117.18 };
+  const transcript: ChatMessage[] = Array.from({ length: 45 }, () => messages[0]);
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Answer", model: "test" }));
+  await sendChat(transcript, undefined, point);
+  const options = fetchMock.mock.calls[0].arguments[1];
+  assert.deepEqual(JSON.parse(String(options?.body)), { messages: transcript.slice(-40), point });
+});
+
 for (const olderMessage of [
   { role: "assistant" as const, content: "a".repeat(4001) },
   { role: "user" as const, content: "a".repeat(4001) },
@@ -88,7 +97,9 @@ test("counts Unicode characters the same way as the backend", async (t) => {
 
 test("preserves an oversized active question for backend validation", async (t) => {
   const transcript: ChatMessage[] = [{ role: "user", content: "a".repeat(4001) }];
-  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Question is too long" }, { status: 422 }));
+  const fetchMock = t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ detail: "Question is too long" }, { status: 422 }),
+  );
 
   await assert.rejects(sendChat(transcript), { name: "ApiError", status: 422, message: "Question is too long" });
 
@@ -124,7 +135,9 @@ test("rejects a non-JSON successful response", async (t) => {
 });
 
 test("preserves a useful backend error", async (t) => {
-  t.mock.method(globalThis, "fetch", async () => Response.json({ detail: "Please enter a weather related question." }, { status: 400 }));
+  t.mock.method(globalThis, "fetch", async () =>
+    Response.json({ detail: "Please enter a weather related question." }, { status: 400 }),
+  );
   await assert.rejects(sendChat(messages), (error) => {
     assert.ok(error instanceof ApiError);
     assert.equal(error.status, 400);
@@ -202,7 +215,9 @@ for (const status of [502, 503, 504]) {
 }
 
 test("reports a network failure", async (t) => {
-  t.mock.method(globalThis, "fetch", async () => { throw new TypeError("Failed to fetch"); });
+  t.mock.method(globalThis, "fetch", async () => {
+    throw new TypeError("Failed to fetch");
+  });
   await assert.rejects(sendChat(messages), { name: "ApiError", message: /Network error/ });
 });
 
@@ -212,18 +227,11 @@ for (const phase of ["connecting", "reading a reply", "reading an error"]) {
     t.mock.method(globalThis, "fetch", async () => {
       if (phase === "connecting") throw aborted;
       const response = Response.json({}, { status: phase === "reading an error" ? 502 : 200 });
-      t.mock.method(response, "json", async () => { throw aborted; });
+      t.mock.method(response, "json", async () => {
+        throw aborted;
+      });
       return response;
     });
     await assert.rejects(sendChat(messages), (error) => error === aborted);
   });
 }
-
-test("sends the chosen map point without a station filter", async (t) => {
-  const point = { latitude: 46.73, longitude: -117.18 };
-  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Weather reply", model: "test" }));
-  await sendChat(messages, undefined, point);
-  const options = fetchMock.mock.calls[0].arguments[1];
-  assert.ok(typeof options?.body === "string");
-  assert.deepEqual(JSON.parse(options.body), { messages, point });
-});

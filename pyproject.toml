@@ -48,6 +48,9 @@ where = ["code_"]
 
 [tool.black]
 line-length = 120
+[tool.isort]
+profile = "black"
+line_length = 120
 [tool.ruff]
 line-length = 120 # max line length
 lint.select = [

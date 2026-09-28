@@ -13,6 +13,7 @@ import pytest
 import requests
 
 BASE_URL = "http://localhost:8000"
+PULLMAN_POINT = {"latitude": 46.73, "longitude": -117.18}
 
 
 def _is_api_ready() -> bool:
@@ -28,7 +29,7 @@ def _chat(question: str) -> str:
     """Send a question to the chatbot and return the reply."""
     response = requests.post(
         f"{BASE_URL}/api/chat",
-        json={"messages": [{"role": "user", "content": question}]},
+        json={"messages": [{"role": "user", "content": question}], "point": PULLMAN_POINT},
         timeout=30,
     )
     assert response.status_code == 200, f"API returned {response.status_code}: {response.text}"
@@ -166,7 +167,8 @@ def test_multi_turn_weather_conversation():
                 {"role": "user", "content": "What is the current temperature in Pullman?"},
                 {"role": "assistant", "content": "The current temperature in Pullman is 68°F."},
                 {"role": "user", "content": "What about the humidity?"},
-            ]
+            ],
+            "point": PULLMAN_POINT,
         },
         timeout=30,
     )

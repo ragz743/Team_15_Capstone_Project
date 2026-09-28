@@ -1,16 +1,15 @@
-"""Code for the data retriever controller class, Retriever."""
+"""Coordinate map selection, interpretation and weather retrieval."""
 
+from datetime import date
+
+from backend.chat_turn import AnsweredTurn, PreparedChatTurn
+from backend.conversation_context import ConversationContext
 from backend.models._chatbot_base import _BaseChatbot
 from backend.station_catalog import StationCatalog
 from backend.vector_store import PgVectorStore
 from backend.weather_intent import WeatherIntent, WeatherInterpreter
-from backend.weather_query import QueryClarificationError, RequestedPoint, WeatherQuery
-from backend.weather_records import (
-    TABLE_LABELS,
-    append_sources,
-    document_context,
-    source_label,
-)
+from backend.weather_query import QueryClarificationError, RequestedPoint, Station
+from backend.weather_records import TABLE_LABELS, append_sources, document_context, source_label
 from langchain_core.prompts import PromptTemplate
 
 RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
@@ -75,7 +74,7 @@ _SEARCH_K = 8
 
 
 class Retriever:
-    """Coordinate location lookup, interpretation, retrieval and grounded answers."""
+    """Share one catalog and one interpretation boundary across weather requests."""
 
     def __init__(
         self,
@@ -85,7 +84,7 @@ class Retriever:
         catalog: StationCatalog | None = None,
         interpreter: WeatherInterpreter | None = None,
     ) -> None:
-        """Create the reusable catalog and interpretation boundary."""
+        """Keep source lookup reusable and model interpretation replaceable."""
         self._vector_stores = [vector_stores] if isinstance(vector_stores, PgVectorStore) else vector_stores
         self._chatbot = chatbot
         self._catalog = catalog or StationCatalog(
@@ -94,37 +93,62 @@ class Retriever:
         self._interpreter = interpreter or WeatherInterpreter(chatbot)
 
     def retrieve(
+        self, question: str, *, point: RequestedPoint | None = None, history: list[dict[str, str]] | None = None
+    ) -> str:
+        """Use the same validated flow for requests without saved conversations."""
+        return self.answer_result(self.prepare_turn(question, point=point, history=history)).reply
+
+    def prepare_turn(
         self,
         question: str,
+        context: ConversationContext | None = None,
         *,
         point: RequestedPoint | None = None,
         history: list[dict[str, str]] | None = None,
-    ) -> str:
-        """Resolve a map point and validate the model interpretation before searching."""
+        today: date | None = None,
+    ) -> PreparedChatTurn:
+        """Freeze model dates and the source chosen for the user's map point."""
+        context = context or ConversationContext()
+        point = point or context.point
         if point is None:
-            return "Choose a point on the map before asking about the weather."
+            return _clarification(question, context, "Choose a point on the map before asking about the weather.")
+        if point != context.point:
+            context = context.model_copy(update={"point": point, "station_ids": [], "county": None})
         try:
             station = self._catalog.resolve(point)
         except QueryClarificationError as exc:
-            return str(exc)
-        intent = self._interpreter.interpret(question, point, station, history=history)
+            return _clarification(question, context, str(exc))
+        intent = self._interpreter.interpret(question, point, station, context=context, history=history, today=today)
         if intent.action != "query":
-            return intent.message
+            return _clarification(question, context, intent.message)
         if intent.location != "selected":
-            return "Your question refers to another or unclear location. Choose that point on the map, then ask again."
-        selection = intent.selection(station)
-        sections, sources = self._collect_records(intent, selection)
-        if not sections:
-            return NO_DATA
-        prompt = RAG_PROMPT_TEMPLATE.format(context="\n\n".join(sections), question=intent.question)
-        return append_sources(self._chatbot.invoke([prompt]), sources)
+            return _clarification(
+                question,
+                context,
+                "Your question refers to another or unclear location. Choose that point on the map, then ask again.",
+            )
+        return _weather_turn(intent, point, station)
 
-    def _collect_records(self, intent: WeatherIntent, selection: WeatherQuery) -> tuple[list[str], list[str]]:
+    def answer_result(self, turn: PreparedChatTurn) -> AnsweredTurn:
+        """Retrieve fresh evidence using frozen constraints, including on retries."""
+        if turn.reply is not None:
+            assert turn.outcome != "weather"
+            return AnsweredTurn(reply=turn.reply, outcome=turn.outcome)
+        sections, sources = self._collect_records(turn)
+        if not sections:
+            return AnsweredTurn(reply=NO_DATA, outcome="no_data")
+        prompt = RAG_PROMPT_TEMPLATE.format(context="\n\n".join(sections), question=turn.question)
+        answer = append_sources(self._chatbot.invoke([prompt]), sources)
+        return AnsweredTurn(reply=answer, outcome="success")
+
+    def _collect_records(self, turn: PreparedChatTurn) -> tuple[list[str], list[str]]:
+        if turn.selection is None:
+            raise ValueError("Weather retrieval requires a prepared selection")
         sections, sources = [], []
         for store in self._vector_stores:
-            if not _uses_store(intent, store.table):
+            if not _uses_store(turn.context.data_kind, store.table):
                 continue
-            docs = store.similarity_search(intent.question, k=_SEARCH_K, selection=selection)
+            docs = store.similarity_search(turn.question, k=_SEARCH_K, selection=turn.selection)
             if docs:
                 content = "\n\n".join(document_context(doc, store.table) for doc in docs)
                 sections.append(f"[{TABLE_LABELS[store.table]}]\n{content}")
@@ -132,7 +156,23 @@ class Retriever:
         return sections, sources
 
 
-def _uses_store(intent: WeatherIntent, table: str) -> bool:
-    if intent.data_kind == "both":
-        return True
-    return (table == "forecast_index") == (intent.data_kind == "forecast")
+def _clarification(question: str, context: ConversationContext, reply: str) -> PreparedChatTurn:
+    return PreparedChatTurn(outcome="needs_clarification", question=question, context=context, reply=reply)
+
+
+def _weather_turn(intent: WeatherIntent, point: RequestedPoint, station: Station) -> PreparedChatTurn:
+    selection = intent.selection(station)
+    context = ConversationContext(
+        point=point,
+        station_ids=[station.id],
+        start=selection.start,
+        end=selection.end,
+        subject=intent.subject,
+        question=intent.question,
+        data_kind=intent.data_kind,
+    )
+    return PreparedChatTurn(outcome="weather", question=intent.question, context=context, selection=selection)
+
+
+def _uses_store(kind: str, table: str) -> bool:
+    return kind == "both" or (table == "forecast_index") == (kind == "forecast")
