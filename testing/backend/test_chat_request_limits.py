@@ -41,4 +41,4 @@ def test_chat_at_each_size_limit_is_accepted(monkeypatch: MonkeyPatch, lengths: 
 
     assert response.status_code == 200
     assert response.json()["reply"] == "Weather response."
-    retriever.retrieve.assert_called_once_with(messages[-1]["content"], filter=None)
+    retriever.retrieve.assert_called_once_with(messages[-1]["content"], point=None)

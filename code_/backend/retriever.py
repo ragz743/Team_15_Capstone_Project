@@ -5,8 +5,8 @@ from backend.station_catalog import StationCatalog
 from backend.vector_store import PgVectorStore
 from backend.weather_query import (
     QueryClarificationError,
-    Station,
-    resolve_weather_query,
+    RequestedPoint,
+    resolve_point_query,
 )
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
@@ -94,33 +94,20 @@ class Retriever:
             lambda: (station for store in self._vector_stores for station in store.stations())
         )
 
-    def stations(self) -> list[Station]:
-        """Reuse the station catalog across questions until its next refresh."""
-        return self._catalog.stations()
-
-    def retrieve(self, question: str, filter: dict | None = None) -> str:
-        """Search all vector stores for relevant context and pass it to the chatbot.
-
-        Args:
-            question: The user's natural-language question.
-            filter: Optional metadata filter passed to every store's similarity_search.
-                Only documents whose metadata contains all key-value pairs are returned.
-                Example: {"station": "Pullman"} or {"county": "Whitman"}. When
-                omitted, the question must name an indexed station or county.
-
-        """
-        stations = self.stations()
-        if not stations:
-            return NO_DATA
+    def retrieve(self, question: str, *, point: RequestedPoint | None = None) -> str:
+        """Search records for the source nearest the chosen point."""
+        if point is None:
+            return "Choose a point on the map before asking about the weather."
         try:
-            selection = resolve_weather_query(question, stations, metadata_filter=filter)
+            station = self._catalog.resolve(point)
+            selection = resolve_point_query(question, station)
         except QueryClarificationError as exc:
             return str(exc)
 
         sections: list[str] = []
         sources: list[str] = []
         for store in self._vector_stores:
-            docs: list[Document] = store.similarity_search(question, k=_SEARCH_K, filter=filter, selection=selection)
+            docs: list[Document] = store.similarity_search(question, k=_SEARCH_K, selection=selection)
             if docs:
                 label = _TABLE_LABELS.get(store.table, store.table)
                 content = "\n\n".join(_document_context(doc) for doc in docs)

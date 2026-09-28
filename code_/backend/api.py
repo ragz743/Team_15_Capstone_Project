@@ -17,6 +17,7 @@ from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.models.embedding_openrouter import EmbeddingOpenRouter
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
+from backend.weather_query import RequestedPoint
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import RateLimitError
@@ -45,15 +46,13 @@ class ChatRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
-    filter: dict[str, str] | None = None
+    point: RequestedPoint | None = None
 
     @model_validator(mode="after")
     def bounded_request(self):
         """Bound transcript size without discarding the active request."""
         if sum(len(message.content) for message in self.messages) > 32000:
             raise ValueError("Conversation exceeds 32000 characters")
-        if self.filter and (len(self.filter) > 4 or any(len(v) > 100 for v in self.filter.values())):
-            raise ValueError("Invalid metadata filter")
         return self
 
 
@@ -186,7 +185,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
-        reply = _retriever.retrieve(question, filter=request.filter)
+        reply = _retriever.retrieve(question, point=request.point)
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
         raise _retrieval_error(exc) from exc

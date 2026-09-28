@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type ReactNode, type FormEvent } from "react";
 import Icon from "./Icon";
 import WsuLogo from "./WsuLogo";
 
@@ -33,6 +33,7 @@ type ChatWorkspaceProps = {
   draft: string;
   isSending: boolean;
   ready?: boolean;
+  locationPicker?: ReactNode;
   notice?: string;
   history?: ConversationHistory;
   onDraftChange: (value: string) => void;
@@ -42,9 +43,9 @@ type ChatWorkspaceProps = {
 };
 
 const starters = [
-  { icon: "thermometer", title: "Temperature", description: "Get a feel for local conditions", prompt: "What was the temperature in Pullman yesterday?" },
-  { icon: "rain", title: "Rainfall", description: "See how much rain has fallen", prompt: "How much rain fell in Prosser over the last week?" },
-  { icon: "wind", title: "Wind", description: "Take a closer look at the wind", prompt: "What was the wind speed in Yakima yesterday?" },
+  { icon: "thermometer", title: "Temperature", description: "Get a feel for local conditions", prompt: "What was the temperature here yesterday?" },
+  { icon: "rain", title: "Rainfall", description: "See how much rain has fallen", prompt: "How much rain fell here over the last week?" },
+  { icon: "wind", title: "Wind", description: "Take a closer look at the wind", prompt: "What was the wind speed here yesterday?" },
 ] as const;
 function historyGroup(value: string) {
   const date = new Date(value);
@@ -62,7 +63,7 @@ const timeFormatter = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute
 function formatTime(value: string) { return timeFormatter.format(new Date(value)); }
 
 export default function ChatWorkspace({
-  messages, draft, isSending, ready = true, notice = "", history,
+  messages, draft, isSending, ready = true, locationPicker, notice = "", history,
   onDraftChange, onSubmit, onNewConversation, onRetry,
 }: ChatWorkspaceProps) {
   const [search, setSearch] = useState("");
@@ -192,6 +193,7 @@ export default function ChatWorkspace({
             </div>
           </header>
 
+          {locationPicker}
           {notice && <div className="conversation-notice" role="alert"><Icon name="warning" /><p>{notice}</p>{history && <button className="text-button" type="button" disabled={isSending || !ready} onClick={() => void refreshList()}>Try again</button>}</div>}
           <section aria-label="Conversation area" className={`transcript${messages.length ? "" : " transcript--empty"}`} ref={transcriptRef}>
             {messages.length === 0 ? (
@@ -250,7 +252,7 @@ export default function ChatWorkspace({
                 <button className="send-button" aria-label={isSending ? "Waiting for response" : "Send message"} title="Send message" disabled={!draft.trim() || isSending || !ready} type="submit"><Icon name="arrow" /></button>
               </div>
             </div>
-            <div className="composer-footnote"><span>For the best answer, include a location and date.</span><span className="keyboard-hint">Enter to send <span>·</span> Shift + Enter for a new line</span></div>
+            <div className="composer-footnote"><span>Choose a map point and include a date in your question.</span><span className="keyboard-hint">Enter to send <span>·</span> Shift + Enter for a new line</span></div>
           </form>
         </main>
       </div>

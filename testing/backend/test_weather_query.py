@@ -132,3 +132,20 @@ def test_units_do_not_hide_the_location() -> None:
         "Temperature at Pullman in Fahrenheit yesterday",
     ):
         assert resolve_weather_query(question, STATIONS, today=TODAY).station_ids == ("1",)
+
+
+@pytest.mark.parametrize(
+    "point",
+    [
+        {"latitude": 91, "longitude": -117},
+        {"latitude": 46, "longitude": 181},
+        {"latitude": float("nan"), "longitude": -117},
+        {"latitude": "46", "longitude": -117},
+    ],
+)
+def test_invalid_map_points(point):
+    """Reject invalid coordinates before looking up sources."""
+    from backend.weather_query import RequestedPoint
+
+    with pytest.raises(ValueError):
+        RequestedPoint(**point)

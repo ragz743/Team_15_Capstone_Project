@@ -218,3 +218,12 @@ for (const phase of ["connecting", "reading a reply", "reading an error"]) {
     await assert.rejects(sendChat(messages), (error) => error === aborted);
   });
 }
+
+test("sends the chosen map point without a station filter", async (t) => {
+  const point = { latitude: 46.73, longitude: -117.18 };
+  const fetchMock = t.mock.method(globalThis, "fetch", async () => Response.json({ reply: "Weather reply", model: "test" }));
+  await sendChat(messages, undefined, point);
+  const options = fetchMock.mock.calls[0].arguments[1];
+  assert.ok(typeof options?.body === "string");
+  assert.deepEqual(JSON.parse(options.body), { messages, point });
+});

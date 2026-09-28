@@ -106,12 +106,13 @@ class PgVectorStore(VectorStore):
         """Read current station identities without caching failed or empty catalogs."""
         rows = self._vector_db.simple_query(
             (
-                f"SELECT DISTINCT metadata->>'id', metadata->>'station', metadata->>'county' FROM {self._table} "
+                "SELECT DISTINCT metadata->>'id', metadata->>'station', metadata->>'county', "
+                f"metadata->>'latitude', metadata->>'longitude', metadata->>'state' FROM {self._table} "
                 "WHERE metadata->>'id' IS NOT NULL AND metadata->>'station' IS NOT NULL ORDER BY 2, 1"
             ).encode(),
             (),
         )
-        return [Station(str(row[0]), str(row[1]), str(row[2] or "")) for row in rows]
+        return [Station(str(row[0]), str(row[1]), str(row[2] or ""), row[3], row[4], str(row[5] or "")) for row in rows]
 
     # Embeds the query string, then runs pgvector's <-> L2 nearest-neighbour operation and returns top-k results
     # as Document objects. Optional filter (JSONB containment) and staleness_days (date cutoff) are combined

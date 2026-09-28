@@ -7,6 +7,7 @@ import dotenv
 from backend.model_factory import ModelFactory
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
+from backend.weather_query import RequestedPoint
 
 
 def _is_stale() -> bool:
@@ -42,7 +43,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run a RAG retrieval query.")
     parser.add_argument("question", nargs="*", help="Question to ask")
     parser.add_argument("--no-refresh", action="store_true", help="Skip the automatic freshness check")
+    parser.add_argument("--latitude", type=float, required=True, help="Latitude of the requested point")
+    parser.add_argument("--longitude", type=float, required=True, help="Longitude of the requested point")
     args = parser.parse_args()
+    try:
+        point = RequestedPoint(latitude=args.latitude, longitude=args.longitude)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     dotenv.load_dotenv()
     embedding_model, chatbot_model = ModelFactory.load_from_models_yaml()
@@ -61,7 +68,7 @@ def main() -> None:
     retriever = Retriever(stores, chatbot_model)
 
     question = " ".join(args.question) if args.question else input("Enter your question: ")
-    response = retriever.retrieve(question)
+    response = retriever.retrieve(question, point=point)
     print(response)
 
 

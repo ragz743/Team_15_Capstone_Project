@@ -11,6 +11,11 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface RequestedPoint {
+  latitude: number;
+  longitude: number;
+}
+
 export interface ChatResponse {
   reply: string;
   model: string;
@@ -106,13 +111,14 @@ function friendlyErrorMessage(status: number, detail: string | undefined): strin
 export async function sendChat(
   messages: ChatMessage[],
   signal?: AbortSignal,
+  point?: RequestedPoint,
 ): Promise<ChatResponse> {
   let response: Response;
   try {
     response = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages: recentChatMessages(messages) }),
+      body: JSON.stringify({ messages: recentChatMessages(messages), ...(point ? { point } : {}) }),
       signal,
     });
   } catch (err) {

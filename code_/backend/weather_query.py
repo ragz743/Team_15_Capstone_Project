@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from pydantic import BaseModel, ConfigDict, Field
+
 
 class QueryClarificationError(ValueError):
     """A question needs more information before records can be selected."""
@@ -19,13 +21,24 @@ class MissingDateError(QueryClarificationError):
     """No date was supplied in this turn."""
 
 
+class RequestedPoint(BaseModel):
+    """A point chosen by the user, never a source station coordinate."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=False)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+
+
 @dataclass(frozen=True)
 class Station:
-    """An indexed station's official identity."""
+    """An indexed identity with private coordinates for source selection."""
 
     id: str
     name: str
     county: str
+    latitude: str | None = None
+    longitude: str | None = None
+    state: str = ""
 
 
 @dataclass(frozen=True)
@@ -251,3 +264,13 @@ def resolve_weather_query(
             raise QueryClarificationError("Please choose one station or one county for this question.")
     start, end = _dates(question, today or datetime.now(ZoneInfo("America/Los_Angeles")).date())
     return WeatherQuery(ids, start, end, county)
+
+
+def resolve_point_query(question: str, station: Station) -> WeatherQuery:
+    """Apply calendar dates to the source selected by the map."""
+    if re.search(
+        r"\b(?:except|excluding|not|before|after|since|until)\b|\d{1,2}:\d{2}|\d\s*(?:am|pm)\b", question, re.IGNORECASE
+    ):
+        raise QueryClarificationError("Please specify one inclusive date range without exclusions or times.")
+    start, end = _dates(question, datetime.now(ZoneInfo("America/Los_Angeles")).date())
+    return WeatherQuery((station.id,), start, end)

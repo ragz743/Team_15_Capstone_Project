@@ -1,94 +1,85 @@
-"""Station catalog reuse and refresh behavior."""
+"""Geographic source selection and cache invalidation behavior."""
 
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
-from typing import cast
-from unittest.mock import MagicMock, Mock
+from dataclasses import replace
+from unittest.mock import Mock
 
 import pytest
-from backend.retriever import NO_DATA, Retriever
 from backend.station_catalog import StationCatalog
-from backend.vector_store import PgVectorStore
-from backend.weather_query import Station
-
-STATION = Station("1", "Pullman", "Whitman")
+from backend.weather_query import QueryClarificationError, RequestedPoint
+from weather_fixtures import POINT, STATION
 
 
-def test_concurrent_requests_share_one_catalog_load():
-    """Requests arriving together reuse the same metadata read."""
+def test_repeated_and_concurrent_questions_share_one_catalog_read():
+    """Concurrent requests must not trigger repeated scans of weather indexes."""
     load = Mock(return_value=[STATION])
     catalog = StationCatalog(load)
-    start = Barrier(8)
-
-    def read_catalog():
-        start.wait(timeout=5)
-        return catalog.stations()
-
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = [pool.submit(read_catalog) for _ in range(8)]
-        assert [result.result(timeout=5) for result in results] == [[STATION]] * 8
+        assert list(pool.map(catalog.resolve, [POINT] * 20)) == [STATION] * 20
     load.assert_called_once()
 
 
-def test_catalog_refreshes_when_its_lifetime_expires():
-    """Refresh at five minutes and preserve the cached snapshot before then."""
+def test_expiry_reloads_and_failed_refresh_never_serves_stale_sources():
+    """Refresh errors propagate and remain retryable instead of caching stale data."""
     clock = Mock(return_value=0)
-    replacement = Station("2", "Pullman East", "Whitman")
-    load = Mock(side_effect=[[STATION], [replacement]])
-    catalog = StationCatalog(load, clock=clock)
-    assert catalog.stations() == [STATION]
-    clock.return_value = 299
-    assert catalog.stations() == [STATION]
-    load.assert_called_once()
-    clock.return_value = 300
-    assert catalog.stations() == [replacement]
-    assert load.call_count == 2
-
-
-def test_failed_refresh_retries_without_serving_expired_data():
-    """A database error leaves refresh retryable on the next request."""
-    clock = Mock(return_value=0)
-    replacement = Station("2", "Pullman East", "Whitman")
-    load = Mock(side_effect=[[STATION], RuntimeError("database unavailable"), [replacement]])
-    catalog = StationCatalog(load, clock=clock)
-    assert catalog.stations() == [STATION]
-    clock.return_value = 300
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        catalog.stations()
-    assert catalog.stations() == [replacement]
+    load = Mock(side_effect=[[STATION], RuntimeError("database down"), [replace(STATION, id="2")]])
+    catalog = StationCatalog(load, ttl=10, clock=clock)
+    assert catalog.resolve(POINT).id == "1"
+    clock.return_value = 11
+    with pytest.raises(RuntimeError):
+        catalog.resolve(POINT)
+    assert catalog.resolve(POINT).id == "2"
     assert load.call_count == 3
 
 
-def test_empty_catalog_retries_on_the_next_request():
-    """An initially empty index can become available without waiting five minutes."""
-    load = Mock(side_effect=[[], [STATION]])
-    catalog = StationCatalog(load)
-    assert catalog.stations() == []
-    assert catalog.stations() == [STATION]
-    assert load.call_count == 2
+def test_empty_catalog_recovers_on_next_request():
+    """Indexing new records is visible immediately after an empty catalog."""
+    catalog = StationCatalog(Mock(side_effect=[[], [STATION]]))
+    with pytest.raises(QueryClarificationError):
+        catalog.resolve(POINT)
+    assert catalog.resolve(POINT) == STATION
 
 
-def test_duplicate_identities_are_cached_without_exposing_mutable_state():
-    """Duplicate rows and mutations of a returned list cannot alter the cache."""
-    load = Mock(return_value=[STATION, STATION])
-    catalog = StationCatalog(load)
-    returned = catalog.stations()
-    assert returned == [STATION]
-    returned.clear()
-    assert catalog.stations() == [STATION]
-    load.assert_called_once()
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"latitude": None},
+        {"longitude": "nan"},
+        {"longitude": "invalid"},
+        {"longitude": "0"},
+        {"state": "OR"},
+        {"latitude": "90"},
+        {"id": "invalid"},
+        {"name": ""},
+    ],
+)
+def test_invalid_coordinates_and_identities_cannot_be_selected(change):
+    """Keep malformed or unsupported source records out of location selection."""
+    catalog = StationCatalog(lambda: [replace(STATION, **change)])
+    with pytest.raises(QueryClarificationError):
+        catalog.resolve(POINT)
 
 
-def test_repeated_questions_reuse_metadata_from_all_stores():
-    """The retriever caches identities while continuing to search current records."""
-    stores = [MagicMock(spec=PgVectorStore), MagicMock(spec=PgVectorStore)]
-    for store in stores:
-        store.stations.return_value = [STATION]
-        store.similarity_search.return_value = []
-    retriever = Retriever(cast(list[PgVectorStore], stores), MagicMock())
-    question = "Temperature at Pullman on 2026-09-09?"
-    assert retriever.retrieve(question) == NO_DATA
-    assert retriever.retrieve(question) == NO_DATA
-    for store in stores:
-        store.stations.assert_called_once()
-        assert store.similarity_search.call_count == 2
+@pytest.mark.parametrize("change", [{"name": "Other"}, {"county": "Other"}, {"latitude": "46.8"}])
+def test_conflicting_versions_of_one_station_are_not_selected(change):
+    """A reused ID cannot silently refer to different places."""
+    catalog = StationCatalog(lambda: [STATION, replace(STATION, **change)])
+    with pytest.raises(QueryClarificationError):
+        catalog.resolve(POINT)
+
+
+def test_nearest_source_and_distance_limit():
+    """Distance chooses the nearby identity and remote points require clarification."""
+    further = replace(STATION, id="2", latitude="46.8")
+    catalog = StationCatalog(lambda: [further, STATION])
+    assert catalog.resolve(POINT).id == "1"
+    with pytest.raises(QueryClarificationError, match="50 km"):
+        catalog.resolve(RequestedPoint(latitude=0, longitude=0))
+
+
+def test_signed_and_west_positive_longitudes_are_the_same_source():
+    """Normalize only source coordinates; user longitudes keep their sign."""
+    catalog = StationCatalog(lambda: [STATION, replace(STATION, longitude="-117.181")])
+    assert catalog.resolve(POINT).id == "1"
+    with pytest.raises(QueryClarificationError):
+        catalog.resolve(RequestedPoint(latitude=POINT.latitude, longitude=117.18))
