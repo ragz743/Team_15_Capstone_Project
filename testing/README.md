@@ -87,3 +87,10 @@ python -m pytest ./testing/backend/workflow/test_workflow.py -s \
     --log-file=test_workflow.log \
     --log-file-mode=w
 ```
+> Note: When running tests which make calls to an LLM, such as the sample questions suite, an extra argument is needed! This is done to prevent accidental runs which will consume project LLM budget. To run these tests w/ logging use:
+```Bash
+python -m pytest ./testing/backend/workflow/test_workflow.py -s \
+    --log-file=test_workflow.log \
+    --log-file-mode=w \
+    --run-sample-questions
+```
