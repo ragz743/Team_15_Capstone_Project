@@ -1,5 +1,7 @@
 """Tests for code.backend.workflow."""
 
+from typing import Iterator
+
 import dotenv
 import pytest
 from backend.databases.awn_main_connection import AWNDatabaseConnection
@@ -13,9 +15,13 @@ def load_environment_vars() -> None:
 
 
 @pytest.fixture
-def workflow() -> ChatbotWorkflow:
+def workflow() -> Iterator[ChatbotWorkflow]:
     """Create a new instance of the chatbot workflow."""
-    return ChatbotWorkflow(debug=True)
+    chatbot = ChatbotWorkflow(debug=True)
+    try:
+        yield chatbot  # give chatbot to test which may fail
+    finally:
+        chatbot.close()  # always cleanup, even on exception
 
 
 @pytest.mark.optional

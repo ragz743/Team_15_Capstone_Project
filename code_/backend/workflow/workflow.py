@@ -128,6 +128,16 @@ class ChatbotWorkflow:
         self.historical_daily_db = AWNDailyDatabaseConnection()
         self.forecast_db = AWNForecastDatabaseConnection()
 
+    def close(self) -> None:
+        """Close all open connections."""
+        for conn in (
+            self.current_db,
+            self.forecast_db,
+            self.historical_daily_db,
+        ):
+            if conn.conn.is_connected():
+                conn.conn.shutdown()
+
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
         nearest_station_id = self._nearest_station_search(
