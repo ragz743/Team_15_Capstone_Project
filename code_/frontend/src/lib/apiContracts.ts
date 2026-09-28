@@ -118,10 +118,12 @@ function isMessage(value: unknown): value is SavedMessage {
     isObject(value) &&
     typeof value.id === "string" &&
     isId(value.request_id) &&
-    ["user", "assistant"].includes(String(value.role)) &&
+    typeof value.role === "string" &&
+    ["user", "assistant"].includes(value.role) &&
     typeof value.content === "string" &&
     isDate(value.created_at) &&
-    ["pending", "completed", "failed"].includes(String(value.status)) &&
+    typeof value.status === "string" &&
+    ["pending", "completed", "failed"].includes(value.status) &&
     isRequestInput(value.request_input)
   );
 }

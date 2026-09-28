@@ -146,3 +146,30 @@ for (const phase of ["connecting", "reading a reply", "reading an error"]) {
     await assert.rejects(sendSavedChat(conversation, request, "Temperature?"), (error) => error === aborted);
   });
 }
+
+for (const [field, value] of [
+  ["role", ["user"]],
+  ["status", ["completed"]],
+] as const) {
+  test(`rejects a nonstring saved message ${field}`, async (t) => {
+    t.mock.method(globalThis, "fetch", async () =>
+      Response.json({
+        ...summary,
+        context,
+        messages: [
+          {
+            id: `${request}:user`,
+            request_id: request,
+            role: "user",
+            content: "Temperature?",
+            created_at: summary.created_at,
+            status: "completed",
+            [field]: value,
+          },
+        ],
+        next_before: null,
+      }),
+    );
+    await assert.rejects(loadConversation(conversation), /invalid response/);
+  });
+}
