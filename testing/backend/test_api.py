@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import backend.api as api
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -19,6 +22,39 @@ class FakeRetriever:
         self.question = question
         self.point = point
         return f"retrieved: {question}"
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [(None, "openrouter/free"), ("", "openrouter/free"), ("  ", "openrouter/free"), ("custom/model", "custom/model")],
+)
+def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, expected):
+    """Start successfully with unset settings and preserve explicit overrides."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding-model")
+    monkeypatch.setenv("OPENROUTER_CHAT_TEMPERATURE", "0")
+    if setting is None:
+        monkeypatch.delenv("OPENROUTER_CHAT_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("OPENROUTER_CHAT_MODEL", setting)
+    monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
+    chatbot = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
+    monkeypatch.setattr(api, "EmbeddingOpenRouter", MagicMock())
+    monkeypatch.setattr(api, "PgVectorStore", MagicMock())
+    monkeypatch.setattr(api, "Retriever", MagicMock(return_value=FakeRetriever()))
+    for name in ("_chatbot", "_retriever", "_chatbot_model_name", "_embedding_model_name"):
+        monkeypatch.setattr(api, name, getattr(api, name))
+
+    with TestClient(api.app) as client:
+        health = client.get("/api/health").json()
+        response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Temperature yesterday?"}]})
+
+    chatbot.assert_called_once_with({"model": expected, "temperature": 0.0})
+    assert health["chatbot_ready"] and health["retriever_ready"]
+    assert health["model"] == expected
+    assert response.status_code == 200
+    assert response.json()["model"] == expected
 
 
 def test_health_returns_readiness_metadata(monkeypatch) -> None:

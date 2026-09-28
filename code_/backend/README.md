@@ -111,7 +111,7 @@ Example response:
 ```json
 {
   "reply": "assistant response",
-  "model": "openai/gpt-oss-20b:free"
+  "model": "openrouter/free"
 }
 ```
 
@@ -146,7 +146,7 @@ retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
 | -------- | -------- | ------- |
 | `OPENROUTER_API_KEY` | yes | none |
 | `OPENROUTER_EMBEDDING_MODEL` | yes | `openai/text-embedding-3-small` in `.env.example` |
-| `OPENROUTER_CHAT_MODEL` | no | `openai/gpt-oss-20b:free` |
+| `OPENROUTER_CHAT_MODEL` | no | `openrouter/free` |
 | `OPENROUTER_CHAT_TEMPERATURE` | no | `0` |
 | `PG_USER` | yes | none |
 | `PG_PASSWORD` | yes | none |
@@ -155,6 +155,12 @@ retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
 | `AWN_DB_USER` | data loaders only | none |
 | `AWN_DB_PASSWORD` | data loaders only | none |
 | `AWN_DB_HOST` | data loaders only | none |
+
+Missing or blank chat settings use `openrouter/free`. An explicit setting takes
+precedence. If an existing `.env` still uses `openai/gpt-oss-20b:free`, replace that
+value with `openrouter/free`; the old free endpoint is unavailable. The
+[free router](https://openrouter.ai/docs/guides/routing/routers/free-router) selects
+an available free model, so response quality and latency can vary between requests.
 
 Outside Docker, Postgres still defaults to `localhost:5432`.
 

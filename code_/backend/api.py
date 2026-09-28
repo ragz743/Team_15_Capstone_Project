@@ -27,11 +27,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
 
-# Default OpenRouter chat model
-# free tier model keeps this safe for prototyping without burning credits.
-# NOTE: OpenRouter rotates the free-tier catalog; if this model 404s, pick
-# another ":free" entry from https://openrouter.ai/api/v1/models.
-_DEFAULT_CHAT_MODEL = "openai/gpt-oss-20b:free"
+# Keep the demo on the free router unless explicitly configured otherwise.
+_DEFAULT_CHAT_MODEL = "openrouter/free"
 
 
 class ChatMessage(BaseModel):
@@ -74,7 +71,7 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     if not os.getenv("OPENROUTER_API_KEY"):
         logger.warning("OPENROUTER_API_KEY not set - /api/chat will fail until configured")
 
-    chat_model_name = os.getenv("OPENROUTER_CHAT_MODEL", _DEFAULT_CHAT_MODEL)
+    chat_model_name = os.getenv("OPENROUTER_CHAT_MODEL", "").strip() or _DEFAULT_CHAT_MODEL
     embedding_model_name = os.getenv("OPENROUTER_EMBEDDING_MODEL")
     if not embedding_model_name:
         msg = "OPENROUTER_EMBEDDING_MODEL must be set to initialize retrieval"
