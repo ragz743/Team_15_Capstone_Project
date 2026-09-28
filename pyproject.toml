@@ -20,6 +20,7 @@ dependencies = [
     "pyyaml",
     "langchain-openrouter",
     "langchain-openai",
+    "langgraph",
     "fastapi",
     "uvicorn[standard]",
 ]
@@ -35,6 +36,7 @@ dev = [
     "pytest-cov",
     "pytest-html",
     "requests",
+    "github-copilot-sdk",
 ]
 
 [project.scripts]
@@ -42,7 +44,7 @@ index = "scripts.index:main"
 retrieve = "scripts.retrieve:main"
 
 [tool.setuptools.packages.find]
-where = ["code"]
+where = ["code_"]
 
 [tool.black]
 line-length = 120
@@ -64,12 +66,16 @@ lint.ignore = [
 ]
 
 [tool.pyright]
+pythonVersion = "3.12"
+extraPaths = ["code_"]
 venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
+pythonpath = ["code_", "testing"]
 minversion = "9.0.2"
 addopts = "-q" # flags to pass to pytest implicitly
+log_file_level = "INFO"
 testpaths = [ # the directories pytest will search for tests per test discover rules
     "testing",
 ]

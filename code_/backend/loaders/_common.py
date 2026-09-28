@@ -65,9 +65,9 @@ def query_stations() -> list[MetadataQueryResult]:
         REL_HUMIDITY, PRECIP, WIND_SPEED, WIND_DIR
         FROM METADATA
         WHERE
-        COUNTY = 'Whitman' OR
+        (COUNTY = 'Whitman' OR
         COUNTY = 'Spokane' OR
-        COUNTY = 'Douglas' AND
+        COUNTY = 'Douglas') AND
         ACTIVE_STATION = "Y";
         """
     with AWNDatabaseConnection() as awn_conn:
@@ -86,22 +86,16 @@ def _format_cell(value: object) -> str:
 
 
 def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
-    """Convert a collection of named tuple object into a markdown table.
-
-    Columns where every station reading is None are dropped entirely. A station
-    that does not report a measurement should have no column for it rather than
-    a column of nulls, which the chatbot may otherwise fill with a plausible
-    invented number.
-    """
-    fields = tuples[0]._fields
-    keep = [i for i in range(len(fields)) if any(row[i] is not None for row in tuples)]
-    # Every column was null; fall back to the full set so the table is never empty.
-    if not keep:
-        keep = list(range(len(fields)))
-
-    columns = [(fields[i], units[i]) for i in keep]
+    """Render named tuples with units, omitting columns that contain only None."""
+    if not tuples:
+        return ""
+    if len(tuples[0]) != len(units):
+        msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
+        raise ValueError(msg)
+    populated = [index for index in range(len(units)) if any(row[index] is not None for row in tuples)]
+    columns = [(tuples[0]._fields[index], units[index]) for index in populated]
     header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(keep))) + " |\n"
-    rows = ["| " + " | ".join(_format_cell(row[i]) for i in keep) + " |\n" for row in tuples]
+    divider = "| " + " | ".join(itertools.repeat("---", len(populated))) + " |\n"
+    rows = ["| " + " | ".join(str(row[index]) for index in populated) + " |\n" for row in tuples]
 
     return header + divider + "".join(rows)

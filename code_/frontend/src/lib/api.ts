@@ -16,6 +16,28 @@ export interface ChatResponse {
   model: string;
 }
 
+// Match ChatMessage and ChatRequest limits in backend/api.py.
+const MAX_CHAT_MESSAGES = 40;
+const MAX_MESSAGE_CHARACTERS = 4000;
+const MAX_CHAT_CHARACTERS = 32000;
+
+function recentChatMessages(messages: ChatMessage[]): ChatMessage[] {
+  const latestUser = messages.findLastIndex(message => message.role === "user");
+  if (latestUser < 0) return messages;
+
+  let start = latestUser;
+  let characters = Array.from(messages[latestUser].content).length;
+  for (let index = latestUser - 1; index >= 0 && latestUser - index < MAX_CHAT_MESSAGES; index--) {
+    const length = Array.from(messages[index].content).length;
+    if (length === 0 || length > MAX_MESSAGE_CHARACTERS || characters + length > MAX_CHAT_CHARACTERS) {
+      break;
+    }
+    characters += length;
+    start = index;
+  }
+  return messages.slice(start, latestUser + 1);
+}
+
 /** Error thrown by the API client so callers can surface a friendly message. */
 export class ApiError extends Error {
   readonly status: number;
@@ -33,7 +55,17 @@ async function parseErrorDetail(response: Response): Promise<string | undefined>
   try {
     const body = (await response.json()) as { detail?: unknown };
     if (typeof body.detail === "string") {
-      return body.detail;
+      return response.status === 422 ? body.detail.trim() || undefined : body.detail;
+    }
+    if (response.status === 422 && Array.isArray(body.detail)) {
+      const details = body.detail
+        .filter((error: unknown): error is { msg: string } =>
+          typeof error === "object" && error !== null &&
+          "msg" in error && typeof error.msg === "string",
+        )
+        .map(error => error.msg.trim())
+        .filter(Boolean);
+      return details.join("; ") || undefined;
     }
   } catch (err) {
     if (err instanceof DOMException && err.name === "AbortError") {
@@ -51,6 +83,9 @@ function friendlyErrorMessage(status: number, detail: string | undefined): strin
   if (detail) {
     return detail;
   }
+  if (status === 422) {
+    return "The chat request is invalid. Please check your message and try again.";
+  }
   if (status === 502 || status === 504) {
     return "The weather service could not complete your request. Please try again.";
   }
@@ -61,7 +96,7 @@ function friendlyErrorMessage(status: number, detail: string | undefined): strin
 }
 
 /**
- * Send the conversation history to the backend and return the assistant reply.
+ * Send recent history through the latest user turn and return the assistant reply.
  *
  * @param messages   Ordered list of turns. Must contain at least one user turn.
  * @param signal     Optional AbortSignal to cancel the in-flight request.
@@ -77,7 +112,7 @@ export async function sendChat(
     response = await fetch(`${API_BASE}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages: recentChatMessages(messages) }),
       signal,
     });
   } catch (err) {

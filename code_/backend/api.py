@@ -145,17 +145,9 @@ app.add_middleware(
 
 def _retrieval_error(exc: Exception) -> HTTPException:
     if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
-        if "free-models-per-day" in str(exc):
-            return HTTPException(
-                status_code=503,
-                detail=(
-                    "The model provider's daily free allowance has been reached. "
-                    "Please try again after the allowance resets."
-                ),
-            )
         return HTTPException(
             status_code=503,
-            detail="The answer provider is rate-limiting requests. Please try again later.",
+            detail="A model provider is rate-limiting requests. Please try again later.",
         )
     return HTTPException(
         status_code=502, detail="The weather service could not complete your request. Please try again."
