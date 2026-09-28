@@ -11,6 +11,7 @@ COPY code_/__init__.py ./code_/__init__.py
 COPY code_/backend ./code_/backend
 COPY code_/scripts ./code_/scripts
 COPY deployment/migrations ./deployment/migrations
+COPY --chmod=755 deployment/start-api.sh ./deployment/start-api.sh
 
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .
@@ -18,5 +19,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip \
 WORKDIR /app/code_
 
 EXPOSE 8000
+
+ENTRYPOINT ["/app/deployment/start-api.sh"]
 
 CMD ["uvicorn", "backend.api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]

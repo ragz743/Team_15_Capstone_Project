@@ -1,4 +1,4 @@
-"""Apply the conversation migration without changing weather tables."""
+"""Prepare conversation tables and search indexes before the API accepts requests."""
 
 import argparse
 from pathlib import Path
@@ -24,9 +24,10 @@ def main() -> None:
     with PgVectorConnection() as database:
         with database.conn.transaction(), database.conn.cursor() as cur:
             cur.execute("SET LOCAL lock_timeout = '5s'")
+            cur.execute("SELECT pg_advisory_xact_lock(719034201)")
             for migration in migrations:
                 cur.execute(migration.read_bytes())
-    print("Conversation schema is ready. Weather indexes were not changed.")
+    print("Conversation schema and search indexes are ready. Existing records were preserved.")
 
 
 if __name__ == "__main__":

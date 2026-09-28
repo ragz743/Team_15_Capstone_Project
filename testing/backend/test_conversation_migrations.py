@@ -85,4 +85,4 @@ def test_migration_command_upgrades_existing_schema(database, monkeypatch, capsy
     monkeypatch.setattr("sys.argv", ["migrate_conversations"])
     main()
     main()
-    assert "Conversation schema is ready" in capsys.readouterr().out
+    assert "Existing records were preserved" in capsys.readouterr().out

@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS forecast_index (
     metadata JSONB          -- arbitrary sized json metadata for storing filtering fields
 );
 
--- Fresh installations use these migrations. Existing volumes require scripts.migrate_conversations.
+-- Fresh installations use these migrations. The API entrypoint also runs them on upgrades.
 \ir migrations/001_conversations.sql
 \ir migrations/002_turn_snapshots.sql
 \ir migrations/003_search_indexes.sql

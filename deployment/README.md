@@ -27,3 +27,14 @@
 - for example to run llm models locally using llama-cpp, docker compose should be called using the profiles flag: `docker compose --profile local_llm up` will launch both the embedding and chatbot models in local docker containers
 - **Note: profiles must also be used for bringing down services!**
     - `docker compose --profile local_llm down` to bring down local model containers.
+
+## Conversation upgrades
+
+The API image runs `scripts.migrate_conversations` before starting the server.
+This upgrades existing database volumes as well as fresh installations. If a migration
+fails the API exits before accepting requests. The migration lock serializes concurrent
+starts. Scripts can be repeated and preserve existing records.
+
+For a local API outside Docker, run `python -m scripts.migrate_conversations` before
+starting Uvicorn. The script adds conversation tables, durable retry fields and search
+indexes. The seed file alone only runs when PostgreSQL initializes a new volume.
