@@ -24,6 +24,7 @@ export type ConversationState = {
   conversations: ConversationSummary[];
   conversationId: string | null;
   point: RequestedPoint | null;
+  pendingPoint: RequestedPoint | null;
   busy: boolean;
   ready: boolean;
   notice: string;
@@ -37,6 +38,7 @@ export const initialState: ConversationState = {
   conversations: [],
   conversationId: null,
   point: null,
+  pendingPoint: null,
   busy: false,
   ready: false,
   notice: "",
@@ -78,14 +80,14 @@ function loadChat(
   if (action.older)
     return { ...state, messages: [...messages, ...state.messages], nextBefore: action.chat.next_before };
   const lastUser = messages.findLast((message) => message.role === "user");
-  const point =
-    lastUser?.status !== "completed" && lastUser?.point ? lastUser.point : (action.chat.context.point ?? null);
+  const pendingPoint = lastUser?.status !== "completed" ? (lastUser?.point ?? null) : null;
   return {
     ...state,
     messages,
     conversationId: action.chat.id,
     nextBefore: action.chat.next_before,
-    point,
+    point: pendingPoint ?? action.chat.context.point ?? null,
+    pendingPoint,
     draft: action.draft ?? "",
     notice: "",
   };
@@ -107,7 +109,13 @@ function pendingMessages(messages: Message[], message: Message): Message[] {
   ];
 }
 
+function samePoint(left: RequestedPoint | null, right: RequestedPoint | null): boolean {
+  return left?.latitude === right?.latitude && left?.longitude === right?.longitude;
+}
+
 function answered(state: ConversationState, result: SavedChatResponse, text: string): ConversationState {
+  const savedPoint = result.context.point ?? null;
+  const pendingPoint = samePoint(state.pendingPoint, savedPoint) ? null : state.pendingPoint;
   const messages = state.messages.map((message) =>
     message.requestId !== result.request_id
       ? message
@@ -122,7 +130,8 @@ function answered(state: ConversationState, result: SavedChatResponse, text: str
   return {
     ...state,
     messages,
-    point: state.point ?? result.context.point ?? null,
+    point: pendingPoint ?? savedPoint,
+    pendingPoint,
     draft: state.draft.trim() === text ? "" : state.draft,
   };
 }
@@ -132,7 +141,7 @@ export function conversationReducer(state: ConversationState, action: Conversati
     case "draft":
       return { ...state, draft: action.value };
     case "point":
-      return { ...state, point: action.value };
+      return { ...state, point: action.value, pendingPoint: action.value };
     case "loading":
       return { ...state, busy: true, notice: "" };
     case "finished":

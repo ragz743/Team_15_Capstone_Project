@@ -31,7 +31,7 @@ export function useChatSubmission(
     const text = retry?.text ?? state.draft.trim();
     if (!text || !state.ready || scope.active) return;
     const requestId = retry?.requestId ?? crypto.randomUUID();
-    const point = retry ? (retry.point ?? null) : state.point;
+    const point = retry ? (retry.point ?? null) : state.pendingPoint;
     const message: Message = {
       id: `${requestId}:user`,
       role: "user",
