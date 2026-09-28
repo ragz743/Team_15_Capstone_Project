@@ -26,7 +26,7 @@ class ChatbotOpenRouter(_BaseChatbot):
         match response.content:
             case [msgs]:
                 if isinstance(msgs, str):
-                    all_responses = "\n".join(msgs)
+                    all_responses = msgs
                 else:
                     # TODO (Any): figure out what kind of responses return a dict
                     # is this handling ok or are we missing out on info?
