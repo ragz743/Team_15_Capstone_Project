@@ -12,6 +12,7 @@ from backend.history_models import HistoryEntry, HistoryIntent, HistorySnapshot
 from backend.history_service import HistoryService
 from history_fixture import structured_mock
 from pydantic import ValidationError
+from weather_fixtures import POINT
 
 NOW = datetime(2026, 9, 22, 7, 30, tzinfo=UTC)
 
@@ -73,6 +74,7 @@ def test_non_recall_routes_do_not_search_saved_history(action):
         {"action": "recall", "start": "2026-09-22"},
         {"action": "recall", "start": "2026-09-22", "end": "2026-09-01"},
         {"action": "reuse"},
+        {"action": "weather", "weather_question": "What is the weather?"},
         {"action": "clarify"},
     ],
 )
@@ -116,7 +118,7 @@ def test_history_answer_has_real_dates_citations_and_saved_excerpts():
     answer = service.answer("What was that chat?", snapshot)
     assert "[1] 2026-09-22 00:30 PDT" in answer
     assert "You asked: Was there frost in January?" in answer
-    assert "not updated weather" in answer and "We discussed frost" in answer
+    assert "what was said at the time" in answer and "We discussed frost" in answer
 
 
 def test_fabricated_references_are_rejected():
@@ -134,7 +136,7 @@ def test_reuse_passes_saved_context_but_never_saved_answer_to_weather():
     """The history model supplies a new question; backend validated context selects fresh data."""
     service, _, store = setup_history({"action": "reuse", "terms": ["frost"], "weather_question": "Humidity today?"})
     store.search_history.return_value[0]["context"] = ConversationContext(
-        station_ids=["1"], start=date(2026, 1, 1), end=date(2026, 1, 1), subject="frost"
+        point=POINT, station_ids=["1"], start=date(2026, 1, 1), end=date(2026, 1, 1), subject="frost"
     ).model_dump(mode="json")
     result = service.prepare(store, uuid4(), uuid4(), "Same place as the frost chat, humidity today?", accepted_at=NOW)
     assert result.context is not None
@@ -193,4 +195,6 @@ def test_malformed_json_gets_one_bounded_repair_before_any_search():
     assert result.snapshot is not None
     assert result.snapshot.intent.terms == ["frost"]
     assert model.invoke.call_count == 2 and store.search_history.call_count == 1
-    assert "output_error" in model.invoke.call_args.args[0][0]
+    repair = json.loads(model.invoke.call_args.args[0][0].split("\nInput JSON:\n", 1)[1])
+    assert repair["message"] == "Find my frost chat"
+    assert repair["output_error"]

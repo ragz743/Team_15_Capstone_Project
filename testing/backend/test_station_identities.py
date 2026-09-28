@@ -13,7 +13,11 @@ def test_station_reads_preserve_identity(monkeypatch: MonkeyPatch, table: str) -
     """Keep distinct station IDs, including names shared by different counties."""
     connection, embedding = MagicMock(), MagicMock()
     connection.simple_query.side_effect = [
-        [(101, "Pullman", "Whitman"), ("102", "Pullman", "Douglas"), ("103", "Colfax", None)],
+        [
+            (101, "Pullman", "Whitman", None, None, ""),
+            ("102", "Pullman", "Douglas", None, None, ""),
+            ("103", "Colfax", None, None, None, ""),
+        ],
         [],
     ]
     monkeypatch.setattr("backend.vector_store.PgVectorConnection", lambda: connection)
@@ -32,7 +36,10 @@ def test_station_reads_preserve_identity(monkeypatch: MonkeyPatch, table: str) -
 def test_station_read_recovers_after_failure(monkeypatch: MonkeyPatch) -> None:
     """Propagate a failed read and query again on the next request."""
     connection, embedding = MagicMock(), MagicMock()
-    connection.simple_query.side_effect = [RuntimeError("database unavailable"), [("1", "Pullman", "Whitman")]]
+    connection.simple_query.side_effect = [
+        RuntimeError("database unavailable"),
+        [("1", "Pullman", "Whitman", None, None, "")],
+    ]
     monkeypatch.setattr("backend.vector_store.PgVectorConnection", lambda: connection)
     store = PgVectorStore(embedding)
 

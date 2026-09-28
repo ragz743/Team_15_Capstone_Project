@@ -2,15 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date
 from unittest.mock import MagicMock
 
 import backend.api as api
-from backend.retriever import Retriever
-from backend.vector_store import PgVectorStore
-from backend.weather_query import Station, WeatherQuery
+import pytest
 from fastapi.testclient import TestClient
-from pytest import MonkeyPatch
 
 
 class FakeRetriever:
@@ -19,35 +15,13 @@ class FakeRetriever:
     def __init__(self) -> None:
         """Create a fake retriever."""
         self.question: str | None = None
+        self.point = None
 
-    def retrieve(self, question: str, filter: dict | None = None) -> str:
+    def retrieve(self, question: str, *, point=None, history=None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
+        self.point = point
         return f"retrieved: {question}"
-
-
-def test_chat_returns_no_data_without_generating_an_answer(monkeypatch: MonkeyPatch) -> None:
-    """Pass the real retriever's no-data response through the HTTP endpoint."""
-    store = MagicMock(spec=PgVectorStore)
-    store.stations.return_value = [Station("1", "Pullman", "Whitman")]
-    store.similarity_search.return_value = []
-    chatbot = MagicMock()
-    monkeypatch.setattr(api, "_retriever", Retriever(store, chatbot))
-    monkeypatch.setattr(api, "_chatbot_model_name", "test-chat-model")
-
-    response = TestClient(api.app).post(
-        "/api/chat", json={"messages": [{"role": "user", "content": "Weather in Pullman on 2026-09-09?"}]}
-    )
-
-    assert response.status_code == 200
-    assert "No matching weather records" in response.json()["reply"]
-    store.similarity_search.assert_called_once_with(
-        "Weather in Pullman on 2026-09-09?",
-        k=8,
-        filter=None,
-        selection=WeatherQuery(("1",), date(2026, 9, 9), date(2026, 9, 9)),
-    )
-    chatbot.invoke.assert_not_called()
 
 
 def test_health_returns_readiness_metadata(monkeypatch) -> None:
@@ -120,3 +94,38 @@ def test_chat_requires_user_message(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "At least one user message is required."
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [(None, "openrouter/free"), ("", "openrouter/free"), ("  ", "openrouter/free"), ("custom/model", "custom/model")],
+)
+def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, expected):
+    """Start successfully with unset settings and preserve explicit overrides."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding-model")
+    monkeypatch.setenv("OPENROUTER_CHAT_TEMPERATURE", "0")
+    monkeypatch.setenv("OPENROUTER_HISTORY_MODEL", "  ")
+    if setting is None:
+        monkeypatch.delenv("OPENROUTER_CHAT_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("OPENROUTER_CHAT_MODEL", setting)
+    monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
+    chatbot = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
+    monkeypatch.setattr(api, "EmbeddingOpenRouter", MagicMock())
+    monkeypatch.setattr(api, "PgVectorStore", MagicMock())
+    monkeypatch.setattr(api, "Retriever", MagicMock(return_value=FakeRetriever()))
+    for name in ("_chatbot", "_retriever", "_chatbot_model_name", "_embedding_model_name", "_history_service"):
+        monkeypatch.setattr(api, name, getattr(api, name))
+
+    with TestClient(api.app) as client:
+        health = client.get("/api/health").json()
+        response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Temperature yesterday?"}]})
+
+    assert chatbot.call_count == 2
+    assert [call.args[0]["model"] for call in chatbot.call_args_list] == [expected, expected]
+    assert health["chatbot_ready"] and health["retriever_ready"]
+    assert health["model"] == expected
+    assert response.status_code == 200
+    assert response.json()["model"] == expected

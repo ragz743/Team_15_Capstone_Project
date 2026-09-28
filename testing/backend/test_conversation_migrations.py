@@ -1,6 +1,7 @@
 """Conversation schema checks independent of chat services and model providers."""
 
 import os
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -50,11 +51,10 @@ def test_migration_is_idempotent_and_preserves_existing_weather(database):
 def test_fresh_seed_and_upgrade_preserve_weather_tables(database):
     """Execute fresh-install SQL and repeat the history migration with existing weather data."""
     seed = MIGRATION.parent.parent / "pgvector-seed.sql"
-    fresh_sql = (
-        seed.read_text()
-        .replace("\\c vectorstore", "")
-        .replace("\\ir migrations/001_conversations.sql", MIGRATION.read_text())
-        .replace("\\ir migrations/002_turn_snapshots.sql", SNAPSHOT_MIGRATION.read_text())
+    fresh_sql = re.sub(
+        r"\\ir migrations/(\S+)",
+        lambda match: (MIGRATION.parent / match[1]).read_text(),
+        seed.read_text().replace("\\c vectorstore", ""),
     )
     with database() as conn:
         conn.execute(fresh_sql.encode())
@@ -85,4 +85,4 @@ def test_migration_command_upgrades_existing_schema(database, monkeypatch, capsy
     monkeypatch.setattr("sys.argv", ["migrate_conversations"])
     main()
     main()
-    assert "Weather indexes were not changed" in capsys.readouterr().out
+    assert "Conversation schema is ready" in capsys.readouterr().out

@@ -98,3 +98,14 @@ def test_history_limits_literal_terms_and_failed_questions(store, completed):
     assert len(rows) == 13 and rows[0]["assistant_content"] is None
     for term in ["%", "_", "' OR true --"]:
         assert store.search_history(owner, current, before=datetime.now(UTC), scope="all", terms=[term]) == []
+
+
+def test_previous_scope_does_not_skip_to_an_older_matching_topic(store, completed):
+    """The previous chat is chosen before applying topic constraints."""
+    owner, _ = store.create_owner()
+    old, recent, current = [store.create(owner)["id"] for _ in range(3)]
+    completed(store, owner, old, "Frost earlier", "Old frost reply")
+    completed(store, owner, recent, "Wind recently", "Recent wind reply")
+    assert store.search_history(owner, current, before=datetime.now(UTC), scope="previous", terms=["frost"]) == []
+    rows = store.search_history(owner, current, before=datetime.now(UTC), scope="all", terms=["frost"])
+    assert len(rows) == 1 and rows[0]["conversation_id"] == old

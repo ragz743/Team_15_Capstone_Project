@@ -2,7 +2,7 @@
 
 ## Running Tests
 - make sure you have activated your python virtual environment and installed packages
-    - see code/README.md for details on how to set up project
+    - see code_/README.md for details on how to set up project
 - call command `pytest` from the command line to run all tests
     - test discovery configured in `pyproject.toml`
 
@@ -43,7 +43,7 @@ The `-v` flag enables verbose output so you can see each test result!
 To generate an HTML coverage report:
 
 ```bash
-pytest testing/backend/ --cov=code/backend --cov-report=html
+pytest testing/backend/ --cov=code_/backend --cov-report=html
 ```
 
 Then open the report:
@@ -52,7 +52,7 @@ Then open the report:
 open htmlcov/index.html
 ```
 
-The coverage report will show which parts of `code/backend` are covered by the unit tests.
+The coverage report will show which parts of `code_/backend` are covered by the unit tests.
 
 ## 3. Run E2E Tests
 
@@ -79,3 +79,50 @@ open reports/e2e_report.html
 The E2E report contains the test results and details for each test.                                              |
 
 If you have any questions or run into issues, feel free to ask!
+
+
+## PR 89 local checks
+
+Run the deterministic backend suite without the credential dependent tests:
+
+```bash
+python -m pytest testing/backend \
+  --ignore=testing/backend/test_model_factory.py \
+  --ignore=testing/backend/test_awn_connection.py \
+  --ignore=testing/backend/test_pgvector_connection.py \
+  --ignore=testing/backend/workflow/test_workflow.py
+```
+
+The interpretation tests use controlled model replies. They verify routing and validation,
+not live model language accuracy. The PostgreSQL tests opt in with `RUN_PG_TESTS=1`
+and use session local temporary tables on `127.0.0.1`. Export the local `PG_USER`,
+`PG_PASSWORD` and optional `PG_PORT` before running them.
+
+```bash
+PYTHONPATH=code_ RUN_PG_TESTS=1 python -P -m pytest testing/backend/test_station_date_postgres.py
+```
+
+A browser fixture avoids provider calls and application database writes:
+
+```bash
+PYTHONPATH=code_:testing python -P -m uvicorn pr89_browser_fixture:app --host 127.0.0.1 --port 8091
+```
+
+Start the frontend in another terminal with `VITE_API_TARGET=http://127.0.0.1:8091`.
+The fixture contains a source near Pullman and a fixed September 9, 2026 temperature.
+Use it to check map selection, keyboard controls, request gating and source rendering.
+
+## Logging
+Certain tests such as those in `workflow/test_workflow.py` utilize logging to track events during the program. To enable logging with pytest, make sure to add the correct flags. The following pytest call will enable logging (and overwrite the contents of the file in 'w' mode) and also show test output in stdout.
+```Bash
+python -m pytest ./testing/backend/workflow/test_workflow.py -s \
+    --log-file=test_workflow.log \
+    --log-file-mode=w
+```
+> Note: When running tests which make calls to an LLM, such as the sample questions suite, an extra argument is needed! This is done to prevent accidental runs which will consume project LLM budget. To run these tests w/ logging use:
+```Bash
+python -m pytest ./testing/backend/workflow/test_workflow.py -s \
+    --log-file=test_workflow.log \
+    --log-file-mode=w \
+    --run-sample-questions
+```

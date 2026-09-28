@@ -2,6 +2,7 @@
 
 import os
 from datetime import UTC, datetime
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -154,6 +155,7 @@ print(json.dumps({"messages": [m["content"] for m in saved["messages"]], "contex
 """
     child = subprocess.run(
         [sys.executable, "-c", program, schema, str(owner), str(chat)],
+        env={**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "code_")},
         capture_output=True,
         text=True,
         check=True,

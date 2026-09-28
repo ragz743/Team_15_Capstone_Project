@@ -46,11 +46,11 @@ Here are links to the issues that we completed in this sprint:
 Please review the following code files, which were actively developed during this sprint, for quality:
 
 
- * [retriever.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code/backend/retriever.py)
- * [vector_store.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code/backend/vector_store.py)
- * [databases folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/databases)
- * [loaders folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/backend/loaders)
- * [frontend/src folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code/frontend/src)
+ * [retriever.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code_/backend/retriever.py)
+ * [vector_store.py](https://github.com/ragz743/Team_15_Capstone_Project/blob/main/code_/backend/vector_store.py)
+ * [databases folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code_/backend/databases)
+ * [loaders folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code_/backend/loaders)
+ * [frontend/src folder](https://github.com/ragz743/Team_15_Capstone_Project/tree/main/code_/frontend/src)
 
 
 ## Retrospective Summary

@@ -10,6 +10,7 @@ from backend.conversation_context import ConversationContext
 from backend.conversation_store import ConversationStore
 from backend.databases.pgvector import PgVectorConnection
 from psycopg import sql
+from weather_fixtures import POINT
 
 MIGRATION = Path(__file__).resolve().parents[1] / "deployment/migrations/001_conversations.sql"
 SNAPSHOT_MIGRATION = MIGRATION.with_name("002_turn_snapshots.sql")
@@ -32,6 +33,7 @@ def database():
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
         conn.execute(MIGRATION.read_bytes())
         conn.execute(SNAPSHOT_MIGRATION.read_bytes())
+        conn.execute(MIGRATION.with_name("003_search_indexes.sql").read_bytes())
     try:
         yield connect
     finally:
@@ -54,9 +56,36 @@ def completed():
         request = uuid4()
         turn = store.begin(owner, chat, request, question)
         context = context or ConversationContext(
-            station_ids=["1"], start=date(2026, 9, 10), end=date(2026, 9, 10), subject="temperature"
+            point=POINT, station_ids=["1"], start=date(2026, 9, 10), end=date(2026, 9, 10), subject="temperature"
         )
         store.complete(owner, chat, request, turn.attempt_id, reply, "fixture", context)
         return request
 
     return save
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    """Add the option for running slow sample-question tests."""
+    parser.addoption(
+        "--run-sample-questions",
+        action="store_true",
+        default=False,
+        help="Run sample test suite, this is a slow and expensive (LLM credits) operation.",
+    )
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Register the optional test marker."""
+    config.addinivalue_line("markers", "optional: marks test as optional")
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config,
+    items: list[pytest.Item],
+) -> None:
+    """Skip optional tests unless explicitly enabled on the command line."""
+    if not config.getoption("--run-sample-questions"):
+        skipper = pytest.mark.skip(reason="Skipped by default. Use --run-sample-questions to run.")
+        for item in items:
+            if "optional" in item.keywords:
+                item.add_marker(skipper)

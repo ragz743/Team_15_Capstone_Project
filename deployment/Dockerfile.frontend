@@ -3,10 +3,10 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
-COPY code/frontend/package*.json ./
+COPY code_/frontend/package*.json ./
 RUN npm ci
 
-COPY code/frontend/ ./
+COPY code_/frontend/ ./
 RUN npm run build
 
 FROM nginx:alpine
