@@ -130,13 +130,13 @@ class ChatbotWorkflow:
 
     def close(self) -> None:
         """Close all open connections."""
-        for conn in (
+        for db in (
             self.current_db,
             self.forecast_db,
             self.historical_daily_db,
         ):
-            if conn.conn.is_connected():
-                conn.conn.shutdown()
+            if db.conn.is_connected():
+                db.conn.shutdown()
 
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
