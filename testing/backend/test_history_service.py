@@ -196,5 +196,22 @@ def test_malformed_json_gets_one_bounded_repair_before_any_search():
     assert result.snapshot.intent.terms == ["frost"]
     assert model.invoke.call_count == 2 and store.search_history.call_count == 1
     repair = json.loads(model.invoke.call_args.args[0][0].split("\nInput JSON:\n", 1)[1])
+    assert repair["previous_output"] == "not JSON"
     assert repair["message"] == "Find my frost chat"
     assert repair["output_error"]
+
+
+def test_weather_repair_preserves_original_request_without_history_search():
+    """A rewritten ordinary question is rejected and repaired before routing."""
+    invalid = {"action": "weather", "weather_question": "What is the weather?"}
+    service, model, store = setup_history(invalid, {"action": "weather"})
+    question = "whats the wather"  # codespell:ignore whats
+    result = service.prepare(store, uuid4(), uuid4(), question, accepted_at=NOW)
+    assert result.intent.action == "weather" and result.intent.weather_question is None
+    assert result.recent == store.history_window.return_value
+    assert model.invoke.call_count == 2
+    store.search_history.assert_not_called()
+    repair = json.loads(model.invoke.call_args.args[0][0].split("\nInput JSON:\n", 1)[1])
+    assert repair["message"] == question
+    assert json.loads(repair["previous_output"]) == invalid
+    assert "weather_question to null" in repair["output_error"][0]["message"]

@@ -11,9 +11,18 @@ class HistoryIntent(BaseModel):
     """A model may select search criteria, never an owner or executable SQL."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
-    action: Literal["weather", "recall", "reuse", "clarify"]
+    action: Literal["weather", "recall", "reuse", "clarify"] = Field(
+        description=(
+            "reuse for NEW weather using a saved location or context; recall for what was said before; "
+            "clarify for ambiguous history requests; weather for ordinary weather questions and follow ups"
+        )
+    )
     scope: Literal["all", "current", "previous"] = Field(
-        default="all", description="all unless explicitly this chat (current) or the single last other chat (previous)"
+        default="all",
+        description=(
+            "all for a named topic or unspecified chat; current for this chat; "
+            "previous only when the single most recent other conversation is explicitly requested"
+        ),
     )
     terms: list[str] = Field(
         default_factory=list, max_length=8, description="Alternative topic keywords; [] for any topic"
@@ -23,7 +32,14 @@ class HistoryIntent(BaseModel):
     )
     end: date | None = Field(default=None, description="Last inclusive sent date; same as start for a single day")
     clarification: str | None = Field(default=None, max_length=500)
-    weather_question: str | None = Field(default=None, max_length=4000)
+    weather_question: str | None = Field(
+        default=None,
+        max_length=4000,
+        description=(
+            "Only for action=reuse: the NEW weather question, preserving requested dates and measurements. "
+            "Must be null for weather, recall and clarify. Ordinary weather uses the original message unchanged."
+        ),
+    )
 
     @model_validator(mode="after")
     def coherent_intent(self):
@@ -39,7 +55,10 @@ class HistoryIntent(BaseModel):
         if self.action == "reuse" and not (self.weather_question and self.weather_question.strip()):
             raise ValueError("Reusing history needs a new weather question")
         if self.action == "weather" and (self.terms or self.start or self.clarification or self.weather_question):
-            raise ValueError("A weather route must not contain a history search")
+            raise ValueError(
+                "For action=weather, use terms=[] and set start, end, clarification and weather_question to null. "
+                "The original message supplies the weather question; do not rewrite it."
+            )
         return self
 
 

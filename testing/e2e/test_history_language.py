@@ -22,7 +22,9 @@ def service():
 
     dotenv.load_dotenv()
     model_name = os.getenv("OPENROUTER_HISTORY_MODEL") or os.environ["OPENROUTER_CHAT_MODEL"]
-    assert model_name.endswith(":free"), "This evaluation only authorizes a free chat model"
+    assert model_name == "openrouter/free" or model_name.endswith(":free"), (
+        "This evaluation only authorizes a free chat model"
+    )
     model = ChatbotOpenRouter(
         {
             "model": model_name,
@@ -44,6 +46,8 @@ def service():
         ("Give me a quick recap of our previous conversation", [], "recall", "previous"),
         ("What have we covered in this chat so far?", [], "recall", "current"),
         ("Using the location from our last conversation, check humidity today", [], "reuse", "previous"),
+        ("Use the spot from our frost discussion for tomorrow's wind", [], "reuse", "all"),
+        ("What did you tell me about humidity in our last chat?", [], "recall", "previous"),
         ("whats the wather", [], "weather", "all"),  # codespell:ignore whats
         ("What was the weather at Pullman on September 10?", [], "weather", "all"),
         (
@@ -86,7 +90,7 @@ def test_real_conversation_date_and_grounded_summary(service):
     assert str(result.intent.start) == str(result.intent.end) == "2026-09-10"
     reply = service.answer("Remind me what you said about frost then", result.snapshot)
     assert "[1]" in reply and "2026-09-10 10:00 PDT" in reply
-    assert "not updated weather" in reply and "could not confirm frost" in reply
+    assert "saved conversations" in reply and "could not confirm frost" in reply
 
 
 def test_real_relative_conversation_date_uses_reference_time(service):
