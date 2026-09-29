@@ -66,3 +66,13 @@ class ModelFactory:
         model = importlib.import_module(f"{ModelFactory._models_module}.{python_file}")
         model_class = getattr(model, python_class)
         return model_class
+
+    @staticmethod
+    def load_embedding_model() -> _BaseEmbedding:
+        """Load an embedding model type and return an instance of it."""
+        raise NotImplementedError
+
+    @staticmethod
+    def load_chatbot_model() -> _BaseChatbot:
+        """Load a chatbot model type and return an instance of it."""
+        raise NotImplementedError
