@@ -1,10 +1,12 @@
 """Restrict generated queries to bounded reads of one station table."""
 
+from backend.workflow.date_bounds import validate_date_bounds
 from mysql.connector.errors import ProgrammingError
 from sqlglot import exp, parse
 from sqlglot.errors import ParseError
 
 MAX_ROWS = 200
+UNAVAILABLE_QUERY = "SELECT NULL AS unavailable"
 _FUNCTIONS = {
     "ABS",
     "AND",
@@ -62,8 +64,19 @@ def measurement_unit(column: str) -> str | None:
     return None
 
 
-def bounded_query(query: str, table_name: str, columns: set[str] | None = None) -> str:
+def bounded_query(
+    query: str, table_name: str, columns: set[str] | None = None, *, date_column: str, max_days: int | None = None
+) -> str:
     """Validate the syntax tree before adding an output row limit."""
+    statement = _parse_select(query)
+    if statement == exp.select(exp.alias_(exp.Null(), "unavailable")):
+        return UNAVAILABLE_QUERY
+    _validate_read(statement, table_name, columns)
+    validate_date_bounds(statement, date_column, max_days)
+    return _limit_result(statement)
+
+
+def _parse_select(query: str) -> exp.Select:
     if len(query) > 12000:
         raise ProgrammingError("The generated query is too long.")
     try:
@@ -72,7 +85,10 @@ def bounded_query(query: str, table_name: str, columns: set[str] | None = None) 
         raise ProgrammingError("Return one valid SELECT statement.") from exc
     if len(statements) != 1 or not isinstance(statements[0], exp.Select):
         raise ProgrammingError("Only one SELECT statement is supported.")
-    statement = statements[0]
+    return statements[0]
+
+
+def _validate_read(statement: exp.Select, table_name: str, columns: set[str] | None) -> None:
     forbidden = (
         exp.Into,
         exp.Lock,
@@ -102,6 +118,9 @@ def bounded_query(query: str, table_name: str, columns: set[str] | None = None) 
             is_order_alias = isinstance(column.parent, exp.Ordered) and column.name.casefold() in aliases
             if column.name.casefold() not in allowed and not is_order_alias:
                 raise ProgrammingError("Select only the measurement and date columns in the supplied schema.")
+
+
+def _limit_result(statement: exp.Select) -> str:
     if statement.args.get("offset") is not None:
         raise ProgrammingError("Offsets are not supported.")
     limit = statement.args.get("limit")

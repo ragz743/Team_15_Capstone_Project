@@ -221,7 +221,7 @@ def test_saved_weather_followup_chain_uses_fresh_evidence_after_reopening(store,
     runtime = graph_weather(monkeypatch)
     runtime.model.invoke.side_effect = cycle(
         [
-            "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily",
+            "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'",
             "The selected source reported 70.25 F.",
         ]
     )

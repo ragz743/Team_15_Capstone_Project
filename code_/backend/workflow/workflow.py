@@ -19,7 +19,7 @@ from backend.model_output import parse_model_output
 from backend.models._chatbot_base import _BaseChatbot
 from backend.workflow.contracts import QueryExecution, WorkflowAnswer, WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.prompts import SQL_QUERY_PROMPT
-from backend.workflow.sql_policy import MAX_ROWS, bounded_query, measurement_unit
+from backend.workflow.sql_policy import MAX_ROWS, UNAVAILABLE_QUERY, bounded_query, measurement_unit
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -378,7 +378,9 @@ class ChatbotWorkflow:
             schema_context=_common.to_markdown_table(schema, ["", "", "", "", ""]),
             max_rows=MAX_ROWS,
         )
-        query, columns, rows = self._execute_generated_query(prompt, database, table_name, schema, node_name)
+        query, columns, rows = self._execute_generated_query(
+            prompt, database, table_name, schema, node_name, sub_queries[0].query_type
+        )
         measurements = self._query_measurements(query, schema)
         return self._query_result_message(sub_queries, rows, columns, measurements)
 
@@ -398,6 +400,7 @@ class ChatbotWorkflow:
         table_name: str,
         schema: list[SchemaQueryResult],
         node_name: str,
+        query_type: QueryType,
     ) -> tuple[str, tuple[str, ...], list[tuple]]:
         retry_instructions = ""
         allowed_columns = {column.column_name for column in schema}
@@ -406,7 +409,9 @@ class ChatbotWorkflow:
             query = self.workflow_chat_model.invoke([prompt + retry_instructions]).strip().rstrip(";").strip()
             self._log_event(node_name, "generated_sql", "\n" + query)
             try:
-                query = bounded_query(query, table_name, allowed_columns)
+                query = self._validate_query(query, table_name, allowed_columns, query_type)
+                if query == UNAVAILABLE_QUERY:
+                    return query, (), []
                 columns, rows = self._read_query(database, query)
             except ProgrammingError as error:
                 self._log_event(node_name, "sql_attempt_failed", f"attempt={attempt} query={query!r} error={error!r}")
@@ -420,6 +425,21 @@ class ChatbotWorkflow:
             self._log_event(node_name, "database_query_results", repr(rows))
             return query, columns, rows
         raise RuntimeError("SQL query attempts ended without a result.")
+
+    @staticmethod
+    def _validate_query(query: str, table_name: str, columns: set[str], query_type: QueryType) -> str:
+        date_column = {
+            "historical_weather": "JULDATE",
+            "current_weather": "TSTAMP",
+            "forecast_weather": "Forecast_time",
+        }[query_type]
+        return bounded_query(
+            query,
+            table_name,
+            columns,
+            date_column=date_column,
+            max_days=366 if query_type == "historical_weather" else None,
+        )
 
     @staticmethod
     def _read_query(database: AWNDatabaseConnectionBase, query: str) -> tuple[tuple[str, ...], list[tuple]]:

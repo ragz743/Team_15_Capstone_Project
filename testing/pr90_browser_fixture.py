@@ -44,7 +44,7 @@ def weather_engine(patch):
 
     def answer(messages):
         return (
-            "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily"
+            "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'"
             if "SQL" in messages[0] and "Answer the user's original" not in messages[0]
             else "The nearby source reported 70.25 F on September 29, 2026."
         )

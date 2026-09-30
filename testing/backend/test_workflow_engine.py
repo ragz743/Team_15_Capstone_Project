@@ -98,7 +98,7 @@ def test_sql_repair_rejects_writes_before_executing_a_select(weather):
     engine, runtime = weather
     runtime.model.invoke.side_effect = [
         "DELETE FROM station1daily",
-        "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily",
+        "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'",
         "70.25 F.",
     ]
     engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
@@ -160,4 +160,75 @@ def test_classifier_transport_error_is_not_repaired(weather):
     with pytest.raises(RuntimeError, match="provider unavailable"):
         engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
     runtime.classifier.invoke_json.assert_called_once()
+    runtime.cursor.execute.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("query_type", "date_column", "rejected"),
+    [
+        ("historical_weather", "JULDATE", "SELECT AVG(AVG_AIR_TEMP) FROM station1daily"),
+        (
+            "historical_weather",
+            "JULDATE",
+            "SELECT AVG_AIR_TEMP FROM station1daily WHERE JULDATE >= '2000-01-01' AND JULDATE < '2026-09-30'",
+        ),
+        (
+            "historical_weather",
+            "JULDATE",
+            "SELECT AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29' OR 1 = 1",
+        ),
+        ("current_weather", "TSTAMP", "SELECT AVG_AIR_TEMP FROM station1daily WHERE TSTAMP >= CURRENT_DATE"),
+        ("current_weather", "TSTAMP", "SELECT AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'"),
+        ("forecast_weather", "Forecast_time", "SELECT AVG_AIR_TEMP FROM station1daily WHERE Init_time = '2026-09-29'"),
+    ],
+)
+def test_invalid_date_scope_is_repaired_before_reading_weather(weather, query_type, date_column, rejected):
+    """Only the repaired period on the category's date column reaches the cursor."""
+    import json
+
+    from backend.databases._awn_connection_base import SchemaQueryResult
+
+    engine, runtime = weather
+    runtime.database.query_schema.return_value.extend(
+        [SchemaQueryResult(name, "datetime", "YES", "", "") for name in ("TSTAMP", "Forecast_time", "Init_time")]
+    )
+    runtime.classifier.invoke_json.return_value = json.dumps(
+        {
+            "sub_queries": [
+                {"query_type": query_type, "reworded_query": "Temperature on September 29, 2026"},
+            ]
+        }
+    )
+    corrected = (
+        f"SELECT {date_column}, AVG_AIR_TEMP FROM station1daily "
+        f"WHERE {date_column} >= '2026-09-29' AND {date_column} < '2026-09-30'"
+    )
+    runtime.model.invoke.side_effect = [rejected, corrected, "70.25 F."]
+    engine.answer_result(engine.prepare_turn("Temperature?", point=POINT, reference_time=REFERENCE))
+    runtime.cursor.execute.assert_called_once()
+    assert runtime.cursor.execute.call_args.args[0] == corrected + " LIMIT 200"
+    assert "previous SQL attempt failed" in runtime.model.invoke.call_args_list[1].args[0][0]
+
+
+def test_repeated_unbounded_sql_stops_without_a_database_read(weather):
+    """Validation failures share the existing three attempt SQL repair budget."""
+    from mysql.connector.errors import ProgrammingError
+
+    engine, runtime = weather
+    runtime.model.invoke.side_effect = None
+    runtime.model.invoke.return_value = "SELECT AVG(AVG_AIR_TEMP) FROM station1daily"
+    with pytest.raises(ProgrammingError, match="Bound JULDATE"):
+        engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
+    assert runtime.model.invoke.call_count == 3
+    runtime.cursor.execute.assert_not_called()
+
+
+def test_missing_measurement_skips_database_execution(weather):
+    """An explicit unavailable measurement returns no data without scanning a table."""
+    engine, runtime = weather
+    runtime.model.invoke.side_effect = None
+    runtime.model.invoke.return_value = "SELECT NULL AS unavailable"
+    result = engine.answer_result(engine.prepare_turn("Unsupported measurement?", point=POINT))
+    assert result.outcome == "no_data" and not result.sources
+    runtime.model.invoke.assert_called_once()
     runtime.cursor.execute.assert_not_called()
