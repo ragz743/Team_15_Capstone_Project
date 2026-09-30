@@ -25,7 +25,7 @@ from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.weather_query import RequestedPoint
-from backend.workflow.contracts import WorkflowClassificationError, WorkflowTimeoutError
+from backend.workflow.contracts import Source, WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.engine import LangGraphEngine
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,6 +88,8 @@ class SavedChatResponse(ChatResponse):
     conversation_id: UUID
     request_id: UUID
     outcome: Literal["success", "history", "needs_clarification", "no_data"]
+    sources: list[Source] = Field(default_factory=list)
+    coverage: Literal["subset", "complete"] | None = None
 
 
 _conversations = ConversationStore()

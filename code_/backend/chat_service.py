@@ -101,7 +101,14 @@ class SavedChatService:
         assert turn.completed is not None
         result = turn.completed
         return ChatCompletion(
-            AnsweredTurn(reply=result["reply"], outcome=result.get("outcome", "success")), result["model"], turn.context
+            AnsweredTurn(
+                reply=result["reply"],
+                outcome=result.get("outcome", "success"),
+                sources=result.get("sources", []),
+                coverage=result.get("coverage"),
+            ),
+            result["model"],
+            turn.context,
         )
 
     def _prepare(

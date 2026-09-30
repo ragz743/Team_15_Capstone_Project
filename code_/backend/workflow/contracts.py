@@ -1,7 +1,7 @@
 """Inputs retained for retries and results returned by the weather graph."""
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -49,3 +49,15 @@ class WorkflowAnswer:
 
     reply: str
     executions: list[QueryExecution]
+
+
+class Source(BaseModel):
+    """Weather provenance without source coordinates or raw records."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    station_id: str = Field(pattern=r"^\d{1,20}$")
+    station: str = Field(min_length=1, max_length=200)
+    county: str | None = None
+    kind: Literal["observation", "forecast"]
+    times: list[str] = Field(min_length=1, max_length=1000)
+    measurements: list[str] = Field(default_factory=list)
