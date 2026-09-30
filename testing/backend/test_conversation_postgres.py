@@ -369,3 +369,39 @@ def test_changed_map_point_conflicts_with_original_request(store, monkeypatch):
     assert client.post("/api/chat", json={**payload, "mode": "history"}).status_code == 409
     restored = client.get(f"/api/conversations/{chat}").json()
     assert restored["messages"][0]["request_input"] == {"point": POINT.model_dump()}
+
+
+@pytest.mark.parametrize("failure", ["classification", "no_data", "provider"])
+def test_saved_graph_failures_and_missing_observations(store, monkeypatch, failure):
+    """Exercise failure responses and persisted outcomes through the saved HTTP path."""
+    monkeypatch.setattr(api, "_conversations", store)
+    monkeypatch.setattr(api, "_history_service", None)
+    runtime = graph_weather(monkeypatch)
+    if failure == "classification":
+        runtime.classifier.invoke_json.return_value = "invalid"
+    elif failure == "no_data":
+        runtime.cursor.fetchall.return_value = []
+    else:
+        runtime.classifier.invoke_json.side_effect = RuntimeError("private provider details")
+    client = TestClient(api.app)
+    chat = client.post("/api/conversations").json()["id"]
+    payload = {
+        "conversation_id": chat,
+        "request_id": str(uuid4()),
+        "message": "Temperature?",
+        "point": POINT.model_dump(),
+    }
+    result = client.post("/api/chat", json=payload)
+    saved = client.get(f"/api/conversations/{chat}").json()["messages"]
+    if failure == "no_data":
+        assert result.status_code == 200 and result.json()["outcome"] == "no_data"
+        assert saved[-1]["role"] == "assistant"
+        assert client.post("/api/chat", json=payload).json() == result.json()
+        assert runtime.model.invoke.call_count == 1
+    else:
+        assert result.status_code == 502 and saved[-1]["status"] == "failed"
+        assert "private" not in result.text
+        if failure == "classification":
+            assert "interpret your question" in result.json()["detail"]
+        assert runtime.classifier.invoke_json.call_count == (2 if failure == "classification" else 1)
+        runtime.cursor.execute.assert_not_called()

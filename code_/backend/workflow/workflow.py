@@ -15,8 +15,9 @@ from backend.databases.awn_fc_connection import AWNForecastDatabaseConnection
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.loaders import _common
 from backend.model_factory import ModelFactory
+from backend.model_output import parse_model_output
 from backend.models._chatbot_base import _BaseChatbot
-from backend.workflow.contracts import QueryExecution, WorkflowAnswer, WorkflowTimeoutError
+from backend.workflow.contracts import QueryExecution, WorkflowAnswer, WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.prompts import SQL_QUERY_PROMPT
 from backend.workflow.sql_policy import MAX_ROWS, bounded_query, measurement_unit
 from langchain_openrouter import ChatOpenRouter
@@ -24,7 +25,7 @@ from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph, message, state
 from mysql.connector.errors import ProgrammingError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 QueryType = Literal[
     "current_weather",
@@ -103,6 +104,7 @@ class ClassifierChatbot:
     request as miscellaneous and ask them to choose a location on the map.
     Do not reinterpret it as weather at the currently selected station.
     Preserve requested measurements and periods in each standalone question.
+    If output_error is supplied, correct those schema errors using the original input.
     """
 
     def __init__(self, model: _BaseChatbot | None = None) -> None:
@@ -117,21 +119,14 @@ class ClassifierChatbot:
     def classify(self, state: ChatState) -> dict:
         """Make a call to the llm."""
         if self._injected_model is not None:
-            raw = self._injected_model.invoke_json(
-                self._CLASSIFIER_SYSTEM_PROMPT,
+            result = self._classify_json(
                 {
                     "reference_time": state["reference_time"],
                     "history": state["history"],
                     "selected_station": state["station_label"],
                     "question": state["original_user_input"],
-                },
-                QueryClassifications.model_json_schema(),
-            ).strip()
-            if len(raw) > 16000:
-                raise ValueError("Classifier output exceeds its limit")
-            if raw.startswith("```json\n") and raw.endswith("\n```"):
-                raw = raw[8:-4]
-            result = QueryClassifications.model_validate_json(raw)
+                }
+            )
             return {"sub_queries": result.sub_queries}
         assert self._model is not None
         result = self._model.invoke(
@@ -142,6 +137,31 @@ class ClassifierChatbot:
         )
 
         return {"sub_queries": result.sub_queries}  # type: ignore
+
+    def _classify_json(self, payload: dict) -> QueryClassifications:
+        """Allow one schema repair while keeping the original question and context."""
+        assert self._injected_model is not None
+        for attempt in range(2):
+            raw = self._injected_model.invoke_json(
+                self._CLASSIFIER_SYSTEM_PROMPT,
+                payload,
+                QueryClassifications.model_json_schema(),
+            )
+            try:
+                return parse_model_output(raw, QueryClassifications)
+            except ValidationError as exc:
+                if attempt:
+                    raise WorkflowClassificationError("Classifier returned an invalid query plan") from exc
+                payload = {
+                    **payload,
+                    "output_error": [
+                        {"type": error["type"], "field": error["loc"], "message": error["msg"]}
+                        for error in exc.errors(include_input=False, include_url=False)
+                    ],
+                }
+            except ValueError as exc:
+                raise WorkflowClassificationError("Classifier output exceeds its limit") from exc
+        raise AssertionError("Unreachable classification state")
 
 
 class ChatbotWorkflow:

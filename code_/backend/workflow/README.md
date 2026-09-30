@@ -46,3 +46,5 @@ Generated queries must pass the SQL AST policy before execution. The policy allo
 Set `OPENROUTER_API_KEY`, `AWN_DB_HOST`, `AWN_DB_USER` and `AWN_DB_PASSWORD` in the local environment. `OPENROUTER_WORKFLOW_MODEL` defaults to `OPENROUTER_CHAT_MODEL`; `OPENROUTER_CLASSIFIER_MODEL` defaults to the workflow model. The web weather service does not require an embedding model or a populated vector index.
 
 Saved requests default to `mode: weather`. This path supplies recent conversation context directly to the graph without invoking the saved history classifier. Selecting Past conversations sends `mode: history` and searches only that browser's saved conversations. History mode cannot execute new weather queries. Retries keep the original operation, selected point and acceptance time.
+
+Malformed classifier JSON receives one schema repair attempt with the original inputs. Repeated invalid output produces an interpretation error. Provider failures do not enter the repair loop. SQL validation still runs independently before any source query executes.
