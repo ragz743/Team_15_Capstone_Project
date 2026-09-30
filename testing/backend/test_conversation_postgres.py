@@ -113,7 +113,7 @@ def test_http_cookie_reload_retry_and_ownership(store, database, monkeypatch):
     assert len(client.get(f"/api/conversations/{chat}").json()["messages"]) == 4
 
 
-def test_history_routes_without_retriever_and_reuse_fetches_weather_again(store, monkeypatch, completed):
+def test_explicit_history_cannot_trigger_new_weather(store, monkeypatch, completed):
     """An old assistant claim can be quoted as history but cannot supply new weather evidence."""
     monkeypatch.setattr(api, "_conversations", store)
     client = TestClient(api.app)
@@ -124,7 +124,12 @@ def test_history_routes_without_retriever_and_reuse_fetches_weather_again(store,
     monkeypatch.setattr(api, "_retriever", None)
     recalled = client.post(
         "/api/chat",
-        json={"conversation_id": current, "request_id": str(uuid4()), "message": "What did we discuss last time?"},
+        json={
+            "conversation_id": current,
+            "request_id": str(uuid4()),
+            "message": "What did we discuss last time?",
+            "mode": "history",
+        },
     )
     assert recalled.status_code == 200 and "OLD CLAIM" in recalled.json()["reply"]
     retriever = FixtureRetriever()
@@ -135,11 +140,11 @@ def test_history_routes_without_retriever_and_reuse_fetches_weather_again(store,
             "conversation_id": current,
             "request_id": str(uuid4()),
             "message": "Using our last conversation, what about humidity?",
+            "mode": "history",
         },
     )
-    assert result.status_code == 200 and result.json()["reply"] == "Fresh retrieved weather"
-    assert "OLD CLAIM" not in str(retriever.calls)
-    assert retriever.calls[0][1].station_ids == ["1"]
+    assert result.status_code == 200 and result.json()["outcome"] == "needs_clarification"
+    assert not retriever.calls
 
 
 def test_secure_cookie_and_cors_configuration(store, monkeypatch):
@@ -258,7 +263,12 @@ def test_llm_history_http_reload_same_chat_and_browser_isolation(store, database
     restarted.cookies.update(client.cookies)
     monkeypatch.setattr(api, "_conversations", ConversationStore(database))
     current = restarted.post("/api/conversations").json()["id"]
-    payload = {"conversation_id": current, "request_id": str(uuid4()), "message": "that icy crop chat, remind me?"}
+    payload = {
+        "conversation_id": current,
+        "mode": "history",
+        "request_id": str(uuid4()),
+        "message": "that icy crop chat, remind me?",
+    }
     response = restarted.post("/api/chat", json=payload)
     assert response.status_code == 200 and response.json()["outcome"] == "history"
     assert "Saved frost discussion only" in response.json()["reply"]
@@ -287,7 +297,12 @@ def test_history_answer_retry_uses_frozen_evidence_after_restart(store, database
         '{"statements":[{"text":"You discussed frost.","refs":[1]}]}',
     ]
     monkeypatch.setattr(api, "_history_service", HistoryService(model, "fixture-history"))
-    payload = {"conversation_id": current, "request_id": str(uuid4()), "message": "Remember the frost chat?"}
+    payload = {
+        "conversation_id": current,
+        "mode": "history",
+        "request_id": str(uuid4()),
+        "message": "Remember the frost chat?",
+    }
     first = client.post("/api/chat", json=payload)
     assert first.status_code == 502 and "private failure" not in first.text
     completed(store, owner, old, "Frost arrived after the request", "LATER_REPLY")
@@ -314,16 +329,25 @@ def test_history_clarification_context_and_service_failures(store, monkeypatch):
     ]
     monkeypatch.setattr(api, "_history_service", HistoryService(model, "fixture-history"))
     result = client.post(
-        "/api/chat", json={"conversation_id": current, "request_id": str(uuid4()), "message": "Our September chats?"}
+        "/api/chat",
+        json={
+            "conversation_id": current,
+            "mode": "history",
+            "request_id": str(uuid4()),
+            "message": "Our September chats?",
+        },
     )
     assert result.json()["outcome"] == "needs_clarification"
-    result = client.post("/api/chat", json={"conversation_id": current, "request_id": str(uuid4()), "message": "2025"})
+    result = client.post(
+        "/api/chat", json={"conversation_id": current, "mode": "history", "request_id": str(uuid4()), "message": "2025"}
+    )
     assert result.status_code == 200 and "could not find" in result.json()["reply"]
     assert "Which September did you mean?" in model.invoke.call_args.args[0][0]
     assert '"message": "2025"' in model.invoke.call_args.args[0][0]
     monkeypatch.setattr(api, "_history_service", None)
     result = client.post(
-        "/api/chat", json={"conversation_id": current, "request_id": str(uuid4()), "message": "Remember?"}
+        "/api/chat",
+        json={"conversation_id": current, "mode": "history", "request_id": str(uuid4()), "message": "Remember?"},
     )
     assert result.status_code == 503
 
@@ -342,5 +366,6 @@ def test_changed_map_point_conflicts_with_original_request(store, monkeypatch):
     changed = {**payload, "point": {"latitude": 47.0, "longitude": -120.0}}
     assert client.post("/api/chat", json=changed).status_code == 409
     assert len(retriever.calls) == 1
+    assert client.post("/api/chat", json={**payload, "mode": "history"}).status_code == 409
     restored = client.get(f"/api/conversations/{chat}").json()
     assert restored["messages"][0]["request_input"] == {"point": POINT.model_dump()}
