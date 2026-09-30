@@ -21,6 +21,7 @@ dependencies = [
     "langchain-openrouter",
     "langchain-openai",
     "langgraph",
+    "sqlglot",
     "fastapi",
     "uvicorn[standard]",
 ]
