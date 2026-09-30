@@ -9,7 +9,7 @@ from backend.chat_turn import PreparedChatTurn
 from backend.conversation_context import TIMEZONE, ConversationContext
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.weather_query import RequestedPoint, Station
-from backend.workflow.contracts import WorkflowTimeoutError
+from backend.workflow.contracts import WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.engine import LangGraphEngine
 from workflow_fixture import make_graph
 
@@ -121,3 +121,37 @@ def test_source_connection_starts_read_only_with_a_statement_limit(monkeypatch):
     assert cursor.execute.call_args_list[0].args == ("SET SESSION max_statement_time = %s", (8,))
     assert cursor.execute.call_args_list[1].args == ("START TRANSACTION READ ONLY",)
     connection.return_value.disconnect.assert_called_once()
+
+
+@pytest.mark.parametrize("invalid", ["not JSON", '{"sub_queries":[{"query_type":"today"}]}'])
+def test_classifier_repairs_once_with_original_inputs(weather, invalid):
+    """A schema repair keeps the original question, station and recent context."""
+    engine, runtime = weather
+    valid = runtime.classifier.invoke_json.return_value
+    runtime.classifier.invoke_json.side_effect = [invalid, valid]
+    turn = engine.prepare_turn("Temperature today?", point=POINT, reference_time=REFERENCE)
+    assert engine.answer_result(turn).outcome == "success"
+    first, second = [call.args[1] for call in runtime.classifier.invoke_json.call_args_list]
+    assert second == {**first, "output_error": second["output_error"]}
+    assert all("input" not in error for error in second["output_error"])
+
+
+def test_invalid_classifier_stops_after_one_repair(weather):
+    """Repeated invalid plans never reach SQL generation or execution."""
+    engine, runtime = weather
+    runtime.classifier.invoke_json.return_value = "not JSON"
+    with pytest.raises(WorkflowClassificationError):
+        engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
+    assert runtime.classifier.invoke_json.call_count == 2
+    runtime.model.invoke.assert_not_called()
+    runtime.cursor.execute.assert_not_called()
+
+
+def test_classifier_transport_error_is_not_repaired(weather):
+    """Provider failures return without another classifier call."""
+    engine, runtime = weather
+    runtime.classifier.invoke_json.side_effect = RuntimeError("provider unavailable")
+    with pytest.raises(RuntimeError, match="provider unavailable"):
+        engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
+    runtime.classifier.invoke_json.assert_called_once()
+    runtime.cursor.execute.assert_not_called()

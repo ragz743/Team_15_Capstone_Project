@@ -6,6 +6,10 @@ from typing import Any
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
+class WorkflowClassificationError(ValueError):
+    """The classifier could not produce a valid query plan."""
+
+
 class WorkflowTimeoutError(TimeoutError):
     """A weather workflow exceeded its request budget."""
 

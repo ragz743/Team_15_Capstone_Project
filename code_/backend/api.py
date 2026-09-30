@@ -25,7 +25,7 @@ from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.weather_query import RequestedPoint
-from backend.workflow.contracts import WorkflowTimeoutError
+from backend.workflow.contracts import WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.engine import LangGraphEngine
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -188,6 +188,11 @@ app.add_middleware(
 
 
 def _retrieval_error(exc: BaseException) -> HTTPException:
+    if isinstance(exc, WorkflowClassificationError):
+        return HTTPException(
+            status_code=502,
+            detail="The weather service could not interpret your question. Please try again or rephrase it.",
+        )
     if isinstance(exc, WorkflowTimeoutError):
         return HTTPException(status_code=504, detail="The weather request took too long. Please try again.")
     if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
@@ -210,7 +215,7 @@ async def chat_service_error(request: Request, exc: ChatServiceError):
         error = HTTPException(status_code=502, detail=f"{name} returned an empty answer. Please try again.")
     else:
         error = _retrieval_error(exc.__cause__ or exc)
-        if error.status_code == 502:
+        if error.status_code == 502 and exc.operation == "history":
             error.detail = f"{name} could not complete your request. Please try again."
     logger.error("%s request failed (%s)", exc.operation, type(exc.__cause__ or exc).__name__)
     return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
