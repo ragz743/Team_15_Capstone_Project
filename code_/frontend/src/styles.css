@@ -1035,3 +1035,20 @@ button, input, textarea {
 .location-controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 10px; font-size: 13px; }
 .map-hint { color: #625b57; }
 @media (max-width: 760px) { .map-panel { flex-shrink: 0; margin: 0 16px; } .location-map { height: 180px; } }
+
+.chat-mode {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-right: auto;
+  font-size: 0.8rem;
+}
+
+.chat-mode select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 0.4rem;
+  padding: 0.3rem;
+}

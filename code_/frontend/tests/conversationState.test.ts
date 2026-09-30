@@ -139,3 +139,21 @@ test("recalling an answer preserves an unused map selection", () => {
   assert.deepEqual(state.point, otherPoint);
   assert.deepEqual(state.pendingPoint, otherPoint);
 });
+
+
+test("recall mode survives a failed turn and reload while new chats default to weather", () => {
+  const recalled: SavedConversation = { ...saved, messages: saved.messages.map((item) => ({
+    ...item, request_input: { point, mode: "history" },
+  })) };
+  let state = conversationReducer(initialState, { type: "loaded", chat: recalled });
+  assert.equal(state.mode, "history");
+  state = conversationReducer(state, { type: "mode", value: "weather" });
+  assert.equal(state.messages[0].mode, "history");
+  assert.equal(conversationReducer(state, { type: "new" }).mode, "weather");
+});
+
+test("the saved request sends the selected operation", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => Response.json(savedReply));
+  await sendSavedChat(conversation, request, "Remember?", undefined, null, "history");
+  assert.equal(JSON.parse(String(fetch.mock.calls[0].arguments[1]?.body)).mode, "history");
+});

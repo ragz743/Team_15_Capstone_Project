@@ -26,6 +26,8 @@ export interface RequestedPoint {
   longitude: number;
 }
 
+export type ChatMode = "weather" | "history";
+
 export type ChatOutcome = "success" | "history" | "needs_clarification" | "no_data";
 
 export interface ConversationContext {
@@ -51,7 +53,7 @@ export interface SavedMessage {
   content: string;
   created_at: string;
   status: "pending" | "completed" | "failed";
-  request_input?: { point?: RequestedPoint | null };
+  request_input?: { point?: RequestedPoint | null; mode?: ChatMode | null };
 }
 export interface SavedConversation extends ConversationSummary {
   context: ConversationContext;
@@ -86,7 +88,9 @@ function isOutcome(value: unknown): value is ChatOutcome {
 function isRequestInput(value: unknown): boolean {
   return (
     value === undefined ||
-    (isObject(value) && (value.point === undefined || value.point === null || isPoint(value.point)))
+    (isObject(value) &&
+      (value.point === undefined || value.point === null || isPoint(value.point)) &&
+      (value.mode === undefined || value.mode === null || value.mode === "weather" || value.mode === "history"))
   );
 }
 function isContext(value: unknown): value is ConversationContext {

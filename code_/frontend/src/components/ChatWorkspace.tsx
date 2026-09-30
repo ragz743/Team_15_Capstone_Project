@@ -4,7 +4,7 @@ import ChatTranscript from "./ChatTranscript";
 import ConversationSidebar from "./ConversationSidebar";
 import LocationPicker from "./LocationPicker";
 import Icon from "./Icon";
-import type { RequestedPoint } from "../lib/api";
+import type { ChatMode, RequestedPoint } from "../lib/api";
 import type { Message } from "../lib/conversationState";
 import type { ConversationHistory } from "./chatTypes";
 
@@ -13,6 +13,8 @@ export type { Message as ChatMessage } from "../lib/conversationState";
 type ChatWorkspaceProps = {
   messages: Message[];
   draft: string;
+  mode: ChatMode;
+  onModeChange: (mode: ChatMode) => void;
   point: RequestedPoint | null;
   onPointChange: (point: RequestedPoint) => void;
   isSending: boolean;
@@ -28,6 +30,8 @@ type ChatWorkspaceProps = {
 export default function ChatWorkspace({
   messages,
   draft,
+  mode,
+  onModeChange,
   isSending,
   ready = true,
   notice = "",
@@ -164,6 +168,8 @@ export default function ChatWorkspace({
           />
           <ChatComposer
             draft={draft}
+            mode={mode}
+            onModeChange={onModeChange}
             isSending={isSending}
             ready={ready}
             textareaRef={textareaRef}
