@@ -232,3 +232,35 @@ def test_missing_measurement_skips_database_execution(weather):
     assert result.outcome == "no_data" and not result.sources
     runtime.model.invoke.assert_called_once()
     runtime.cursor.execute.assert_not_called()
+
+
+def test_retry_after_midnight_rejects_database_clock_and_keeps_original_reference(weather, monkeypatch):
+    """A later retry can only execute the repaired literal query using frozen inputs."""
+    import backend.workflow.workflow as graph_module
+
+    engine, runtime = weather
+    accepted = datetime(2026, 9, 29, 23, 59, tzinfo=TIMEZONE)
+    prepared = engine.prepare_turn("Temperature today?", point=POINT, reference_time=accepted)
+    runtime.classifier.invoke_json.side_effect = RuntimeError("Provider unavailable")
+    with pytest.raises(RuntimeError):
+        engine.answer_result(prepared)
+
+    class NextDay(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 9, 30, 1, tzinfo=tz)
+
+    monkeypatch.setattr(graph_module, "datetime", NextDay)
+    runtime.classifier.invoke_json.side_effect = None
+    runtime.model.invoke.side_effect = [
+        "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = CURRENT_DATE",
+        "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'",
+        "70.25 F.",
+    ]
+    restored = PreparedChatTurn.model_validate_json(prepared.model_dump_json())
+    engine.answer_result(restored)
+    assert runtime.classifier.invoke_json.call_args.args[1]["reference_time"] == accepted.isoformat()
+    runtime.cursor.execute.assert_called_once()
+    assert "'2026-09-29'" in runtime.cursor.execute.call_args.args[0]
+    assert "CURRENT_DATE" not in runtime.cursor.execute.call_args.args[0]
+    assert accepted.isoformat() in runtime.model.invoke.call_args_list[1].args[0][0]

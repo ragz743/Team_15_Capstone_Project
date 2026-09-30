@@ -13,8 +13,10 @@ Station schema:
 Return only one SQL SELECT statement written for MariaDB.
 The SQL statement shall contain no markdown fences,
 explanation, comments, or semicolon-separated statements.
-Do not use any table other than `{table_name}`. Use SQL literals for dates
-and numeric values. Do not emit parameter placeholders. Select named columns,
+Do not use any table other than `{table_name}`. Derive explicit ISO date literals
+from the supplied reference time, never CURRENT_DATE, CURDATE, CURRENT_TIMESTAMP
+or other database clock functions. Use numeric literals for values.
+Do not emit parameter placeholders. Select named columns,
 never SELECT *. Include the observation or forecast date in returned rows.
 For aggregates include MIN(date_column) AS source_start and
 MAX(date_column) AS source_end. A high or low for a whole day or period

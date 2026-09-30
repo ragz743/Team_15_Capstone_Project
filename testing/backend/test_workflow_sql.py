@@ -147,6 +147,45 @@ def test_timestamp_columns_and_date_wrappers_support_absolute_periods(column, ex
 
 
 @pytest.mark.parametrize(
+    "clock",
+    [
+        "CURRENT_DATE",
+        "CURRENT_DATE()",
+        "CURDATE()",
+        "CURRENT_TIMESTAMP",
+        "CURRENT_TIMESTAMP()",
+        "NOW()",
+        "UTC_TIMESTAMP()",
+        "UTC_DATE()",
+        "SYSDATE()",
+        "LOCALTIME",
+        "LOCALTIMESTAMP()",
+    ],
+)
+def test_database_clock_functions_are_rejected_even_inside_a_bounded_query(clock):
+    """A saved request cannot silently switch to a later database date."""
+    with pytest.raises(ProgrammingError):
+        bounded_query(
+            f"SELECT AIR_TEMP, {clock} FROM station1 WHERE TSTAMP >= '2026-09-29' AND TSTAMP < '2026-09-30'",
+            "station1",
+            {"AIR_TEMP", "TSTAMP"},
+            date_column="TSTAMP",
+        )
+
+
+@pytest.mark.parametrize("clock", ["CURRENT_DATE", "CURDATE()", "CURRENT_TIMESTAMP()"])
+def test_database_clock_functions_are_rejected_in_date_predicates(clock):
+    """Reject the original retry drift examples before a database cursor opens."""
+    with pytest.raises(ProgrammingError):
+        bounded_query(
+            f"SELECT AVG(AIR_TEMP) FROM station1 WHERE TSTAMP >= {clock}",
+            "station1",
+            {"AIR_TEMP", "TSTAMP"},
+            date_column="TSTAMP",
+        )
+
+
+@pytest.mark.parametrize(
     "subquery",
     ["SELECT AVG(AIR_TEMP) FROM station1", "SELECT MAX(TSTAMP) FROM station1"],
 )

@@ -16,8 +16,6 @@ _FUNCTIONS = {
     "CEIL",
     "COALESCE",
     "COUNT",
-    "CURRENT_DATE",
-    "CURRENT_TIMESTAMP",
     "DATE",
     "DATE_ADD",
     "DATE_SUB",
@@ -107,7 +105,7 @@ def _validate_read(statement: exp.Select, table_name: str, columns: set[str] | N
         raise ProgrammingError("Only the selected station table may be read.")
     for function in statement.find_all(exp.Func):
         if function.sql_name() not in _FUNCTIONS:
-            raise ProgrammingError("This query uses an unsupported function.")
+            raise ProgrammingError("Use supported functions and explicit dates, never the database clock.")
     for star in statement.find_all(exp.Star):
         if not isinstance(star.parent, exp.Count):
             raise ProgrammingError("Select named measurement columns rather than all columns.")
