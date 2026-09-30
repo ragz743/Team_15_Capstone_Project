@@ -87,9 +87,11 @@ class Retriever:
     ) -> None:
         """Create the reusable catalog and interpretation boundary."""
         self._vector_stores = [vector_stores] if isinstance(vector_stores, PgVectorStore) else vector_stores
+        if not self._vector_stores:
+            raise ValueError("At least one weather index is required")
         self._chatbot = chatbot
-        self._catalog = catalog or StationCatalog(
-            lambda: [station for store in self._vector_stores for station in store.stations()]
+        self._catalog = catalog or self._vector_stores[0].station_catalog(
+            tuple(store.table for store in self._vector_stores)
         )
         self._interpreter = interpreter or WeatherInterpreter(chatbot)
 

@@ -121,17 +121,27 @@ accepted. The server selects its nearby indexed source and validates the model's
 structured dates before retrieval. The model can also ask for clarification or decline
 an unrelated request.
 
-The source catalog is cached for five minutes. Sources must have consistent Washington
-coordinates and be within 50 km of the requested point. Set `radius_km` on
-`StationCatalog` to adjust that limit. Missing records do not cause a switch to another
-source. The first lookup and expired cache refreshes still read indexed station metadata.
+Station lookup queries `indexed_stations` using a geographic index and returns one
+source. It does not load a full catalog into the application. Sources must have
+consistent Washington coordinates and be within 50 km of the requested point.
+Set `radius_km` on `StationCatalog` to adjust that limit. Missing records do not
+cause a switch to another source.
+
+Weather inserts, metadata changes and deletes maintain the station directory in
+the same transaction through database triggers. Repeated readings with unchanged
+station information skip rebuilding that station. Conflicting identities remain
+excluded until their records are corrected. The lookup uses a bounding box before
+calculating spherical distance, then checks that the station has indexed records.
 
 The API continues to use `Retriever`. `ChatbotWorkflow` queries the AWN databases
 directly and requires county input and session handling. Connecting it to the API is
 a separate integration change.
 
 For an existing database, apply `deployment/migrations/001_station_search_indexes.sql`
-when deploying the updated backend. Fresh databases receive these indexes from the seed.
+then `deployment/migrations/002_station_directory.sql` before deploying the backend.
+The second migration reads existing metadata once to populate the directory and locks
+the weather tables against writes while it runs. It requires PostgreSQL 16 or newer
+and no additional extensions. Fresh Docker databases run it after the seed script.
 The CLI uses the same selection flow:
 
 ```bash

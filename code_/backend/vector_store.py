@@ -4,7 +4,8 @@ import json
 
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._embedding_base import _BaseEmbedding
-from backend.weather_query import Station, WeatherQuery
+from backend.station_catalog import StationCatalog
+from backend.weather_query import WeatherQuery
 from backend.weather_records import dated_document
 from backend.weather_search import FILTERABLE_KEYS, search_predicates
 from langchain_core.documents import Document
@@ -94,17 +95,9 @@ class PgVectorStore(VectorStore):
         """Async add or update documents in the vector store."""
         raise NotImplementedError
 
-    def stations(self) -> list[Station]:
-        """Read current station identities without caching failed or empty catalogs."""
-        rows = self._vector_db.simple_query(
-            (
-                "SELECT DISTINCT metadata->>'id', metadata->>'station', metadata->>'county', "
-                f"metadata->>'latitude', metadata->>'longitude', metadata->>'state' FROM {self._table} "
-                "WHERE metadata->>'id' IS NOT NULL AND metadata->>'station' IS NOT NULL ORDER BY 2, 1"
-            ).encode(),
-            (),
-        )
-        return [Station(str(row[0]), str(row[1]), str(row[2] or ""), row[3], row[4], str(row[5] or "")) for row in rows]
+    def station_catalog(self, tables: tuple[str, ...] | None = None) -> StationCatalog:
+        """Share this connection with the station lookup repository."""
+        return StationCatalog(self._vector_db, tables=tables if tables is not None else (self._table,))
 
     def similarity_search(
         self, query: str, k: int = 4, filter: dict | None = None, *, selection: WeatherQuery | None = None, **kwargs

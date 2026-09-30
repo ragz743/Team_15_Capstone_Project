@@ -44,7 +44,7 @@ def test_missing_map_point_skips_catalog_and_models():
     stores, model = weather_stores(), MagicMock()
     assert "map" in Retriever(stores, model).retrieve("Pullman yesterday")
     for store in stores:
-        store.stations.assert_not_called()
+        store.station_catalog.return_value.resolve.assert_not_called()
         store.similarity_search.assert_not_called()
     model.invoke.assert_not_called()
 
@@ -73,15 +73,29 @@ def test_conversational_decisions_skip_retrieval_and_answer_generation(action, l
     model.invoke.assert_called_once()
 
 
-@pytest.mark.parametrize("operation", ["stations", "similarity_search"])
+@pytest.mark.parametrize("operation", ["station_lookup", "similarity_search"])
 def test_required_database_failure_propagates(operation):
     """A failed source cannot become partial evidence or a no data response."""
     stores, model = weather_stores(), MagicMock()
     model.invoke.return_value = intent_json()
-    getattr(stores[1], operation).side_effect = RuntimeError("database unavailable")
+    target = (
+        stores[0].station_catalog.return_value.resolve if operation == "station_lookup" else stores[1].similarity_search
+    )
+    target.side_effect = RuntimeError("database unavailable")
     with pytest.raises(RuntimeError):
         Retriever(stores, model).retrieve("weather?", point=POINT)
-    assert model.invoke.call_count == (0 if operation == "stations" else 1)
+    assert model.invoke.call_count == (0 if operation == "station_lookup" else 1)
+
+
+def test_station_lookup_uses_one_shared_repository():
+    """Resolve the point once rather than reading each weather index's station list."""
+    stores, model = weather_stores(), MagicMock()
+    model.invoke.return_value = intent_json()
+    Retriever(stores, model).retrieve("weather?", point=POINT)
+    stores[0].station_catalog.assert_called_once_with(("daily_index", "live_index", "forecast_index"))
+    stores[0].station_catalog.return_value.resolve.assert_called_once_with(POINT)
+    for store in stores[1:]:
+        store.station_catalog.assert_not_called()
 
 
 def test_forecast_context_never_labels_forecast_time_as_observation():
