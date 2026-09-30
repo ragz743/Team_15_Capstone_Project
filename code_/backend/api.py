@@ -24,6 +24,7 @@ from backend.conversation_store import (
 from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
+from backend.station_catalog import StationList
 from backend.weather_query import RequestedPoint
 from backend.workflow.contracts import Source, WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.engine import LangGraphEngine
@@ -290,6 +291,28 @@ def get_conversation(
 ):
     """Resume an owned conversation with dated, ordered messages."""
     return _conversations.get(_owner(request, response), conversation_id, before=before)
+
+
+def _station_catalog(response: Response, point: RequestedPoint | None = None) -> StationList:
+    response.headers["Cache-Control"] = "no-store"
+    if _retriever is None:
+        raise HTTPException(status_code=503, detail="Stations are temporarily unavailable. Please try again.")
+    try:
+        return _retriever.station_catalog(point)
+    except Exception as exc:
+        raise _retrieval_error(exc) from exc
+
+
+@app.get("/api/stations", response_model=StationList)
+def list_stations(response: Response) -> StationList:
+    """List station names and counties from the cached AWN directory."""
+    return _station_catalog(response)
+
+
+@app.post("/api/stations/nearby", response_model=StationList)
+def nearby_stations(payload: RequestedPoint, response: Response) -> StationList:
+    """Use the browser point for sorting without persisting or echoing it."""
+    return _station_catalog(response, payload)
 
 
 def _saved_chat(payload: SavedChatRequest, request: Request, response: Response) -> SavedChatResponse:

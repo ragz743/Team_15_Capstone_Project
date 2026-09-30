@@ -11,7 +11,7 @@ from backend.chat_turn import AnsweredTurn, PreparedChatTurn
 from backend.conversation_context import TIMEZONE, ConversationContext
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.models._chatbot_base import _BaseChatbot
-from backend.station_catalog import StationCatalog
+from backend.station_catalog import StationCatalog, StationList, browse_stations
 from backend.weather_query import QueryClarificationError, RequestedPoint, Station
 from backend.workflow.contracts import Source, WorkflowAnswer, WorkflowHistory, WorkflowRequest, WorkflowTimeoutError
 from backend.workflow.workflow import ChatbotWorkflow, ClassifierChatbot
@@ -63,6 +63,10 @@ class LangGraphEngine:
         self._directory = directory or AWNStationDirectory()
         self._catalog = StationCatalog(self._directory.stations)
         self._workflow_factory = workflow_factory
+
+    def station_catalog(self, point: RequestedPoint | None = None) -> StationList:
+        """Reuse cached AWN metadata for browsing and optional nearby sorting."""
+        return browse_stations(self._directory.stations(), point)
 
     def prepare_turn(
         self,
