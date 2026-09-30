@@ -5,6 +5,7 @@ from typing import Literal
 from backend.conversation_context import ConversationContext
 from backend.history_models import HistorySnapshot
 from backend.weather_query import WeatherQuery
+from backend.workflow.contracts import WorkflowRequest
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -26,13 +27,28 @@ class PreparedChatTurn(BaseModel):
     selection: WeatherQuery | None = None
     reply: str | None = None
     history: HistorySnapshot | None = None
+    workflow: WorkflowRequest | None = None
 
     @model_validator(mode="after")
     def consistent_selection(self):
         """Keep executable constraints identical to the persisted context."""
         if self.history is not None:
-            if self.outcome != "history" or self.selection is not None or self.reply is not None:
+            if (
+                self.outcome != "history"
+                or self.selection is not None
+                or self.workflow is not None
+                or self.reply is not None
+            ):
                 raise ValueError("History evidence cannot coexist with weather execution or a prepared reply")
+        if self.workflow is not None:
+            if (
+                self.outcome != "weather"
+                or self.selection is not None
+                or self.reply is not None
+                or self.context.station_ids != [self.workflow.station_id]
+            ):
+                raise ValueError("Workflow inputs must match the saved weather station")
+            return self
         if self.outcome == "weather":
             query = self.selection
             if query is None or not query.station_ids or query.start > query.end:
