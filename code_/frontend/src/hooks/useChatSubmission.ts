@@ -31,6 +31,7 @@ export function useChatSubmission(
     const text = retry?.text ?? state.draft.trim();
     if (!text || !state.ready || scope.active) return;
     const requestId = retry?.requestId ?? crypto.randomUUID();
+    const mode = retry ? (retry.mode ?? "weather") : state.mode;
     const point = retry ? (retry.point ?? null) : state.pendingPoint;
     const message: Message = {
       id: `${requestId}:user`,
@@ -38,6 +39,7 @@ export function useChatSubmission(
       text,
       requestId,
       point,
+      mode,
       timestamp: retry?.timestamp ?? new Date().toISOString(),
     };
     const controller = scope.begin();
@@ -51,7 +53,7 @@ export function useChatSubmission(
         rememberSelection(id);
         dispatch({ type: "created", chat });
       }
-      const result = await sendSavedChat(id, requestId, text, controller.signal, point);
+      const result = await sendSavedChat(id, requestId, text, controller.signal, point, mode);
       if (!scope.owns(controller)) return;
       dispatch({ type: "answered", result, text });
       await refreshAfterAnswer(dispatch, scope, controller);

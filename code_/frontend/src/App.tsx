@@ -15,6 +15,8 @@ export default function App() {
     <ChatWorkspace
       messages={state.messages}
       draft={state.draft}
+      mode={state.mode}
+      onModeChange={(value) => dispatch({ type: "mode", value })}
       isSending={state.busy}
       ready={state.ready}
       notice={state.notice}

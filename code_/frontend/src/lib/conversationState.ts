@@ -1,6 +1,7 @@
 import {
   ApiError,
   type ConversationSummary,
+  type ChatMode,
   type RequestedPoint,
   type SavedChatResponse,
   type SavedConversation,
@@ -12,6 +13,7 @@ export type Message = {
   text: string;
   timestamp: string;
   requestId?: string;
+  mode?: ChatMode;
   point?: RequestedPoint | null;
   pending?: boolean;
   error?: boolean;
@@ -20,6 +22,7 @@ export type Message = {
 
 export type ConversationState = {
   draft: string;
+  mode: ChatMode;
   messages: Message[];
   conversations: ConversationSummary[];
   conversationId: string | null;
@@ -34,6 +37,7 @@ export type ConversationState = {
 
 export const initialState: ConversationState = {
   draft: "",
+  mode: "weather",
   messages: [],
   conversations: [],
   conversationId: null,
@@ -48,6 +52,7 @@ export const initialState: ConversationState = {
 
 export type ConversationAction =
   | { type: "draft"; value: string }
+  | { type: "mode"; value: ChatMode }
   | { type: "point"; value: RequestedPoint }
   | { type: "loading" }
   | { type: "finished" }
@@ -69,6 +74,7 @@ function savedMessages(chat: SavedConversation): Message[] {
     requestId: message.request_id,
     status: message.status,
     point: message.request_input?.point ?? null,
+    mode: message.request_input?.mode ?? "weather",
   }));
 }
 
@@ -88,6 +94,7 @@ function loadChat(
     nextBefore: action.chat.next_before,
     point: pendingPoint ?? action.chat.context.point ?? null,
     pendingPoint,
+    mode: lastUser?.status !== "completed" ? (lastUser?.mode ?? "weather") : "weather",
     draft: action.draft ?? "",
     notice: "",
   };
@@ -140,6 +147,8 @@ export function conversationReducer(state: ConversationState, action: Conversati
   switch (action.type) {
     case "draft":
       return { ...state, draft: action.value };
+    case "mode":
+      return { ...state, mode: action.value };
     case "point":
       return { ...state, point: action.value, pendingPoint: action.value };
     case "loading":

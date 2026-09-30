@@ -78,6 +78,7 @@ class SavedChatRequest(BaseModel):
     request_id: UUID
     message: str = Field(min_length=1, max_length=4000)
     point: RequestedPoint | None = None
+    mode: Literal["weather", "history"] | None = None
 
 
 class SavedChatResponse(ChatResponse):
@@ -290,7 +291,14 @@ def _saved_chat(payload: SavedChatRequest, request: Request, response: Response)
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
     owner = _owner(request, response)
     service = SavedChatService(_conversations, _history_service, _retriever, _chatbot_model_name)
-    result = service.run(owner, payload.conversation_id, payload.request_id, question, point=payload.point)
+    result = service.run(
+        owner,
+        payload.conversation_id,
+        payload.request_id,
+        question,
+        point=payload.point,
+        mode=payload.mode or "weather",
+    )
     return SavedChatResponse(
         **result.response(), conversation_id=payload.conversation_id, request_id=payload.request_id
     )

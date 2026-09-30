@@ -44,3 +44,5 @@ The existing map picker resolves a point to an active Washington station. A prep
 Generated queries must pass the SQL AST policy before execution. The policy allows a single SELECT against the selected station table, permits only public weather columns and caps results at 200 rows. Source connections start read only with a statement timeout. PostgreSQL continues to store conversations separately.
 
 Set `OPENROUTER_API_KEY`, `AWN_DB_HOST`, `AWN_DB_USER` and `AWN_DB_PASSWORD` in the local environment. `OPENROUTER_WORKFLOW_MODEL` defaults to `OPENROUTER_CHAT_MODEL`; `OPENROUTER_CLASSIFIER_MODEL` defaults to the workflow model. The web weather service does not require an embedding model or a populated vector index.
+
+Saved requests default to `mode: weather`. This path supplies recent conversation context directly to the graph without invoking the saved history classifier. Selecting Past conversations sends `mode: history` and searches only that browser's saved conversations. History mode cannot execute new weather queries. Retries keep the original operation, selected point and acceptance time.

@@ -6,6 +6,7 @@ import {
   isSavedReply,
   isSummary,
   type ChatMessage,
+  type ChatMode,
   type ChatResponse,
   type ConversationSummary,
   type HealthResponse,
@@ -69,10 +70,11 @@ export function sendSavedChat(
   message: string,
   signal?: AbortSignal,
   point?: RequestedPoint | null,
+  mode: ChatMode = "weather",
 ): Promise<SavedChatResponse> {
   return requestJson(
     "/api/chat",
-    jsonPost({ conversation_id: conversationId, request_id: requestId, message, ...(point ? { point } : {}) }, signal),
+    jsonPost({ conversation_id: conversationId, request_id: requestId, message, mode, ...(point ? { point } : {}) }, signal),
     (value): value is SavedChatResponse =>
       isSavedReply(value) &&
       value.conversation_id === conversationId &&
