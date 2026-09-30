@@ -3,6 +3,7 @@ import {
   type ConversationSummary,
   type ChatMode,
   type RequestedPoint,
+  type ResultMetadata,
   type SavedChatResponse,
   type SavedConversation,
 } from "./api.ts";
@@ -14,6 +15,7 @@ export type Message = {
   timestamp: string;
   requestId?: string;
   mode?: ChatMode;
+  metadata?: ResultMetadata;
   point?: RequestedPoint | null;
   pending?: boolean;
   error?: boolean;
@@ -73,6 +75,7 @@ function savedMessages(chat: SavedConversation): Message[] {
     timestamp: message.created_at,
     requestId: message.request_id,
     status: message.status,
+    metadata: message.metadata,
     point: message.request_input?.point ?? null,
     mode: message.request_input?.mode ?? "weather",
   }));
@@ -131,7 +134,8 @@ function answered(state: ConversationState, result: SavedChatResponse, text: str
           status: "completed" as const,
           pending: false,
           error: false,
-          ...(message.role === "assistant" ? { text: result.reply, timestamp: new Date().toISOString() } : {}),
+          ...(message.role === "assistant" ? { text: result.reply, timestamp: new Date().toISOString(),
+              metadata: { sources: result.sources, coverage: result.coverage } } : {}),
         },
   );
   return {

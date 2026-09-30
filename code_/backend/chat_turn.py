@@ -5,7 +5,7 @@ from typing import Literal
 from backend.conversation_context import ConversationContext
 from backend.history_models import HistorySnapshot
 from backend.weather_query import WeatherQuery
-from backend.workflow.contracts import WorkflowRequest
+from backend.workflow.contracts import Source, WorkflowRequest
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
@@ -15,6 +15,8 @@ class AnsweredTurn(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     reply: str
     outcome: Literal["success", "history", "needs_clarification", "no_data"]
+    sources: list[Source] = Field(default_factory=list)
+    coverage: Literal["subset", "complete"] | None = None
 
 
 class PreparedChatTurn(BaseModel):

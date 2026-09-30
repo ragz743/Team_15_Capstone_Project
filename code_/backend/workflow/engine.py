@@ -13,7 +13,7 @@ from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.models._chatbot_base import _BaseChatbot
 from backend.station_catalog import StationCatalog
 from backend.weather_query import QueryClarificationError, RequestedPoint, Station
-from backend.workflow.contracts import WorkflowHistory, WorkflowRequest, WorkflowTimeoutError
+from backend.workflow.contracts import Source, WorkflowAnswer, WorkflowHistory, WorkflowRequest, WorkflowTimeoutError
 from backend.workflow.workflow import ChatbotWorkflow, ClassifierChatbot
 
 
@@ -115,8 +115,7 @@ class LangGraphEngine:
             return AnsweredTurn(outcome="no_data", reply="The selected weather source is no longer available.")
         result = self._run_workflow(turn, station)
         self._validate_answer(result.reply)
-        no_data = bool(result.executions) and not any(item.rows for item in result.executions)
-        return AnsweredTurn(reply=result.reply, outcome="no_data" if no_data else "success")
+        return self._answer_with_sources(result, station)
 
     def _run_workflow(self, turn: PreparedChatTurn, station: Station):
         request = turn.workflow
@@ -148,3 +147,28 @@ class LangGraphEngine:
             re.I,
         ):
             raise ValueError("The answer contains a restricted station location")
+
+    @staticmethod
+    def _answer_with_sources(result: WorkflowAnswer, station: Station) -> AnsweredTurn:
+        sources = [
+            Source(
+                station_id=station.id,
+                station=station.name,
+                county=station.county,
+                kind="forecast" if item.query_type == "forecast_weather" else "observation",
+                times=item.times,
+                measurements=item.measurements,
+            )
+            for item in result.executions
+            if item.rows and item.times
+        ]
+        no_data = bool(result.executions) and not any(item.rows for item in result.executions)
+        reply = result.reply
+        if result.executions:
+            reply += f"\n\nSource station: {station.name}, {station.county} County."
+        return AnsweredTurn(
+            reply=reply,
+            outcome="no_data" if no_data else "success",
+            sources=sources,
+            coverage="subset" if result.executions else None,
+        )

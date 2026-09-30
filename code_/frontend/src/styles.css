@@ -1052,3 +1052,6 @@ button, input, textarea {
   border-radius: 0.4rem;
   padding: 0.3rem;
 }
+
+.source-details { font-size: 12px; line-height: 1.6; margin-top: 8px; overflow-wrap: anywhere; }
+.source-details summary { cursor: pointer; }

@@ -37,6 +37,12 @@ def test_selected_point_and_raw_question_reach_graph(weather):
     assert restored.context.station_ids == ["1"] and restored.workflow.reference_time == REFERENCE
     result = engine.answer_result(restored)
     assert result.outcome == "success" and "70.25" in result.reply
+    assert result.sources[0].station == "Pullman" and result.sources[0].times == ["2026-09-29"]
+    assert result.coverage == "subset"
+    assert "Source station: Pullman, Whitman County." in result.reply
+    prompt = runtime.model.invoke.call_args.args[0][0]
+    assert "station1daily" not in prompt and "(ID 1)" not in prompt
+    assert "Identify stations by name and county" in prompt
     supplied = runtime.classifier.invoke_json.call_args.args[1]
     assert supplied["question"] == question and "46.7" not in str(supplied)
     assert "LIMIT 200" in runtime.cursor.execute.call_args.args[0]

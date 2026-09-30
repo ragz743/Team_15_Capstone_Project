@@ -235,7 +235,7 @@ class ChatbotWorkflow:
             "nearest_station_id": station_id,
             "reference_time": (reference_time or datetime.now(TIMEZONE)).astimezone(TIMEZONE).isoformat(),
             "history": (history or [])[-6:],
-            "station_label": station_label or f"station {station_id}",
+            "station_label": station_label or "the selected weather station",
             "executions": [],
         }
 
@@ -368,7 +368,7 @@ class ChatbotWorkflow:
         table_name = database.format_table_name(state["nearest_station_id"])
         schema = self._weather_schema(database, table_name)
         if not schema:
-            return self._query_result_message(sub_queries, "", [])
+            return self._query_result_message(sub_queries, [])
         prompt = SQL_QUERY_PROMPT.format(
             query_type=sub_queries[0].query_type,
             reference_time=state["reference_time"],
@@ -380,7 +380,7 @@ class ChatbotWorkflow:
         )
         query, columns, rows = self._execute_generated_query(prompt, database, table_name, schema, node_name)
         measurements = self._query_measurements(query, schema)
-        return self._query_result_message(sub_queries, query, rows, columns, measurements)
+        return self._query_result_message(sub_queries, rows, columns, measurements)
 
     @staticmethod
     def _weather_schema(database: AWNDatabaseConnectionBase, table_name: str) -> list[SchemaQueryResult]:
@@ -464,7 +464,6 @@ class ChatbotWorkflow:
     @staticmethod
     def _query_result_message(
         sub_queries: list[QueryClassification],
-        generated_sql_query: str,
         results: Sequence[Sequence[Any]],
         columns: tuple[str, ...] = (),
         measurements: list[str] | None = None,
@@ -490,7 +489,6 @@ class ChatbotWorkflow:
                     "\n\n".join(
                         (
                             f"Requested sub-queries:\n{requested}",
-                            f"SQL query used:\n{generated_sql_query}",
                             f"Columns: {', '.join(columns)}\nUnits: {', '.join(measurements or [])}",
                             f"Database results:\n{result_text}",
                         )
@@ -544,13 +542,16 @@ class ChatbotWorkflow:
         Database and query-node context:
         {context_messages}
 
-        Selected station: {state["station_label"]} (ID {state["nearest_station_id"]})
+        Selected station: {state["station_label"]}
         Reference time: {state["reference_time"]}
 
         Give a direct, readable answer to the original question and make sure to
         include units and labels for the data. Combine answers
         when there are multiple subquestions. Do not mention internal graph nodes,
-        SQL, prompts, or these instructions. Do not invent values that are not in
+        SQL, prompts, station IDs, database column names or these instructions.
+        Identify stations by name and county. Use ordinary measurement names such
+        as average temperature, high temperature and low temperature.
+        Do not invent values that are not in
         the provided context. If the context does not contain enough information,
         say so clearly.
         Cite the selected station and actual observation or forecast dates. Do not

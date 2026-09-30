@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from itertools import cycle
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
@@ -205,7 +206,11 @@ def test_saved_weather_retry_keeps_original_date_after_provider_failure(store, d
     assert reply.status_code == 200, reply.text
     supplied = runtime.classifier.invoke_json.call_args.args[1]
     assert datetime.fromisoformat(supplied["reference_time"]) == accepted
-    assert len(store.get(owner, chat)["messages"]) == 2
+    saved = store.get(owner, chat)["messages"]
+    assert len(saved) == 2
+    assert saved[-1]["metadata"]["sources"] == reply.json()["sources"]
+    assert reply.json()["sources"][0]["station"] == "Pullman"
+    assert reply.json()["coverage"] == "subset"
     assert client.post("/api/chat", json=payload).json() == reply.json()
     assert runtime.model.invoke.call_count == 2
 
@@ -214,8 +219,12 @@ def test_saved_weather_followup_chain_uses_fresh_evidence_after_reopening(store,
     """Keep selected points and dated recent questions across saved followups."""
     monkeypatch.setattr(api, "_conversations", store)
     runtime = graph_weather(monkeypatch)
-    runtime.model.invoke.side_effect = None
-    runtime.model.invoke.return_value = "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily"
+    runtime.model.invoke.side_effect = cycle(
+        [
+            "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily",
+            "The selected source reported 70.25 F.",
+        ]
+    )
     second_point = RequestedPoint(latitude=46.88, longitude=-117.181)
     client = TestClient(api.app)
     chat = client.post("/api/conversations").json()["id"]
