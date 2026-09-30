@@ -157,3 +157,17 @@ test("the saved request sends the selected operation", async (t) => {
   await sendSavedChat(conversation, request, "Remember?", undefined, null, "history");
   assert.equal(JSON.parse(String(fetch.mock.calls[0].arguments[1]?.body)).mode, "history");
 });
+
+
+test("source details survive an answer and a saved conversation reload", () => {
+  const metadata = { coverage: "subset" as const, sources: [{
+    station_id: "1", station: "Pullman", county: "Whitman", kind: "observation" as const,
+    times: ["2026-09-29"], measurements: ["AVG_AIR_TEMP (F)"],
+  }] };
+  let state = conversationReducer(initialState, { type: "sending", message });
+  state = conversationReducer(state, { type: "answered", result: { ...savedReply, ...metadata }, text: message.text });
+  assert.deepEqual(state.messages[1].metadata, metadata);
+  const restored: SavedConversation = { ...saved, messages: [{ ...saved.messages[0], role: "assistant", metadata }] };
+  state = conversationReducer(initialState, { type: "loaded", chat: restored });
+  assert.deepEqual(state.messages[0].metadata, metadata);
+});

@@ -1,4 +1,6 @@
 import { useEffect, useRef } from "react";
+import { answerText, sourceLabel } from "../lib/answerPresentation";
+import type { ResultMetadata } from "../lib/api";
 import Icon from "./Icon";
 import WsuLogo from "./WsuLogo";
 import type { Message } from "../lib/conversationState";
@@ -37,6 +39,17 @@ type Props = {
   onStarter: (text: string) => void;
   onRetry?: (message: Message) => void;
 };
+
+function SourceDetails({ metadata }: { metadata?: ResultMetadata }) {
+  if (!metadata?.sources?.length) return null;
+  return (
+    <details className="source-details">
+      <summary>Sources and coverage</summary>
+      <ul>{metadata.sources.map((source, index) => <li key={index}>{sourceLabel(source)}</li>)}</ul>
+      {metadata.coverage === "subset" && <p>Retrieved records may not cover every station or day in the request.</p>}
+    </details>
+  );
+}
 
 export default function ChatTranscript({ messages, ready, isSending, onLoadEarlier, onStarter, onRetry }: Props) {
   const transcriptRef = useRef<HTMLElement | null>(null);
@@ -128,9 +141,10 @@ export default function ChatTranscript({ messages, ready, isSending, onLoadEarli
                       <span className="sr-only">Preparing your response</span>
                     </div>
                   ) : (
-                    <p>{message.text}</p>
+                    <p>{message.role === "assistant" ? answerText(message.text, message.metadata?.sources) : message.text}</p>
                   )}
                 </div>
+                <SourceDetails metadata={message.metadata} />
                 {!message.pending && (
                   <div className="message-meta">
                     <time dateTime={message.timestamp}>{formatTime(message.timestamp)}</time>
