@@ -24,10 +24,9 @@ from backend.conversation_store import (
 from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
-from backend.models.embedding_openrouter import EmbeddingOpenRouter
-from backend.retriever import Retriever
-from backend.vector_store import PgVectorStore
 from backend.weather_query import RequestedPoint
+from backend.workflow.contracts import WorkflowTimeoutError
+from backend.workflow.engine import LangGraphEngine
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -102,7 +101,7 @@ _ALLOWED_ORIGINS = [
 
 # initialized at startup.
 _chatbot: _BaseChatbot | None = None
-_retriever: Retriever | None = None
+_retriever: LangGraphEngine | None = None
 _chatbot_model_name: str = ""
 _embedding_model_name: str = ""
 
@@ -111,31 +110,22 @@ def _chat_model() -> str:
     return os.getenv("OPENROUTER_CHAT_MODEL", "").strip() or _DEFAULT_CHAT_MODEL
 
 
-def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
-    if not os.getenv("OPENROUTER_API_KEY"):
-        logger.warning("OPENROUTER_API_KEY not set - /api/chat will fail until configured")
-
-    chat_model_name = _chat_model()
-    embedding_model_name = os.getenv("OPENROUTER_EMBEDDING_MODEL")
-    if not embedding_model_name:
-        msg = "OPENROUTER_EMBEDDING_MODEL must be set to initialize retrieval"
-        raise ValueError(msg)
-
-    temperature = float(os.getenv("OPENROUTER_CHAT_TEMPERATURE", "0"))
-
-    # Builds embedding model and chatbot
-    embedding_model = EmbeddingOpenRouter(embedding_model_name)
-    chatbot = ChatbotOpenRouter({"model": chat_model_name, "temperature": temperature})
-
-    # Builds all three stores: daily_index, live_index, forecast_index
-    stores = [
-        PgVectorStore(embedding_model, table="daily_index"),
-        PgVectorStore(embedding_model, table="live_index", staleness_days=30),
-        PgVectorStore(embedding_model, table="forecast_index", staleness_days=2),
-    ]
-    retriever = Retriever(stores, chatbot)
-
-    return retriever, chatbot, chat_model_name, embedding_model_name
+def _build_retriever() -> tuple[LangGraphEngine, _BaseChatbot, str, str]:
+    required = ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST")
+    if any(not os.getenv(name) for name in required):
+        raise ValueError("The workflow requires model and AWN database configuration")
+    model_name = os.getenv("OPENROUTER_WORKFLOW_MODEL", "").strip() or _chat_model()
+    classifier_name = os.getenv("OPENROUTER_CLASSIFIER_MODEL", "").strip() or model_name
+    settings = {
+        "temperature": 0,
+        "max_tokens": 3000,
+        "request_timeout": 15000,
+        "max_retries": 0,
+        "reasoning": {"enabled": False, "effort": "none"},
+    }
+    chatbot = ChatbotOpenRouter({"model": model_name, **settings})
+    classifier = ChatbotOpenRouter({"model": classifier_name, **settings})
+    return LangGraphEngine(chatbot, classifier), chatbot, model_name, ""
 
 
 def _latest_user_message(messages: list[ChatMessage]) -> str | None:
@@ -154,7 +144,7 @@ def _preceding_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the retriever once at process start."""
+    """Initialize shared model clients and the weather graph adapter."""
     global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name
     global _history_service
     dotenv.load_dotenv()
@@ -169,13 +159,9 @@ async def lifespan(app: FastAPI):
         _history_service = None
     try:
         _retriever, _chatbot, _chatbot_model_name, _embedding_model_name = _build_retriever()
-        logger.info(
-            "Retriever initialized with chat_model=%s embedding_model=%s",
-            _chatbot_model_name,
-            _embedding_model_name,
-        )
+        logger.info("LangGraph initialized with chat_model=%s", _chatbot_model_name)
     except Exception:
-        logger.exception("Failed to initialize retriever at startup")
+        logger.error("Failed to initialize LangGraph at startup")
         _chatbot = None
         _retriever = None
         _chatbot_model_name = ""
@@ -201,6 +187,8 @@ app.add_middleware(
 
 
 def _retrieval_error(exc: BaseException) -> HTTPException:
+    if isinstance(exc, WorkflowTimeoutError):
+        return HTTPException(status_code=504, detail="The weather request took too long. Please try again.")
     if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
         return HTTPException(
             status_code=503,
@@ -316,6 +304,7 @@ def health() -> dict[str, object]:
         "chatbot_ready": _chatbot is not None,
         "retriever_ready": _retriever is not None,
         "history_ready": _history_service is not None,
+        "engine": "langgraph",
         "model": _chatbot_model_name or None,
         "embedding_model": _embedding_model_name or None,
         "has_api_key": bool(os.getenv("OPENROUTER_API_KEY")),

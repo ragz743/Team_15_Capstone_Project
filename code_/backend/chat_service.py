@@ -7,11 +7,11 @@ from uuid import UUID
 
 import psycopg
 from backend.chat_turn import AnsweredTurn, PreparedChatTurn
-from backend.conversation_context import TIMEZONE, ConversationContext
+from backend.conversation_context import ConversationContext
 from backend.conversation_store import AcceptedTurn, ConversationNotFoundError, ConversationStore, TurnConflictError
 from backend.history_service import HistoryResolution, HistoryService
-from backend.retriever import Retriever
 from backend.weather_query import RequestedPoint
+from backend.workflow.engine import LangGraphEngine
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class SavedChatService:
     """Accept, prepare, answer and persist each turn with short transactions."""
 
     def __init__(
-        self, store: ConversationStore, history: HistoryService | None, weather: Retriever | None, model_name: str
+        self, store: ConversationStore, history: HistoryService | None, weather: LangGraphEngine | None, model_name: str
     ):
         """Use the application services without opening connections or invoking models."""
         self.store, self.history, self.weather, self.model_name = store, history, weather, model_name
@@ -129,7 +129,7 @@ class SavedChatService:
                 question,
                 context,
                 point=point,
-                today=turn.requested_at.astimezone(TIMEZONE).date(),
+                reference_time=turn.requested_at,
                 history=resolution.recent if resolution.intent.action == "weather" else [],
             )
 

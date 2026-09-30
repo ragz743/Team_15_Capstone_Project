@@ -3,6 +3,7 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import backend.api as api
 import pytest
 from backend.chat_turn import PreparedChatTurn
 from backend.conversation_context import TIMEZONE, ConversationContext
@@ -97,6 +98,17 @@ def test_sql_repair_rejects_writes_before_executing_a_select(weather):
     engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
     runtime.cursor.execute.assert_called_once()
     assert runtime.cursor.execute.call_args.args[0].startswith("SELECT")
+
+
+def test_graph_startup_does_not_require_embeddings(monkeypatch):
+    """The web service creates only answer and classifier models."""
+    for key in ("AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST", "OPENROUTER_API_KEY"):
+        monkeypatch.setenv(key, "fixture")
+    monkeypatch.delenv("OPENROUTER_EMBEDDING_MODEL", raising=False)
+    model = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", model)
+    engine, _, _, embedding = api._build_retriever()
+    assert isinstance(engine, LangGraphEngine) and embedding == "" and model.call_count == 2
 
 
 def test_source_connection_starts_read_only_with_a_statement_limit(monkeypatch):

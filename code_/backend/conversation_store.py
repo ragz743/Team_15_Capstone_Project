@@ -249,14 +249,19 @@ class ConversationStore:
             if not cur.fetchone():
                 raise ConversationNotFoundError
             cur.execute(
-                "SELECT t.user_content, CASE WHEN t.completed_at <= %s THEN t.assistant_content END AS answer "
+                "SELECT t.user_content, t.requested_at, "
+                "CASE WHEN t.completed_at <= %s THEN t.assistant_content END AS answer "
                 "FROM conversation_turns t JOIN conversations c ON c.id = t.conversation_id "
                 "WHERE c.owner_id = %s AND c.id = %s AND t.requested_at < %s "
                 "ORDER BY t.ordinal DESC LIMIT 6",
                 (before, owner, conversation, before),
             )
             return [
-                {"user": row["user_content"][:1200], "assistant": (row["answer"] or "")[:2000]}
+                {
+                    "user": row["user_content"][:1200],
+                    "assistant": (row["answer"] or "")[:2000],
+                    "asked_at": row["requested_at"].isoformat(),
+                }
                 for row in reversed(cur.fetchall())
             ]
 
