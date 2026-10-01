@@ -86,13 +86,16 @@ def _format_cell(value: object) -> str:
 
 
 def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
-    """Convert a collection of named tuple object into a markdown table."""
+    """Render named tuples with units, omitting columns that contain only None."""
+    if not tuples:
+        return ""
     if len(tuples[0]) != len(units):
         msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
         raise ValueError(msg)
-    columns = zip(tuples[0]._fields, units, strict=True)
+    populated = [index for index in range(len(units)) if any(row[index] is not None for row in tuples)]
+    columns = [(tuples[0]._fields[index], units[index]) for index in populated]
     header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"
-    rows = ["| " + " | ".join(map(str, row)) + " |\n" for row in tuples]
+    divider = "| " + " | ".join(itertools.repeat("---", len(populated))) + " |\n"
+    rows = ["| " + " | ".join(str(row[index]) for index in populated) + " |\n" for row in tuples]
 
     return header + divider + "".join(rows)

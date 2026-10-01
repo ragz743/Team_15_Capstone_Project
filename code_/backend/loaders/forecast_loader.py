@@ -161,6 +161,7 @@ class ForecastLoader(_BaseLoader):
                     "id": meta.unit_id,
                     "station": meta.station,
                     "timestamp": init_time,
+                    "dates": sorted({row.forecast_time[:10] for row in forecast_rows}),
                     "county": meta.county,
                     "state": meta.state,
                     "latitude": meta.station_lat,

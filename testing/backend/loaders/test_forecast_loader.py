@@ -228,6 +228,7 @@ def test_load_builds_documents_correctly(monkeypatch, sample_metadata: MetadataQ
         "id": sample_metadata.unit_id,
         "station": sample_metadata.station,
         "timestamp": "2026-09-16 12:00:00",
+        "dates": ["2026-09-16"],
         "county": "Whitman",
         "state": "WA",
         "latitude": "46.73",

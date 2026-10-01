@@ -32,10 +32,10 @@ Open:
 http://localhost:8080
 ```
 
-Try a question like:
+Choose a point on the map, then try a question like:
 
 ```text
-what was the average temperature in Whitman county recently?
+What was the temperature here yesterday?
 ```
 
 The Docker setup starts three services:
@@ -103,7 +103,7 @@ Example request:
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"hello"}]}'
+  -d '{"messages":[{"role":"user","content":"Temperature here yesterday?"}],"point":{"latitude":46.73,"longitude":-117.18}}'
 ```
 
 Example response:
@@ -111,12 +111,42 @@ Example response:
 ```json
 {
   "reply": "assistant response",
-  "model": "openai/gpt-oss-20b:free"
+  "model": "openrouter/free"
 }
 ```
 
-The API accepts a message list from the frontend, but today it only sends the
-latest user message to `Retriever.retrieve()`.
+The API passes the latest question and preceding user/assistant messages to the
+weather interpreter. The browser chooses a map point; station filters are no longer
+accepted. The server selects its nearby indexed source and validates the model's
+structured dates before retrieval. The model can also ask for clarification or decline
+an unrelated request.
+
+Station lookup queries `indexed_stations` using a geographic index and returns one
+source. It does not load a full catalog into the application. Sources must have
+consistent Washington coordinates and be within 50 km of the requested point.
+Set `radius_km` on `StationCatalog` to adjust that limit. Missing records do not
+cause a switch to another source.
+
+Weather inserts, metadata changes and deletes maintain the station directory in
+the same transaction through database triggers. Repeated readings with unchanged
+station information skip rebuilding that station. Conflicting identities remain
+excluded until their records are corrected. The lookup uses a bounding box before
+calculating spherical distance, then checks that the station has indexed records.
+
+The API continues to use `Retriever`. `ChatbotWorkflow` queries the AWN databases
+directly and requires county input and session handling. Connecting it to the API is
+a separate integration change.
+
+For an existing database, apply `deployment/migrations/001_station_search_indexes.sql`
+then `deployment/migrations/002_station_directory.sql` before deploying the backend.
+The second migration reads existing metadata once to populate the directory and locks
+the weather tables against writes while it runs. It requires PostgreSQL 16 or newer
+and no additional extensions. Fresh Docker databases run it after the seed script.
+The CLI uses the same selection flow:
+
+```bash
+retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
+```
 
 ## Configuration
 
@@ -126,7 +156,7 @@ latest user message to `Retriever.retrieve()`.
 | -------- | -------- | ------- |
 | `OPENROUTER_API_KEY` | yes | none |
 | `OPENROUTER_EMBEDDING_MODEL` | yes | `openai/text-embedding-3-small` in `.env.example` |
-| `OPENROUTER_CHAT_MODEL` | no | `openai/gpt-oss-20b:free` |
+| `OPENROUTER_CHAT_MODEL` | no | `openrouter/free` |
 | `OPENROUTER_CHAT_TEMPERATURE` | no | `0` |
 | `PG_USER` | yes | none |
 | `PG_PASSWORD` | yes | none |
@@ -135,6 +165,12 @@ latest user message to `Retriever.retrieve()`.
 | `AWN_DB_USER` | data loaders only | none |
 | `AWN_DB_PASSWORD` | data loaders only | none |
 | `AWN_DB_HOST` | data loaders only | none |
+
+Missing or blank chat settings use `openrouter/free`. An explicit setting takes
+precedence. If an existing `.env` still uses `openai/gpt-oss-20b:free`, replace that
+value with `openrouter/free`; the old free endpoint is unavailable. The
+[free router](https://openrouter.ai/docs/guides/routing/routers/free-router) selects
+an available free model, so response quality and latency can vary between requests.
 
 Outside Docker, Postgres still defaults to `localhost:5432`.
 

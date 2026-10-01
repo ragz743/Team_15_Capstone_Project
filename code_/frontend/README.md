@@ -33,3 +33,13 @@ npm run dev
 ```
 
 Open `http://localhost:5173` in the browser.
+
+
+## Map selection
+
+Choose a point before sending a weather question. Click the map or move it with the
+arrow keys and select Use map center. The marker represents the requested point;
+source station coordinates stay on the server. New conversation clears the point.
+
+`POST /api/chat` now sends `messages` and `point: {latitude, longitude}`. Deploy this
+client with the matching backend. Source selection and date validation happen there.

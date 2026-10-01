@@ -66,10 +66,13 @@ lint.ignore = [
 ]
 
 [tool.pyright]
+pythonVersion = "3.12"
+extraPaths = ["code_"]
 venvPath = "."
 venv = ".venv"
 
 [tool.pytest.ini_options]
+pythonpath = ["code_", "testing"]
 minversion = "9.0.2"
 addopts = "-q" # flags to pass to pytest implicitly
 log_file_level = "INFO"

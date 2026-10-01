@@ -6,6 +6,7 @@ from decimal import Decimal
 from typing import NamedTuple
 
 import pytest
+from backend.databases._awn_connection_base import SchemaQueryResult
 from backend.loaders import _common
 
 
@@ -106,6 +107,24 @@ def test_format_cell_rounds_floats_and_decimals() -> None:
     assert _common._format_cell(Decimal("89.99")) == "90.0"
     assert _common._format_cell("2026-09-16") == "2026-09-16"
     assert _common._format_cell(True) == "True"
+
+
+def test_to_markdown_table_keeps_empty_schema_fields() -> None:
+    """Preserve schema column alignment when keys and comments are blank."""
+    table = _common.to_markdown_table([SchemaQueryResult("air_temp", "decimal", "YES", "", "")], [""] * 5)
+    assert "| column_name | data_type | is_nullable | column_key | column_comment |" in table
+    assert "| air_temp | decimal | YES |  |  |" in table
+
+
+def test_to_markdown_table_preserves_zero_and_precision() -> None:
+    """Keep real measurements and their precision while removing absent columns."""
+    table = _common.to_markdown_table([SampleMeasurement("2026-09-16", 0.0, 0.125)], ["", "F", "inches"])
+    assert "| 2026-09-16 | 0.0 | 0.125 |" in table
+
+
+def test_to_markdown_table_empty_results() -> None:
+    """No records produce no table."""
+    assert _common.to_markdown_table([], ["", "F", "inches"]) == ""
 
 
 def test_metadata_query_result_from_tuple_valid() -> None:

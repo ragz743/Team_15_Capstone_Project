@@ -17,6 +17,7 @@ from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.models.embedding_openrouter import EmbeddingOpenRouter
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
+from backend.weather_query import RequestedPoint
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import RateLimitError
@@ -26,11 +27,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
 
-# Default OpenRouter chat model
-# free tier model keeps this safe for prototyping without burning credits.
-# NOTE: OpenRouter rotates the free-tier catalog; if this model 404s, pick
-# another ":free" entry from https://openrouter.ai/api/v1/models.
-_DEFAULT_CHAT_MODEL = "openai/gpt-oss-20b:free"
+# Keep the demo on the free router unless explicitly configured otherwise.
+_DEFAULT_CHAT_MODEL = "openrouter/free"
 
 
 class ChatMessage(BaseModel):
@@ -45,15 +43,13 @@ class ChatRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
-    filter: dict[str, str] | None = None
+    point: RequestedPoint | None = None
 
     @model_validator(mode="after")
     def bounded_request(self):
         """Bound transcript size without discarding the active request."""
         if sum(len(message.content) for message in self.messages) > 32000:
             raise ValueError("Conversation exceeds 32000 characters")
-        if self.filter and (len(self.filter) > 4 or any(len(v) > 100 for v in self.filter.values())):
-            raise ValueError("Invalid metadata filter")
         return self
 
 
@@ -75,7 +71,7 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     if not os.getenv("OPENROUTER_API_KEY"):
         logger.warning("OPENROUTER_API_KEY not set - /api/chat will fail until configured")
 
-    chat_model_name = os.getenv("OPENROUTER_CHAT_MODEL", _DEFAULT_CHAT_MODEL)
+    chat_model_name = os.getenv("OPENROUTER_CHAT_MODEL", "").strip() or _DEFAULT_CHAT_MODEL
     embedding_model_name = os.getenv("OPENROUTER_EMBEDDING_MODEL")
     if not embedding_model_name:
         msg = "OPENROUTER_EMBEDDING_MODEL must be set to initialize retrieval"
@@ -103,6 +99,13 @@ def _latest_user_message(messages: list[ChatMessage]) -> str | None:
         if message.role == "user":
             return message.content
     return None
+
+
+def _preceding_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].role == "user":
+            return [message.model_dump() for message in messages[:index] if message.role != "system"]
+    return []
 
 
 @asynccontextmanager
@@ -186,7 +189,7 @@ def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
-        reply = _retriever.retrieve(question, filter=request.filter)
+        reply = _retriever.retrieve(question, point=request.point, history=_preceding_messages(request.messages))
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
         raise _retrieval_error(exc) from exc
