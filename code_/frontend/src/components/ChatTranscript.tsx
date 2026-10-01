@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { answerText, sourceLabel } from "../lib/answerPresentation";
 import type { ResultMetadata } from "../lib/api";
 import Icon from "./Icon";
+import AssistantMarkdown from "./AssistantMarkdown";
 import WsuLogo from "./WsuLogo";
 import type { Message } from "../lib/conversationState";
 
@@ -140,8 +141,10 @@ export default function ChatTranscript({ messages, ready, isSending, onLoadEarli
                       <span className="dot" />
                       <span className="sr-only">Preparing your response</span>
                     </div>
+                  ) : message.role === "assistant" ? (
+                    <AssistantMarkdown text={answerText(message.text, message.metadata?.sources)} />
                   ) : (
-                    <p>{message.role === "assistant" ? answerText(message.text, message.metadata?.sources) : message.text}</p>
+                    <p>{message.text}</p>
                   )}
                 </div>
                 <SourceDetails metadata={message.metadata} />

@@ -559,12 +559,152 @@ button, input, textarea {
   color: #4d2932;
 }
 
-.message-bubble p {
+.message-bubble > p {
   margin: 0;
   font-size: 14px;
   line-height: 1.85;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.assistant-markdown {
+  font-size: 14px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.assistant-markdown :where(p, ul, ol, blockquote, pre, .markdown-table-scroll) {
+  margin: 0 0 1em;
+}
+
+.assistant-markdown :where(h1, h2, h3, h4, h5, h6) {
+  margin: 1.25em 0 .5em;
+  font-size: 1.05em;
+  line-height: 1.4;
+  font-weight: 650;
+}
+
+.assistant-markdown :where(h1, h2) {
+  font-size: 1.15em;
+}
+
+.assistant-markdown > :first-child {
+  margin-top: 0;
+}
+
+.assistant-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.assistant-markdown :where(ul, ol) {
+  padding-left: 1.5em;
+}
+
+.assistant-markdown li + li {
+  margin-top: .3em;
+}
+
+.assistant-markdown li > :where(p, ul, ol) {
+  margin: .3em 0;
+}
+
+.assistant-markdown strong {
+  font-weight: 650;
+}
+
+.assistant-markdown a {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: .2em;
+}
+
+.assistant-markdown a:hover {
+  color: var(--accent-dark);
+}
+
+.assistant-markdown :where(a, .markdown-table-scroll):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.assistant-markdown blockquote {
+  padding: .5em 1em;
+  border-left: 3px solid var(--accent);
+  background: var(--sidebar);
+}
+
+.assistant-markdown blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.assistant-markdown code {
+  padding: .15em .35em;
+  border-radius: 4px;
+  background: var(--sidebar);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .9em;
+}
+
+.assistant-markdown pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 1em;
+  border: 1px solid #e8e2e5;
+  border-radius: 8px;
+  background: var(--sidebar);
+  white-space: pre;
+  overflow-wrap: normal;
+}
+
+.assistant-markdown pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.assistant-markdown hr {
+  margin: 1.25em 0;
+  border: 0;
+  border-top: 1px solid #e8e2e5;
+}
+
+.markdown-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid #e8e2e5;
+  border-radius: 8px;
+}
+
+.assistant-markdown table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .95em;
+}
+
+.assistant-markdown :where(th, td) {
+  min-width: 7rem;
+  padding: .65em .85em;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid #e8e2e5;
+}
+
+.assistant-markdown th {
+  background: var(--sidebar);
+  font-weight: 650;
+}
+
+.assistant-markdown tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.assistant-markdown .contains-task-list {
+  list-style: none;
+  padding-left: .25em;
+}
+
+.assistant-markdown .task-list-item input {
+  margin-right: .5em;
 }
 
 .message-meta {
@@ -978,7 +1118,7 @@ button, input, textarea {
   .message-bubble {
     padding: 12px 16px;
   }
-  .message-bubble p {
+  .message-bubble > p {
     font-size: 14px;
   }
   .conversation-notice {

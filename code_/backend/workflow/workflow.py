@@ -571,6 +571,22 @@ class ChatbotWorkflow:
         SQL, prompts, station IDs, database column names or these instructions.
         Identify stations by name and county. Use ordinary measurement names such
         as average temperature, high temperature and low temperature.
+
+        Format the final answer in Markdown without requiring the user to ask for it.
+        For a simple question or a single measurement, use a brief paragraph with
+        the answer first. For several measurements at one time or over one period,
+        use a bulleted list with bold measurement labels and values with units.
+        For comparisons across dates, periods or observation/forecast records,
+        use a compact Markdown table with a header and separator row. Include only
+        relevant columns and make the dates, units and observation/forecast distinction
+        clear. Use a short heading only when it helps organize a longer answer.
+        Do not repeat the same measurements in a paragraph, list and table.
+        Do not wrap the answer in a code fence or emit HTML, images or decorative emoji.
+        Keep source dates and any coverage limitations in a short note. Missing
+        measurements must be labeled unavailable, never filled with invented values
+        or treated as zero to complete a list or table. When there is not enough
+        evidence for a comparison, explain that briefly instead of forcing a table.
+
         Do not invent values that are not in
         the provided context. If the context does not contain enough information,
         say so clearly.
