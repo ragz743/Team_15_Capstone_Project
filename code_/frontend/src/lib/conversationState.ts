@@ -17,6 +17,7 @@ export type Message = {
   mode?: ChatMode;
   metadata?: ResultMetadata;
   point?: RequestedPoint | null;
+  stationId?: string | null;
   pending?: boolean;
   error?: boolean;
   status?: "pending" | "completed" | "failed";
@@ -30,6 +31,8 @@ export type ConversationState = {
   conversationId: string | null;
   point: RequestedPoint | null;
   pendingPoint: RequestedPoint | null;
+  stationId: string | null;
+  pendingStationId: string | null;
   busy: boolean;
   ready: boolean;
   notice: string;
@@ -45,6 +48,8 @@ export const initialState: ConversationState = {
   conversationId: null,
   point: null,
   pendingPoint: null,
+  stationId: null,
+  pendingStationId: null,
   busy: false,
   ready: false,
   notice: "",
@@ -56,6 +61,7 @@ export type ConversationAction =
   | { type: "draft"; value: string }
   | { type: "mode"; value: ChatMode }
   | { type: "point"; value: RequestedPoint }
+  | { type: "station"; value: string }
   | { type: "loading" }
   | { type: "finished" }
   | { type: "notice"; value: string }
@@ -77,6 +83,7 @@ function savedMessages(chat: SavedConversation): Message[] {
     status: message.status,
     metadata: message.metadata,
     point: message.request_input?.point ?? null,
+    stationId: message.request_input?.station_id ?? null,
     mode: message.request_input?.mode ?? "weather",
   }));
 }
@@ -90,6 +97,7 @@ function loadChat(
     return { ...state, messages: [...messages, ...state.messages], nextBefore: action.chat.next_before };
   const lastUser = messages.findLast((message) => message.role === "user");
   const pendingPoint = lastUser?.status !== "completed" ? (lastUser?.point ?? null) : null;
+  const pendingStationId = lastUser?.status !== "completed" ? (lastUser?.stationId ?? null) : null;
   return {
     ...state,
     messages,
@@ -97,6 +105,8 @@ function loadChat(
     nextBefore: action.chat.next_before,
     point: pendingPoint ?? action.chat.context.point ?? null,
     pendingPoint,
+    stationId: pendingStationId ?? (pendingPoint ? null : action.chat.context.station_ids[0] ?? null),
+    pendingStationId,
     mode: lastUser?.status !== "completed" ? (lastUser?.mode ?? "weather") : "weather",
     draft: action.draft ?? "",
     notice: "",
@@ -126,6 +136,8 @@ function samePoint(left: RequestedPoint | null, right: RequestedPoint | null): b
 function answered(state: ConversationState, result: SavedChatResponse, text: string): ConversationState {
   const savedPoint = result.context.point ?? null;
   const pendingPoint = samePoint(state.pendingPoint, savedPoint) ? null : state.pendingPoint;
+  const savedStationId = result.context.station_ids[0] ?? null;
+  const pendingStationId = state.pendingStationId === savedStationId ? null : state.pendingStationId;
   const messages = state.messages.map((message) =>
     message.requestId !== result.request_id
       ? message
@@ -141,8 +153,10 @@ function answered(state: ConversationState, result: SavedChatResponse, text: str
   return {
     ...state,
     messages,
-    point: pendingPoint ?? savedPoint,
+    point: pendingStationId ? null : pendingPoint ?? savedPoint,
     pendingPoint,
+    stationId: pendingStationId ?? (pendingPoint ? null : savedStationId),
+    pendingStationId,
     draft: state.draft.trim() === text ? "" : state.draft,
   };
 }
@@ -154,7 +168,9 @@ export function conversationReducer(state: ConversationState, action: Conversati
     case "mode":
       return { ...state, mode: action.value };
     case "point":
-      return { ...state, point: action.value, pendingPoint: action.value };
+      return { ...state, point: action.value, pendingPoint: action.value, stationId: null, pendingStationId: null };
+    case "station":
+      return { ...state, stationId: action.value, pendingStationId: action.value, point: null, pendingPoint: null };
     case "loading":
       return { ...state, busy: true, notice: "" };
     case "finished":

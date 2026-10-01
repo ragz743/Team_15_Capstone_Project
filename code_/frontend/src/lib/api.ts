@@ -5,6 +5,7 @@ import {
   isConversationList,
   isSavedReply,
   isSummary,
+  isStationCatalog,
   type ChatMessage,
   type ChatMode,
   type ChatResponse,
@@ -13,6 +14,7 @@ import {
   type RequestedPoint,
   type SavedChatResponse,
   type SavedConversation,
+  type StationCatalog,
 } from "./apiContracts.ts";
 
 export { ApiError } from "./http.ts";
@@ -71,15 +73,23 @@ export function sendSavedChat(
   signal?: AbortSignal,
   point?: RequestedPoint | null,
   mode: ChatMode = "weather",
+  stationId?: string | null,
 ): Promise<SavedChatResponse> {
   return requestJson(
     "/api/chat",
-    jsonPost({ conversation_id: conversationId, request_id: requestId, message, mode, ...(point ? { point } : {}) }, signal),
+    jsonPost({ conversation_id: conversationId, request_id: requestId, message, mode,
+      ...(point ? { point } : {}), ...(stationId ? { station_id: stationId } : {}) }, signal),
     (value): value is SavedChatResponse =>
       isSavedReply(value) &&
       value.conversation_id === conversationId &&
       value.request_id === requestId,
   );
+}
+export function listStations(signal?: AbortSignal): Promise<StationCatalog> {
+  return requestJson("/api/stations", { signal }, isStationCatalog);
+}
+export function nearbyStations(point: RequestedPoint, signal?: AbortSignal): Promise<StationCatalog> {
+  return requestJson("/api/stations/nearby", jsonPost(point, signal), isStationCatalog);
 }
 export async function listConversations(
   signal?: AbortSignal,
