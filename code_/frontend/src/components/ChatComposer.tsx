@@ -62,7 +62,7 @@ export default function ChatComposer({ draft, mode, onModeChange, ready, isSendi
         </div>
       </div>
       <div className="composer-footnote">
-        <span>{mode === "history" ? "Search conversations saved in this browser." : "For the best answer, choose a map point and include a date."}</span>
+        <span>{mode === "history" ? "Search conversations saved in this browser." : "For the best answer, choose a station and include a date."}</span>
         <span className="keyboard-hint">
           Enter to send <span>·</span> Shift + Enter for a new line
         </span>

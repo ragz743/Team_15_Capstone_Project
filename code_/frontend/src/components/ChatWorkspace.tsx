@@ -4,7 +4,7 @@ import ChatTranscript from "./ChatTranscript";
 import ConversationSidebar from "./ConversationSidebar";
 import LocationPicker from "./LocationPicker";
 import Icon from "./Icon";
-import type { ChatMode, RequestedPoint } from "../lib/api";
+import type { ChatMode } from "../lib/api";
 import type { Message } from "../lib/conversationState";
 import type { ConversationHistory } from "./chatTypes";
 
@@ -15,8 +15,8 @@ type ChatWorkspaceProps = {
   draft: string;
   mode: ChatMode;
   onModeChange: (mode: ChatMode) => void;
-  point: RequestedPoint | null;
-  onPointChange: (point: RequestedPoint) => void;
+  stationId: string | null;
+  onStationChange: (stationId: string) => void;
   isSending: boolean;
   ready?: boolean;
   notice?: string;
@@ -36,8 +36,8 @@ export default function ChatWorkspace({
   ready = true,
   notice = "",
   history,
-  point,
-  onPointChange,
+  stationId,
+  onStationChange,
   onDraftChange,
   onSubmit,
   onNewConversation,
@@ -150,10 +150,7 @@ export default function ChatWorkspace({
               )}
             </div>
           )}
-          <details className="map-panel" open={!point && messages.length === 0}>
-            <summary>{point ? "Change map point" : "Choose a map point"}</summary>
-            <LocationPicker point={point} disabled={isSending || !ready} onChange={onPointChange} />
-          </details>
+          <LocationPicker stationId={stationId} disabled={isSending || !ready} onChange={onStationChange} />
           <ChatTranscript
             key={conversationId ?? "new"}
             messages={messages}

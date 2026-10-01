@@ -22,17 +22,15 @@ const assert = require("node:assert/strict");
     await ready();
     return result;
   }
-  async function chooseNearbyPoint() {
-    const map = page.getByRole("region", { name: "Choose weather location on map" });
-    const bounds = await map.boundingBox();
-    assert.ok(bounds);
-    await map.click({ position: { x: bounds.width / 2 + 16, y: bounds.height / 2 } });
+  async function chooseStation(name) {
+    await page.getByRole("button", { name: "Browse stations", exact: true }).click();
+    await page.getByRole("searchbox", { name: "Search stations", exact: true }).fill(name);
+    await page.getByRole("button", { name: new RegExp(name + ".*Choose") }).click();
   }
   try {
     await page.goto("http://127.0.0.1:8890");
     await ready();
-    assert.equal(await page.getByRole("button", { name: "Browse stations", exact: true }).count(), 0);
-    await page.getByRole("button", { name: "Use map center", exact: true }).click();
+    await chooseStation("Central source");
     const first = await send("Temperature here yesterday?");
     assert.equal(first.outcome, "success");
     await page.getByText("Sources and coverage", { exact: true }).last().click();
@@ -41,33 +39,35 @@ const assert = require("node:assert/strict");
     assert.ok(!sourceText.includes("AVG_AIR_TEMP"));
     assert.ok(!sourceText.includes("station 1"));
     assert.equal(requests.at(-1).mode, "weather");
-    assert.ok(first.context.point);
+    assert.equal(first.context.point, null);
+    assert.equal(requests.at(-1).point, undefined);
     assert.ok(!JSON.stringify(first).includes("120.501"));
-    const originalPoint = requests.at(-1).point;
+    const originalStation = requests.at(-1).station_id;
+    assert.equal(originalStation, "1");
     await page.reload();
     await ready();
     assert.match(await page.locator(".message-row--assistant").last().innerText(), /70.25 F/);
     assert.equal(await page.locator(".source-details").count(), 1);
     const followup = await send("Humidity here?");
     assert.equal(requests.at(-1).point, undefined);
-    assert.deepEqual(followup.context.point, originalPoint);
+    assert.equal(requests.at(-1).station_id, undefined);
+    assert.deepEqual(followup.context.station_ids, [originalStation]);
     const failure = await send("Retry weather");
     assert.match(failure.detail, /could not complete/);
     const failedRequest = requests.at(-1);
     await page.reload();
     await ready();
-    await page.locator(".map-panel summary").click();
-    await chooseNearbyPoint();
+    await chooseStation("Eastern source");
     const retry = response();
     await page.getByRole("button", { name: "Retry message", exact: true }).click();
     assert.equal((await (await retry).json()).outcome, "success");
     await ready();
     assert.deepEqual(requests.at(-1), failedRequest);
     await page.getByRole("button", { name: "New conversation", exact: true }).first().click();
-    await chooseNearbyPoint();
+    await chooseStation("Eastern source");
     const current = await send("Wind here?");
     assert.equal(current.outcome, "success");
-    assert.notDeepEqual(current.context.point, originalPoint);
+    assert.deepEqual(current.context.station_ids, ["2"]);
     await page.getByRole("combobox", { name: "Question type" }).selectOption("history");
     const history = await send("What did we discuss last time?");
     assert.equal(history.outcome, "history");
@@ -85,7 +85,7 @@ const assert = require("node:assert/strict");
     await page.screenshot({ path: "/private/tmp/awn-pr90-mobile.png", fullPage: true });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors, []);
-    console.log("Browser checks passed: map selection, saved location reuse, restoration, retry input, history recall and mobile layout.");
+    console.log("Browser checks passed: station selection, saved location reuse, restoration, retry input, history recall and mobile layout.");
   } finally {
     await browser.close();
   }

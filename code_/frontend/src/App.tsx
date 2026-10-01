@@ -20,8 +20,8 @@ export default function App() {
       isSending={state.busy}
       ready={state.ready}
       notice={state.notice}
-      point={state.point}
-      onPointChange={(value) => dispatch({ type: "point", value })}
+      stationId={state.stationId}
+      onStationChange={(value) => dispatch({ type: "station", value })}
       history={{
         conversations: state.conversations,
         selectedId: state.conversationId,

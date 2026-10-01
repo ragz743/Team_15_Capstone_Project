@@ -10,19 +10,19 @@ const starters = [
     icon: "thermometer",
     title: "Temperature",
     description: "Get a feel for local conditions",
-    prompt: "What was the temperature at the selected point yesterday?",
+    prompt: "What was the temperature at the selected station yesterday?",
   },
   {
     icon: "rain",
     title: "Rainfall",
     description: "See how much rain has fallen",
-    prompt: "How much rain fell at the selected point over the last week?",
+    prompt: "How much rain fell at the selected station over the last week?",
   },
   {
     icon: "wind",
     title: "Wind",
     description: "Take a closer look at the wind",
-    prompt: "What was the wind speed at the selected point yesterday?",
+    prompt: "What was the wind speed at the selected station yesterday?",
   },
 ] as const;
 
