@@ -50,3 +50,21 @@ Request ownership prevents responses from an earlier chat from updating the acti
 The client separates endpoint calls in `api.ts`, HTTP handling in `http.ts` and response
 types and validation in `apiContracts.ts`. Chat submission and history navigation share
 request handling while keeping their existing cancellation and retry behavior.
+
+## Response formatting
+
+Assistant replies render Markdown, including lists, links and scrollable tables.
+User messages keep their original whitespace. Raw HTML and images are disabled;
+links use the renderer's default URL protections. The final-answer prompt requests
+paragraphs for simple answers, bullets for measurements and tables for comparisons.
+Saved replies keep their original text.
+
+With Vite running and Playwright/Chrome available, run the browser check from the
+repository root:
+
+```bash
+AWN_UI_URL=http://127.0.0.1:5173 node testing/browser_markdown.cjs
+```
+
+The check mocks API responses and covers fresh/saved replies, unsafe HTML and links,
+source details, user whitespace and desktop/mobile layouts.

@@ -17,7 +17,7 @@ class FakeRetriever:
         self.question: str | None = None
         self.point = None
 
-    def retrieve(self, question: str, *, point=None, history=None) -> str:
+    def retrieve(self, question: str, *, point=None, station_id=None, history=None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
         self.point = point
@@ -39,6 +39,7 @@ def test_health_returns_readiness_metadata(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "engine": "langgraph",
         "chatbot_ready": True,
         "retriever_ready": True,
         "history_ready": False,
@@ -113,9 +114,11 @@ def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, exp
     monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
     chatbot = MagicMock()
     monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
-    monkeypatch.setattr(api, "EmbeddingOpenRouter", MagicMock())
-    monkeypatch.setattr(api, "PgVectorStore", MagicMock())
-    monkeypatch.setattr(api, "Retriever", MagicMock(return_value=FakeRetriever()))
+    for name in ("AWN_DB_HOST", "AWN_DB_USER", "AWN_DB_PASSWORD"):
+        monkeypatch.setenv(name, "test")
+    for name in ("OPENROUTER_WORKFLOW_MODEL", "OPENROUTER_CLASSIFIER_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(api, "LangGraphEngine", MagicMock(return_value=FakeRetriever()))
     for name in ("_chatbot", "_retriever", "_chatbot_model_name", "_embedding_model_name", "_history_service"):
         monkeypatch.setattr(api, name, getattr(api, name))
 
@@ -123,8 +126,8 @@ def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, exp
         health = client.get("/api/health").json()
         response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Temperature yesterday?"}]})
 
-    assert chatbot.call_count == 2
-    assert [call.args[0]["model"] for call in chatbot.call_args_list] == [expected, expected]
+    assert chatbot.call_count == 3
+    assert [call.args[0]["model"] for call in chatbot.call_args_list] == [expected, expected, expected]
     assert health["chatbot_ready"] and health["retriever_ready"]
     assert health["model"] == expected
     assert response.status_code == 200

@@ -139,3 +139,35 @@ test("recalling an answer preserves an unused map selection", () => {
   assert.deepEqual(state.point, otherPoint);
   assert.deepEqual(state.pendingPoint, otherPoint);
 });
+
+
+test("recall mode survives a failed turn and reload while new chats default to weather", () => {
+  const recalled: SavedConversation = { ...saved, messages: saved.messages.map((item) => ({
+    ...item, request_input: { point, mode: "history" },
+  })) };
+  let state = conversationReducer(initialState, { type: "loaded", chat: recalled });
+  assert.equal(state.mode, "history");
+  state = conversationReducer(state, { type: "mode", value: "weather" });
+  assert.equal(state.messages[0].mode, "history");
+  assert.equal(conversationReducer(state, { type: "new" }).mode, "weather");
+});
+
+test("the saved request sends the selected operation", async (t) => {
+  const fetch = t.mock.method(globalThis, "fetch", async () => Response.json(savedReply));
+  await sendSavedChat(conversation, request, "Remember?", undefined, null, "history");
+  assert.equal(JSON.parse(String(fetch.mock.calls[0].arguments[1]?.body)).mode, "history");
+});
+
+
+test("source details survive an answer and a saved conversation reload", () => {
+  const metadata = { coverage: "subset" as const, sources: [{
+    station_id: "1", station: "Pullman", county: "Whitman", kind: "observation" as const,
+    times: ["2026-09-29"], measurements: ["AVG_AIR_TEMP (F)"],
+  }] };
+  let state = conversationReducer(initialState, { type: "sending", message });
+  state = conversationReducer(state, { type: "answered", result: { ...savedReply, ...metadata }, text: message.text });
+  assert.deepEqual(state.messages[1].metadata, metadata);
+  const restored: SavedConversation = { ...saved, messages: [{ ...saved.messages[0], role: "assistant", metadata }] };
+  state = conversationReducer(initialState, { type: "loaded", chat: restored });
+  assert.deepEqual(state.messages[0].metadata, metadata);
+});

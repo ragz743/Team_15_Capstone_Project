@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from itertools import cycle
 from pathlib import Path
 from unittest.mock import MagicMock
 from uuid import UUID, uuid4
@@ -16,14 +17,12 @@ from backend.conversation_store import (
     ConversationStore,
 )
 from backend.history_service import HistoryService
-from backend.retriever import Retriever
-from backend.vector_store import PgVectorStore
-from backend.weather_intent import WeatherIntent
 from backend.weather_query import RequestedPoint, Station, WeatherQuery
+from backend.workflow.engine import LangGraphEngine
 from fastapi.testclient import TestClient
 from history_fixture import FixtureHistoryModel, structured_mock
-from langchain_core.documents import Document
-from weather_fixtures import POINT, STATION, intent_json
+from weather_fixtures import POINT, STATION
+from workflow_fixture import make_graph
 
 pytestmark = pytest.mark.skipif(
     os.getenv("RUN_PGVECTOR_TESTS") != "1", reason="Opt-in local PostgreSQL persistence tests"
@@ -50,7 +49,7 @@ class FixtureRetriever:
         """Provide the public identity used to label a resolved conversation."""
         return [Station("1", "Pullman", "Whitman")]
 
-    def prepare_turn(self, question, context=None, *, today=None, point=None, history=None):
+    def prepare_turn(self, question, context=None, *, reference_time=None, point=None, station_id=None, history=None):
         """Supply fixed constraints for tests focused on persistence and ownership."""
         context = (
             context
@@ -115,7 +114,7 @@ def test_http_cookie_reload_retry_and_ownership(store, database, monkeypatch):
     assert len(client.get(f"/api/conversations/{chat}").json()["messages"]) == 4
 
 
-def test_history_routes_without_retriever_and_reuse_fetches_weather_again(store, monkeypatch, completed):
+def test_explicit_history_cannot_trigger_new_weather(store, monkeypatch, completed):
     """An old assistant claim can be quoted as history but cannot supply new weather evidence."""
     monkeypatch.setattr(api, "_conversations", store)
     client = TestClient(api.app)
@@ -126,7 +125,12 @@ def test_history_routes_without_retriever_and_reuse_fetches_weather_again(store,
     monkeypatch.setattr(api, "_retriever", None)
     recalled = client.post(
         "/api/chat",
-        json={"conversation_id": current, "request_id": str(uuid4()), "message": "What did we discuss last time?"},
+        json={
+            "conversation_id": current,
+            "request_id": str(uuid4()),
+            "message": "What did we discuss last time?",
+            "mode": "history",
+        },
     )
     assert recalled.status_code == 200 and "OLD CLAIM" in recalled.json()["reply"]
     retriever = FixtureRetriever()
@@ -137,11 +141,11 @@ def test_history_routes_without_retriever_and_reuse_fetches_weather_again(store,
             "conversation_id": current,
             "request_id": str(uuid4()),
             "message": "Using our last conversation, what about humidity?",
+            "mode": "history",
         },
     )
-    assert result.status_code == 200 and result.json()["reply"] == "Fresh retrieved weather"
-    assert "OLD CLAIM" not in str(retriever.calls)
-    assert retriever.calls[0][1].station_ids == ["1"]
+    assert result.status_code == 200 and result.json()["outcome"] == "needs_clarification"
+    assert not retriever.calls
 
 
 def test_secure_cookie_and_cors_configuration(store, monkeypatch):
@@ -163,9 +167,20 @@ def test_secure_cookie_and_cors_configuration(store, monkeypatch):
     assert client.options("/api/chat", headers=headers).status_code == 400
 
 
+def graph_weather(monkeypatch):
+    """Run the real weather graph with controlled provider and source replies."""
+    runtime = make_graph(monkeypatch)
+    directory = MagicMock()
+    directory.stations.return_value = [STATION, replace(STATION, id="2", name="Colfax", latitude="46.88")]
+    engine = LangGraphEngine(runtime.model, runtime.classifier, directory=directory)
+    monkeypatch.setattr(api, "_retriever", engine)
+    return runtime
+
+
 def test_saved_weather_retry_keeps_original_date_after_provider_failure(store, database, monkeypatch):
-    """Use the real HTTP, resolver and persistence path across a failed retrieval."""
+    """Retry the frozen graph inputs across a provider failure and a server restart."""
     monkeypatch.setattr(api, "_conversations", store)
+    runtime = graph_weather(monkeypatch)
     client = TestClient(api.app)
     chat = UUID(client.post("/api/conversations").json()["id"])
     owner = store.owner(client.cookies.get("awn_browser"))
@@ -173,103 +188,51 @@ def test_saved_weather_retry_keeps_original_date_after_provider_failure(store, d
     question = "Temperature at Pullman yesterday"
     first = store.begin(owner, chat, request, question, request_input={"point": POINT.model_dump()})
     store.fail(owner, chat, request, first.attempt_id)
+    accepted = datetime(2026, 9, 11, 6, 59, tzinfo=UTC)
     with database() as conn:
-        conn.execute(
-            "UPDATE conversation_turns SET requested_at = %s WHERE request_id = %s",
-            (datetime(2026, 9, 11, 6, 59, tzinfo=UTC), request),
-        )
-    weather, model = MagicMock(spec=PgVectorStore), MagicMock()
-    weather.table = "daily_index"
-    weather.stations.return_value = [STATION]
-    weather.similarity_search.side_effect = RuntimeError("provider failure")
-    interpreter = MagicMock()
-    interpreter.interpret.return_value = WeatherIntent.model_validate_json(intent_json())
-    monkeypatch.setattr(api, "_retriever", Retriever(weather, model, interpreter=interpreter))
+        conn.execute("UPDATE conversation_turns SET requested_at = %s WHERE request_id = %s", (accepted, request))
     payload = {
         "conversation_id": str(chat),
         "request_id": str(request),
         "message": question,
         "point": POINT.model_dump(),
     }
-    assert client.post("/api/chat", json=payload).status_code == 502
-    assert weather.similarity_search.call_args.kwargs["selection"].start == date(2026, 9, 9)
-    weather.stations.side_effect = AssertionError("Retry must reuse its saved resolution")
-    weather.similarity_search.side_effect = None
-    weather.similarity_search.return_value = [
-        Document(page_content="Temperature 72 F", metadata={"id": "1", "station": "Pullman", "date": "2026-09-09"})
-    ]
-    model.invoke.return_value = "At Pullman on 2026-09-09, the temperature was 72 F."
+    runtime.classifier.invoke_json.side_effect = RuntimeError("private provider failure")
+    failure = client.post("/api/chat", json=payload)
+    assert failure.status_code == 502 and "private" not in failure.text
+    runtime.classifier.invoke_json.side_effect = None
     monkeypatch.setattr(api, "_conversations", ConversationStore(database))
     reply = client.post("/api/chat", json=payload)
-    assert reply.status_code == 200
-    assert reply.json()["context"]["start"] == "2026-09-09"
-    assert len(store.get(owner, chat)["messages"]) == 2
+    assert reply.status_code == 200, reply.text
+    supplied = runtime.classifier.invoke_json.call_args.args[1]
+    assert datetime.fromisoformat(supplied["reference_time"]) == accepted
+    saved = store.get(owner, chat)["messages"]
+    assert len(saved) == 2
+    assert saved[-1]["metadata"]["sources"] == reply.json()["sources"]
+    assert reply.json()["sources"][0]["station"] == "Pullman"
+    assert reply.json()["coverage"] == "subset"
     assert client.post("/api/chat", json=payload).json() == reply.json()
-    assert model.invoke.call_count == 1
+    assert runtime.model.invoke.call_count == 2
 
 
 def test_saved_weather_followup_chain_uses_fresh_evidence_after_reopening(store, database, monkeypatch):
-    """Carry the chosen point and interpreted period through persistence and fresh retrieval."""
+    """Keep selected points and dated recent questions across saved followups."""
     monkeypatch.setattr(api, "_conversations", store)
-    weather, model, interpreter = MagicMock(spec=PgVectorStore), MagicMock(), MagicMock()
-    weather.table = "daily_index"
-    second = replace(STATION, id="2", name="Colfax", latitude="46.88")
-    second_point = RequestedPoint(latitude=46.88, longitude=-117.181)
-    weather.stations.return_value = [STATION, second]
-
-    def matching_records(question, *, selection, **kwargs):
-        station = next(item for item in weather.stations.return_value if item.id == selection.station_ids[0])
-        return [
-            Document(
-                page_content="Temperature 72 F; humidity 45%",
-                metadata={
-                    "id": station.id,
-                    "station": station.name,
-                    "county": station.county,
-                    "date": selection.start.isoformat(),
-                },
-            )
+    runtime = graph_weather(monkeypatch)
+    runtime.model.invoke.side_effect = cycle(
+        [
+            "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'",
+            "The selected source reported 70.25 F.",
         ]
-
-    weather.similarity_search.side_effect = matching_records
-    model.invoke.return_value = "Fixture measurements from the selected source."
-    requests = [
-        ("How warm here?", POINT, "1", "2026-09-10", "temperature"),
-        ("And humidity?", POINT, "1", "2026-09-10", "humidity"),
-        ("Same at this point?", second_point, "2", "2026-09-10", "humidity"),
-        ("What about September 11?", second_point, "2", "2026-09-11", "humidity"),
-        ("What about September 12?", second_point, "2", "2026-09-12", "humidity"),
-    ]
-    interpreter.interpret.side_effect = [
-        WeatherIntent.model_validate_json(
-            intent_json(
-                start=day,
-                end=day,
-                subject=subject,
-                question=f"{subject} here on {day}?",
-                data_kind="observation",
-            )
-        )
-        for _, _, _, day, subject in requests
-    ]
-    monkeypatch.setattr(api, "_retriever", Retriever(weather, model, interpreter=interpreter))
+    )
+    second_point = RequestedPoint(latitude=46.88, longitude=-117.181)
     client = TestClient(api.app)
     chat = client.post("/api/conversations").json()["id"]
-    for index, (question, point, station_id, day, subject) in enumerate(requests):
-        if index == 4:
+    questions = ["Temperature yesterday?", "And humidity?", "Same at this point?"]
+    for index, question in enumerate(questions):
+        point = second_point if index == 2 else POINT
+        if index == 2:
             monkeypatch.setattr(api, "_conversations", ConversationStore(database))
-            restored = client.get(f"/api/conversations/{chat}").json()
-            assert restored["context"]["point"] == second_point.model_dump()
-            another = client.post("/api/conversations").json()["id"]
-            result = client.post(
-                "/api/chat",
-                json={
-                    "conversation_id": another,
-                    "request_id": str(uuid4()),
-                    "message": "Humidity?",
-                },
-            ).json()
-            assert result["outcome"] == "needs_clarification" and "map" in result["reply"]
         response = client.post(
             "/api/chat",
             json={
@@ -280,12 +243,12 @@ def test_saved_weather_followup_chain_uses_fresh_evidence_after_reopening(store,
             },
         )
         assert response.status_code == 200, response.text
-        context = response.json()["context"]
-        assert context["station_ids"] == [station_id] and context["start"] == day and context["subject"] == subject
-        assert context["point"] == point.model_dump()
-        assert day in response.json()["reply"]
-        assert weather.similarity_search.call_count == model.invoke.call_count == index + 1
-    assert weather.stations.call_count == 1
+        assert response.json()["context"]["station_ids"] == (["2"] if index == 2 else ["1"])
+        supplied = runtime.classifier.invoke_json.call_args.args[1]
+        assert supplied["question"] == question
+        assert [item["user"] for item in supplied["history"]] == questions[:index]
+        assert all(item["asked_at"] for item in supplied["history"])
+    assert runtime.cursor.execute.call_count == 3
 
 
 def test_llm_history_http_reload_same_chat_and_browser_isolation(store, database, monkeypatch, completed):
@@ -309,7 +272,12 @@ def test_llm_history_http_reload_same_chat_and_browser_isolation(store, database
     restarted.cookies.update(client.cookies)
     monkeypatch.setattr(api, "_conversations", ConversationStore(database))
     current = restarted.post("/api/conversations").json()["id"]
-    payload = {"conversation_id": current, "request_id": str(uuid4()), "message": "that icy crop chat, remind me?"}
+    payload = {
+        "conversation_id": current,
+        "mode": "history",
+        "request_id": str(uuid4()),
+        "message": "that icy crop chat, remind me?",
+    }
     response = restarted.post("/api/chat", json=payload)
     assert response.status_code == 200 and response.json()["outcome"] == "history"
     assert "Saved frost discussion only" in response.json()["reply"]
@@ -338,7 +306,12 @@ def test_history_answer_retry_uses_frozen_evidence_after_restart(store, database
         '{"statements":[{"text":"You discussed frost.","refs":[1]}]}',
     ]
     monkeypatch.setattr(api, "_history_service", HistoryService(model, "fixture-history"))
-    payload = {"conversation_id": current, "request_id": str(uuid4()), "message": "Remember the frost chat?"}
+    payload = {
+        "conversation_id": current,
+        "mode": "history",
+        "request_id": str(uuid4()),
+        "message": "Remember the frost chat?",
+    }
     first = client.post("/api/chat", json=payload)
     assert first.status_code == 502 and "private failure" not in first.text
     completed(store, owner, old, "Frost arrived after the request", "LATER_REPLY")
@@ -365,16 +338,25 @@ def test_history_clarification_context_and_service_failures(store, monkeypatch):
     ]
     monkeypatch.setattr(api, "_history_service", HistoryService(model, "fixture-history"))
     result = client.post(
-        "/api/chat", json={"conversation_id": current, "request_id": str(uuid4()), "message": "Our September chats?"}
+        "/api/chat",
+        json={
+            "conversation_id": current,
+            "mode": "history",
+            "request_id": str(uuid4()),
+            "message": "Our September chats?",
+        },
     )
     assert result.json()["outcome"] == "needs_clarification"
-    result = client.post("/api/chat", json={"conversation_id": current, "request_id": str(uuid4()), "message": "2025"})
+    result = client.post(
+        "/api/chat", json={"conversation_id": current, "mode": "history", "request_id": str(uuid4()), "message": "2025"}
+    )
     assert result.status_code == 200 and "could not find" in result.json()["reply"]
     assert "Which September did you mean?" in model.invoke.call_args.args[0][0]
     assert '"message": "2025"' in model.invoke.call_args.args[0][0]
     monkeypatch.setattr(api, "_history_service", None)
     result = client.post(
-        "/api/chat", json={"conversation_id": current, "request_id": str(uuid4()), "message": "Remember?"}
+        "/api/chat",
+        json={"conversation_id": current, "mode": "history", "request_id": str(uuid4()), "message": "Remember?"},
     )
     assert result.status_code == 503
 
@@ -393,5 +375,76 @@ def test_changed_map_point_conflicts_with_original_request(store, monkeypatch):
     changed = {**payload, "point": {"latitude": 47.0, "longitude": -120.0}}
     assert client.post("/api/chat", json=changed).status_code == 409
     assert len(retriever.calls) == 1
+    assert client.post("/api/chat", json={**payload, "mode": "history"}).status_code == 409
     restored = client.get(f"/api/conversations/{chat}").json()
     assert restored["messages"][0]["request_input"] == {"point": POINT.model_dump()}
+
+
+def test_selected_station_survives_failure_retry_reload_and_followup(store, monkeypatch):
+    """Saved station requests retain their original selection and reference time."""
+    monkeypatch.setattr(api, "_conversations", store)
+    monkeypatch.setattr(api, "_history_service", None)
+    runtime = graph_weather(monkeypatch)
+    runtime.model.invoke.side_effect = cycle(
+        ["SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'", "70.25 F."]
+    )
+    runtime.classifier.invoke_json.side_effect = TimeoutError("Provider unavailable")
+    client = TestClient(api.app)
+    chat = client.post("/api/conversations").json()["id"]
+    payload = {
+        "conversation_id": chat,
+        "request_id": str(uuid4()),
+        "message": "Temperature yesterday?",
+        "station_id": "1",
+    }
+    assert client.post("/api/chat", json=payload).status_code == 504
+    original = runtime.classifier.invoke_json.call_args.args[1]
+    saved = client.get(f"/api/conversations/{chat}").json()
+    assert saved["messages"][0]["request_input"] == {"station_id": "1"}
+    assert client.post("/api/chat", json={**payload, "station_id": "2"}).status_code == 409
+    runtime.classifier.invoke_json.side_effect = None
+    response = client.post("/api/chat", json=payload)
+    assert response.status_code == 200 and response.json()["context"]["station_ids"] == ["1"]
+    assert response.json()["context"]["point"] is None
+    assert runtime.classifier.invoke_json.call_args.args[1]["reference_time"] == original["reference_time"]
+    assert client.post("/api/chat", json=payload).json() == response.json()
+    followup = client.post(
+        "/api/chat", json={"conversation_id": chat, "request_id": str(uuid4()), "message": "What about humidity?"}
+    )
+    assert followup.status_code == 200 and followup.json()["context"]["station_ids"] == ["1"]
+
+
+@pytest.mark.parametrize("failure", ["classification", "no_data", "provider"])
+def test_saved_graph_failures_and_missing_observations(store, monkeypatch, failure):
+    """Exercise failure responses and persisted outcomes through the saved HTTP path."""
+    monkeypatch.setattr(api, "_conversations", store)
+    monkeypatch.setattr(api, "_history_service", None)
+    runtime = graph_weather(monkeypatch)
+    if failure == "classification":
+        runtime.classifier.invoke_json.return_value = "invalid"
+    elif failure == "no_data":
+        runtime.cursor.fetchall.return_value = []
+    else:
+        runtime.classifier.invoke_json.side_effect = RuntimeError("private provider details")
+    client = TestClient(api.app)
+    chat = client.post("/api/conversations").json()["id"]
+    payload = {
+        "conversation_id": chat,
+        "request_id": str(uuid4()),
+        "message": "Temperature?",
+        "point": POINT.model_dump(),
+    }
+    result = client.post("/api/chat", json=payload)
+    saved = client.get(f"/api/conversations/{chat}").json()["messages"]
+    if failure == "no_data":
+        assert result.status_code == 200 and result.json()["outcome"] == "no_data"
+        assert saved[-1]["role"] == "assistant"
+        assert client.post("/api/chat", json=payload).json() == result.json()
+        assert runtime.model.invoke.call_count == 1
+    else:
+        assert result.status_code == 502 and saved[-1]["status"] == "failed"
+        assert "private" not in result.text
+        if failure == "classification":
+            assert "interpret your question" in result.json()["detail"]
+        assert runtime.classifier.invoke_json.call_count == (2 if failure == "classification" else 1)
+        runtime.cursor.execute.assert_not_called()

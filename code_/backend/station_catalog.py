@@ -8,6 +8,26 @@ from dataclasses import dataclass
 from threading import Lock
 
 from backend.weather_query import QueryClarificationError, RequestedPoint, Station
+from pydantic import BaseModel, ConfigDict, Field
+
+
+class PublicStation(BaseModel):
+    """Station identity and optional distance for the picker."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    id: str
+    name: str
+    county: str
+    distance_km: float | None = None
+
+
+class StationList(BaseModel):
+    """Browsable stations without their coordinates."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    stations: list[PublicStation] = Field(default_factory=list)
+    counties: list[str] = Field(default_factory=list)
+    located_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -31,17 +51,23 @@ def _coordinates(station: Station) -> tuple[float, float] | None:
     return lat, -abs(lon)
 
 
-def _located_stations(records: Iterable[Station]) -> tuple[LocatedStation, ...]:
+def _consistent_stations(records: Iterable[Station]) -> list[tuple[Station, tuple[float, float] | None]]:
     grouped: dict[str, list[Station]] = {}
     for station in records:
-        if station.id.isdecimal() and station.name.strip():
+        if station.id.isascii() and station.id.isdecimal() and len(station.id) <= 20 and station.name.strip():
             grouped.setdefault(station.id, []).append(station)
-    located = []
+    stations = []
     for versions in grouped.values():
         identities = {(s.name.strip().casefold(), s.county.strip().casefold()) for s in versions}
+        if len(identities) != 1:
+            continue
         coordinates = {point for s in versions if (point := _coordinates(s)) is not None}
-        if len(identities) == 1 and len(coordinates) == 1:
-            located.append(LocatedStation(versions[0], *coordinates.pop()))
+        stations.append((versions[0], coordinates.pop() if len(coordinates) == 1 else None))
+    return stations
+
+
+def _located_stations(records: Iterable[Station]) -> tuple[LocatedStation, ...]:
+    located = [LocatedStation(station, *point) for station, point in _consistent_stations(records) if point]
     return tuple(sorted(located, key=lambda value: value.latitude))
 
 
@@ -49,6 +75,29 @@ def _distance(point: RequestedPoint, station: LocatedStation) -> float:
     lat1, lon1, lat2, lon2 = map(math.radians, (point.latitude, point.longitude, station.latitude, station.longitude))
     value = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
     return 6371.0088 * 2 * math.asin(math.sqrt(min(1.0, max(0.0, value))))
+
+
+def browse_stations(records: Iterable[Station], point: RequestedPoint | None = None) -> StationList:
+    """Sort public identities by name or distance without selecting a station."""
+    ranked = []
+    located = 0
+    for station, coordinate in _consistent_stations(records):
+        located += coordinate is not None
+        distance = _distance(point, LocatedStation(station, *coordinate)) if point and coordinate else None
+        public = PublicStation(
+            id=station.id,
+            name=station.name.strip(),
+            county=station.county.strip(),
+            distance_km=round(distance, 1) if distance is not None else None,
+        )
+        ranked.append((distance if distance is not None else math.inf, public))
+    ranked.sort(key=lambda item: (item[0], item[1].name.casefold(), item[1].id))
+    stations = [station for _, station in ranked]
+    return StationList(
+        stations=stations,
+        counties=sorted({station.county for station in stations if station.county}),
+        located_count=located,
+    )
 
 
 class StationCatalog:

@@ -1,5 +1,8 @@
 import { useEffect, useRef } from "react";
+import { answerText, sourceLabel } from "../lib/answerPresentation";
+import type { ResultMetadata } from "../lib/api";
 import Icon from "./Icon";
+import AssistantMarkdown from "./AssistantMarkdown";
 import WsuLogo from "./WsuLogo";
 import type { Message } from "../lib/conversationState";
 
@@ -8,19 +11,19 @@ const starters = [
     icon: "thermometer",
     title: "Temperature",
     description: "Get a feel for local conditions",
-    prompt: "What was the temperature at the selected point yesterday?",
+    prompt: "What was the temperature at the selected station yesterday?",
   },
   {
     icon: "rain",
     title: "Rainfall",
     description: "See how much rain has fallen",
-    prompt: "How much rain fell at the selected point over the last week?",
+    prompt: "How much rain fell at the selected station over the last week?",
   },
   {
     icon: "wind",
     title: "Wind",
     description: "Take a closer look at the wind",
-    prompt: "What was the wind speed at the selected point yesterday?",
+    prompt: "What was the wind speed at the selected station yesterday?",
   },
 ] as const;
 
@@ -37,6 +40,17 @@ type Props = {
   onStarter: (text: string) => void;
   onRetry?: (message: Message) => void;
 };
+
+function SourceDetails({ metadata }: { metadata?: ResultMetadata }) {
+  if (!metadata?.sources?.length) return null;
+  return (
+    <details className="source-details">
+      <summary>Sources and coverage</summary>
+      <ul>{metadata.sources.map((source, index) => <li key={index}>{sourceLabel(source)}</li>)}</ul>
+      {metadata.coverage === "subset" && <p>Retrieved records may not cover every station or day in the request.</p>}
+    </details>
+  );
+}
 
 export default function ChatTranscript({ messages, ready, isSending, onLoadEarlier, onStarter, onRetry }: Props) {
   const transcriptRef = useRef<HTMLElement | null>(null);
@@ -127,10 +141,13 @@ export default function ChatTranscript({ messages, ready, isSending, onLoadEarli
                       <span className="dot" />
                       <span className="sr-only">Preparing your response</span>
                     </div>
+                  ) : message.role === "assistant" ? (
+                    <AssistantMarkdown text={answerText(message.text, message.metadata?.sources)} />
                   ) : (
                     <p>{message.text}</p>
                   )}
                 </div>
+                <SourceDetails metadata={message.metadata} />
                 {!message.pending && (
                   <div className="message-meta">
                     <time dateTime={message.timestamp}>{formatTime(message.timestamp)}</time>

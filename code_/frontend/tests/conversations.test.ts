@@ -35,6 +35,7 @@ test("a saved turn sends one message, a stable retry ID and browser credentials"
       conversation_id: conversation,
       request_id: request,
       message: "Temperature?",
+      mode: "weather",
     });
   }
 });
