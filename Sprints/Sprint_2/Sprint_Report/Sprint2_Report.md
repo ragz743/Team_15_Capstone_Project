@@ -57,7 +57,6 @@ Here's what we'd like to improve:
    * Task distribution needs improvement for better efficiency
    * Communication and coordination could be clearer to reduce duplicate work and ensure alignment across components
 
-
 Here are changes we plan to implement in the next sprint:
    * Complete implementing the prototype
    * Refine chatbot UI for demo readiness and usability
