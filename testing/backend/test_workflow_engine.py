@@ -64,11 +64,31 @@ def test_followup_preserves_selected_station_and_dated_history(weather):
     assert supplied["history"] == history and supplied["question"] == "What about humidity?"
 
 
+def test_picker_selection_reaches_graph_without_a_coordinate_lookup(weather):
+    """A chosen station takes precedence over a previously saved map location."""
+    engine, runtime = weather
+    engine._catalog.resolve = MagicMock(side_effect=AssertionError("Unexpected coordinate lookup"))
+    turn = engine.prepare_turn(
+        "Temperature yesterday?", ConversationContext(station_ids=["99"], point=POINT), station_id="1"
+    )
+    assert turn.context.station_ids == ["1"] and turn.context.point is None
+    assert engine.answer_result(turn).outcome == "success"
+    assert runtime.classifier.invoke_json.call_args.args[1]["question"] == "Temperature yesterday?"
+
+
+def test_unknown_picker_station_does_not_run_graph(weather):
+    """A station must still exist in the authoritative directory when submitted."""
+    engine, runtime = weather
+    turn = engine.prepare_turn("Temperature?", station_id="99")
+    assert turn.outcome == "needs_clarification" and "no longer available" in turn.reply
+    runtime.classifier.invoke_json.assert_not_called()
+
+
 def test_missing_location_does_not_run_graph(weather):
     """A missing selection asks the user for a point without generating SQL."""
     engine, runtime = weather
     turn = engine.prepare_turn("Temperature today", reference_time=REFERENCE)
-    assert turn.outcome == "needs_clarification" and "map" in turn.reply
+    assert turn.outcome == "needs_clarification" and "Browse stations" in turn.reply
     runtime.classifier.invoke_json.assert_not_called()
     runtime.model.invoke.assert_not_called()
 

@@ -74,13 +74,14 @@ class LangGraphEngine:
         context: ConversationContext | None = None,
         *,
         point: RequestedPoint | None = None,
+        station_id: str | None = None,
         reference_time: datetime | None = None,
         history: list[dict] | None = None,
     ) -> PreparedChatTurn:
         """Freeze the station and dated context without interpreting the question."""
         context = context or ConversationContext()
         try:
-            context = self._select_station(context, point)
+            context = self._select_station(context, point, station_id)
         except QueryClarificationError as exc:
             return PreparedChatTurn(outcome="needs_clarification", question=question, context=context, reply=str(exc))
         request = WorkflowRequest(
@@ -90,22 +91,33 @@ class LangGraphEngine:
         )
         return PreparedChatTurn(outcome="weather", question=question, context=context, workflow=request)
 
-    def _select_station(self, context: ConversationContext, point: RequestedPoint | None) -> ConversationContext:
+    def _select_station(
+        self, context: ConversationContext, point: RequestedPoint | None, station_id: str | None
+    ) -> ConversationContext:
+        if station_id is not None:
+            context = context.model_copy(update={"station_ids": [station_id], "county": None, "point": None})
         if point is not None and (point != context.point or not context.station_ids):
             station = self._catalog.resolve(point)
             return context.model_copy(update={"station_ids": [station.id], "county": None, "point": point})
         if len(context.station_ids) != 1:
-            raise QueryClarificationError("Which location should I check? Choose a point on the map.")
-        if not any(station.id == context.station_ids[0] for station in self._directory.stations()):
+            raise QueryClarificationError("Which station should I check? Choose a station from Browse stations.")
+        if not any(station.id == context.station_ids[0] for station in self.station_catalog().stations):
             raise QueryClarificationError(
-                "That weather source is no longer available. Choose another point on the map."
+                "That station is no longer available. Choose another station from Browse stations."
             )
         return context
 
-    def retrieve(self, question: str, *, point: RequestedPoint | None = None, history: list[dict] | None = None) -> str:
+    def retrieve(
+        self,
+        question: str,
+        *,
+        point: RequestedPoint | None = None,
+        station_id: str | None = None,
+        history: list[dict] | None = None,
+    ) -> str:
         """Support the unsaved chat endpoint through the same graph adapter."""
         recent = [{"user": item["content"]} for item in history or [] if item.get("role") == "user"]
-        return self.answer_result(self.prepare_turn(question, point=point, history=recent)).reply
+        return self.answer_result(self.prepare_turn(question, point=point, station_id=station_id, history=recent)).reply
 
     def answer_result(self, turn: PreparedChatTurn) -> AnsweredTurn:
         """Run frozen inputs and distinguish missing observations from service failures."""

@@ -67,10 +67,13 @@ class SavedChatService:
         question: str,
         *,
         point: RequestedPoint | None = None,
+        station_id: str | None = None,
         mode: Literal["weather", "history"] = "weather",
     ) -> ChatCompletion:
         """Replay completed results and freeze new inputs before answer generation."""
         request_input: dict = {"point": point.model_dump()} if point is not None else {}
+        if station_id is not None:
+            request_input["station_id"] = station_id
         if mode == "history":
             request_input["mode"] = mode
         turn = self.store.begin(owner, conversation, request, question, request_input=request_input)
@@ -79,7 +82,7 @@ class SavedChatService:
         try:
             prepared = turn.prepared
             if prepared is None:
-                prepared = self._prepare(owner, conversation, question, turn, point, mode)
+                prepared = self._prepare(owner, conversation, question, turn, point, station_id, mode)
                 self.store.prepare(owner, conversation, request, turn.attempt_id, prepared)
             result = self._answer(prepared)
             self.store.complete(
@@ -118,6 +121,7 @@ class SavedChatService:
         question: str,
         turn: AcceptedTurn,
         point: RequestedPoint | None,
+        station_id: str | None,
         mode: Literal["weather", "history"],
     ) -> PreparedChatTurn:
         if mode == "history":
@@ -130,6 +134,7 @@ class SavedChatService:
                 question,
                 turn.context,
                 point=point,
+                station_id=station_id,
                 reference_time=turn.requested_at,
                 history=recent,
             )

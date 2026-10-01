@@ -49,7 +49,7 @@ class FixtureRetriever:
         """Provide the public identity used to label a resolved conversation."""
         return [Station("1", "Pullman", "Whitman")]
 
-    def prepare_turn(self, question, context=None, *, reference_time=None, point=None, history=None):
+    def prepare_turn(self, question, context=None, *, reference_time=None, point=None, station_id=None, history=None):
         """Supply fixed constraints for tests focused on persistence and ownership."""
         context = (
             context
@@ -378,6 +378,40 @@ def test_changed_map_point_conflicts_with_original_request(store, monkeypatch):
     assert client.post("/api/chat", json={**payload, "mode": "history"}).status_code == 409
     restored = client.get(f"/api/conversations/{chat}").json()
     assert restored["messages"][0]["request_input"] == {"point": POINT.model_dump()}
+
+
+def test_selected_station_survives_failure_retry_reload_and_followup(store, monkeypatch):
+    """Saved station requests retain their original selection and reference time."""
+    monkeypatch.setattr(api, "_conversations", store)
+    monkeypatch.setattr(api, "_history_service", None)
+    runtime = graph_weather(monkeypatch)
+    runtime.model.invoke.side_effect = cycle(
+        ["SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'", "70.25 F."]
+    )
+    runtime.classifier.invoke_json.side_effect = TimeoutError("Provider unavailable")
+    client = TestClient(api.app)
+    chat = client.post("/api/conversations").json()["id"]
+    payload = {
+        "conversation_id": chat,
+        "request_id": str(uuid4()),
+        "message": "Temperature yesterday?",
+        "station_id": "1",
+    }
+    assert client.post("/api/chat", json=payload).status_code == 504
+    original = runtime.classifier.invoke_json.call_args.args[1]
+    saved = client.get(f"/api/conversations/{chat}").json()
+    assert saved["messages"][0]["request_input"] == {"station_id": "1"}
+    assert client.post("/api/chat", json={**payload, "station_id": "2"}).status_code == 409
+    runtime.classifier.invoke_json.side_effect = None
+    response = client.post("/api/chat", json=payload)
+    assert response.status_code == 200 and response.json()["context"]["station_ids"] == ["1"]
+    assert response.json()["context"]["point"] is None
+    assert runtime.classifier.invoke_json.call_args.args[1]["reference_time"] == original["reference_time"]
+    assert client.post("/api/chat", json=payload).json() == response.json()
+    followup = client.post(
+        "/api/chat", json={"conversation_id": chat, "request_id": str(uuid4()), "message": "What about humidity?"}
+    )
+    assert followup.status_code == 200 and followup.json()["context"]["station_ids"] == ["1"]
 
 
 @pytest.mark.parametrize("failure", ["classification", "no_data", "provider"])

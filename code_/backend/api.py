@@ -49,12 +49,25 @@ class ChatMessage(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
-class ChatRequest(BaseModel):
-    """Payload for POST /api/chat."""
+class WeatherLocation(BaseModel):
+    """Accept an explicit station or a point from an older saved request."""
 
     model_config = ConfigDict(extra="forbid")
-    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
     point: RequestedPoint | None = None
+    station_id: str | None = Field(default=None, strict=True, pattern=r"^[0-9]{1,20}$")
+
+    @model_validator(mode="after")
+    def one_location(self):
+        """Reject conflicting selection methods."""
+        if self.point is not None and self.station_id is not None:
+            raise ValueError("Choose either a station or a point")
+        return self
+
+
+class ChatRequest(WeatherLocation):
+    """Payload for POST /api/chat."""
+
+    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
 
     @model_validator(mode="after")
     def bounded_request(self):
@@ -71,14 +84,12 @@ class ChatResponse(BaseModel):
     model: str
 
 
-class SavedChatRequest(BaseModel):
+class SavedChatRequest(WeatherLocation):
     """One accepted message, with stable IDs for retries."""
 
-    model_config = ConfigDict(extra="forbid")
     conversation_id: UUID
     request_id: UUID
     message: str = Field(min_length=1, max_length=4000)
-    point: RequestedPoint | None = None
     mode: Literal["weather", "history"] | None = None
 
 
@@ -327,6 +338,7 @@ def _saved_chat(payload: SavedChatRequest, request: Request, response: Response)
         payload.request_id,
         question,
         point=payload.point,
+        station_id=payload.station_id,
         mode=payload.mode or "weather",
     )
     return SavedChatResponse(
@@ -370,7 +382,13 @@ def chat(request: ChatRequest | SavedChatRequest, raw: Request, response: Respon
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
-        reply = _retriever.retrieve(question, point=request.point, history=_preceding_messages(request.messages))
+        selection = {"station_id": request.station_id} if request.station_id is not None else {}
+        reply = _retriever.retrieve(
+            question,
+            point=request.point,
+            history=_preceding_messages(request.messages),
+            **selection,
+        )
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
         raise _retrieval_error(exc) from exc

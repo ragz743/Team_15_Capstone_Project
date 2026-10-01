@@ -324,7 +324,7 @@ def _messages(row: dict) -> list[dict]:
 
 def _validate_retry(existing, latest, content, request_input, request):
     if existing["user_content"] != content or existing["request_input"] != request_input:
-        raise TurnConflictError("A retry must contain the original message and map point.")
+        raise TurnConflictError("A retry must contain the original message and location selection.")
     if existing["status"] != "completed" and latest["request_id"] != request:
         raise TurnConflictError("This failed turn has newer messages. Send a new question instead.")
 

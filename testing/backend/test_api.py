@@ -17,7 +17,7 @@ class FakeRetriever:
         self.question: str | None = None
         self.point = None
 
-    def retrieve(self, question: str, *, point=None, history=None) -> str:
+    def retrieve(self, question: str, *, point=None, station_id=None, history=None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
         self.point = point
