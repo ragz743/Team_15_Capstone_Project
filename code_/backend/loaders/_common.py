@@ -85,28 +85,22 @@ def _format_cell(value: object) -> str:
     return str(value)
 
 
-def _filter_none_columns(tuples: Sequence[NamedTuple], units: list[str]) -> list[tuple[int, str, str]]:
-    """Return column metadata for columns that contain at least one value."""
-    return [
-        (index, name, unit)
-        for index, (name, unit) in enumerate(zip(tuples[0]._fields, units, strict=True))
-        if any(row[index] is not None for row in tuples)
-    ]
+def to_markdown_table(
+    tuples: Sequence[NamedTuple],
+    units: Sequence[str],
+) -> str:
+    """Render every named tuple field using the supplied units."""
+    if not tuples:
+        return ""
 
-
-def _format_markdown_table(tuples: Sequence[NamedTuple], columns: list[tuple[int, str, str]]) -> str:
-    """Render selected columns and rows as a markdown table."""
-    header = "| " + " | ".join(f"{name}{' in ' + unit if unit else ''}" for _, name, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(columns))) + " |\n"
-    rows = ["| " + " | ".join(_format_cell(row[index]) for index, _, _ in columns) + " |\n" for row in tuples]
-
-    return header + divider + "".join(rows)
-
-
-def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
-    """Convert a collection of named tuple object into a markdown table."""
     if len(tuples[0]) != len(units):
         msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
         raise ValueError(msg)
-    columns = _filter_none_columns(tuples, units)
-    return _format_markdown_table(tuples, columns)
+
+    fields = tuples[0]._fields
+    header_parts = [f"{name} in {unit}" if unit else f"{name}" for name, unit in zip(fields, units, strict=True)]
+    header = "| " + " | ".join(header_parts) + " |\n"
+    divider = "| " + " | ".join(itertools.repeat("---", len(fields))) + " |\n"
+    rows = ["| " + " | ".join(_format_cell(value) for value in row) + " |\n" for row in tuples]
+
+    return header + divider + "".join(rows)
