@@ -301,7 +301,7 @@ class ChatbotWorkflow:
                 raise ValueError(msg)
         schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
         schema_context = (
-            _common.to_markdown_table(schema, ["", "", "", "", ""]) if schema else "No station schema was found."
+            _common.to_markdown_table(schema, [""] * len(schema[0])) if schema else "No station schema was found."
         )
 
         for attempt in range(1, self._MAX_SQL_ATTEMPTS + 1):
