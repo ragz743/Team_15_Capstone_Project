@@ -43,4 +43,5 @@ def test_awn_table_info_query(db_class: type[AWNDatabaseConnectionBase], table_n
     """Query the table information for each database."""
     with db_class() as awn_db:
         schema = awn_db.query_schema(table_name)
-        print(_common.to_markdown_table(schema, ["", "", "", "", ""]))
+        units = ["", "", "", "", ""]
+        print(_common.to_markdown_table(schema, units))
