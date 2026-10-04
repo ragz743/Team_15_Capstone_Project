@@ -214,12 +214,13 @@ class ChatbotWorkflow:
         """
         params = (latitude, longitude, latitude, county)
         results = self.current_db.simple_query(nearest_id_query, params)
+        nearest_result = next(iter(results), None)
 
-        if not results:
+        if nearest_result is None:
             msg = f"No nearest station returned with search args:(lat, lng)=({latitude}, {longitude}), county={county}"
             raise ValueError(msg)
 
-        station_id, *_ = next(results)
+        station_id, *_ = nearest_result
         return int(station_id)
 
     def _query_classifier(self, state: ChatState) -> dict:
@@ -300,7 +301,7 @@ class ChatbotWorkflow:
                 raise ValueError(msg)
         schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
         schema_context = (
-            _common.to_markdown_table(schema, ["", "", "", "", ""]) if schema else "No station schema was found."
+            _common.to_markdown_table(schema, [""] * len(schema[0])) if schema else "No station schema was found."
         )
 
         for attempt in range(1, self._MAX_SQL_ATTEMPTS + 1):
