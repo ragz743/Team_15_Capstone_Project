@@ -38,6 +38,11 @@ dev = [
     "requests",
     "github-copilot-sdk",
 ]
+local = [ # in-process / self hosted models, see backend/models/chatbot_local.py and embedding_local.py
+    "langchain-community",
+    "llama-cpp-python",
+    "langchain-ollama",
+]
 
 [project.scripts]
 index = "scripts.index:main"
