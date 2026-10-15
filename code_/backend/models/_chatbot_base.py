@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 class _BaseChatbot(ABC):
     """The chatbot model base class."""
 
+    model_name: str
+
     @abstractmethod
     def invoke(self, messages: list[str]) -> str:
         """Pass a list of messages and gets responses from the model."""
