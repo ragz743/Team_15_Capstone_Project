@@ -1,0 +1,24 @@
+# MoM October 15, 2026
+* Client gaves us access to AWS
+* If anyone hasn’t updated or moved around their tiles on the Kanban board, make sure to do that now. Also, add any upcoming user stories to the board that we haven’t added.
+
+## Dashboard Section
+* We would want the dashboard to show a list of users and their usage (LLM cost per user)
+* The dashboard should look like the AgWeatherNet website with WSU branding and colours like the chatbot
+
+Sai's questions regarding the LLM metrics dashboard (forwarded them to the client):
+* What counts as a session (i.e. browser tab, conversation, activity that ends after a set period of time)?
+* What counts as an active user? Is this someone who has opened the chat or someone who sent at least one query?
+* What LLM models and providers should we expect in production? OpenRouter models cost $0.
+* Should the dashboard show real spending or projected spending?
+* Should the cost include only the LLM calls (chatbot and embedding calls), or also hosting (i.e. server and database)?
+* Do you want a budget threshold, like a warning when monthly spending passes a set amount?
+* How should cost be shown as usage grows? Would it be something like cost per 1,000 calls?
+* How is query performance defined? I know it would include response time and retrieval quality (whether the right weather data was found). Would we also include a user satisfaction component, like thumbs up or down?
+* Is there a response-time target (like 95% of answers in under 5 seconds)?
+* Who will see the dashboard? Will it be an administrator? Do they have a separate admin login?
+* Should the dashboard be on weather.wsu.edu or on a separate internal page?
+* What time ranges (i.e. daily, monthly, weekly) and level of detail do you need? The data is broken down strictly by user, correct (and not by station or region)?
+* Would the dashboard need to update live, or is a daily refresh enough?
+* Do you need to export any data, like CSVs, from the dashboard (unlike the chatbot)?
+* Regarding the functionality priority of the dashboard, what things do you want first, and which can wait later?
