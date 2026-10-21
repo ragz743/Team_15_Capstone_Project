@@ -46,6 +46,9 @@ retrieve = "scripts.retrieve:main"
 [tool.setuptools.packages.find]
 where = ["code_"]
 
+[tool.setuptools.package-data]
+"backend.analytics" = ["*.sql", "*.yaml"]
+
 [tool.black]
 line-length = 120
 [tool.ruff]

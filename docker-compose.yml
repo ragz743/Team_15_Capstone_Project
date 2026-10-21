@@ -37,6 +37,9 @@ services:
       OPENROUTER_CHAT_MODEL: ${OPENROUTER_CHAT_MODEL}
       OPENROUTER_CHAT_TEMPERATURE: ${OPENROUTER_CHAT_TEMPERATURE}
       OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL}
+      AWN_ADMIN_TOKEN: ${AWN_ADMIN_TOKEN:-}  # admin dashboard is disabled until this is set
+      AWN_DASHBOARD_TIMEZONE: ${AWN_DASHBOARD_TIMEZONE:-America/Los_Angeles}
+      AWN_USAGE_TRACKING: ${AWN_USAGE_TRACKING:-true}
     ports:
       - "8000:8000" # exposed for debugging; nginx proxies internally
 

@@ -1,0 +1,21 @@
+# Prices used by the admin dashboard to estimate LLM cost, in USD per 1 million tokens.
+# Costs are calculated when a call is recorded, so editing this file only affects new calls.
+#
+# - model names must match the provider's model id exactly (e.g. as listed on https://openrouter.ai/models)
+# - models ending in one of `free_suffixes` cost nothing
+# - any model not listed here is recorded at $0 and flagged as "unpriced" on the dashboard
+# - local llama.cpp / Ollama models can be listed with 0 prices to mark them as priced
+#
+# Verify prices against the provider before relying on the dashboard's cost figures.
+
+free_suffixes:
+  - ":free"
+
+models:
+  # OpenRouter's router that picks a free model per request
+  openrouter/free:
+    input: 0
+    output: 0
+  openai/text-embedding-3-small:
+    input: 0.02
+    output: 0

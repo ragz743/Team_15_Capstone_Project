@@ -8,16 +8,21 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
-from typing import Literal
+from typing import Annotated, Literal
 
 import dotenv
+from backend.analytics import admin_api
+from backend.analytics.metering import MeteredEmbedding, RequestUsage
+from backend.analytics.usage_store import UsageStore, UsageTracker
+from backend.databases.pgvector import PgVectorConnection
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.models.embedding_openrouter import EmbeddingOpenRouter
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from openai import RateLimitError
 from openrouter.errors import TooManyRequestsResponseError
@@ -31,6 +36,9 @@ logging.basicConfig(level=logging.INFO)
 # NOTE: OpenRouter rotates the free-tier catalog; if this model 404s, pick
 # another ":free" entry from https://openrouter.ai/api/v1/models.
 _DEFAULT_CHAT_MODEL = "openai/gpt-oss-20b:free"
+
+# Optional anonymous ids the chat frontend sends so the admin dashboard can count users and sessions.
+_CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 class ChatMessage(BaseModel):
@@ -69,6 +77,7 @@ _chatbot: _BaseChatbot | None = None
 _retriever: Retriever | None = None
 _chatbot_model_name: str = ""
 _embedding_model_name: str = ""
+_usage_tracker: UsageTracker = UsageTracker(None)
 
 
 def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
@@ -84,7 +93,7 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     temperature = float(os.getenv("OPENROUTER_CHAT_TEMPERATURE", "0"))
 
     # Builds embedding model and chatbot
-    embedding_model = EmbeddingOpenRouter(embedding_model_name)
+    embedding_model = MeteredEmbedding(EmbeddingOpenRouter(embedding_model_name), embedding_model_name)
     chatbot = ChatbotOpenRouter({"model": chat_model_name, "temperature": temperature})
 
     # Builds all three stores: daily_index, live_index, forecast_index
@@ -98,6 +107,25 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     return retriever, chatbot, chat_model_name, embedding_model_name
 
 
+def _build_usage_store() -> UsageStore | None:
+    if os.getenv("AWN_USAGE_TRACKING", "true").lower() == "false":
+        logger.info("Usage tracking disabled by AWN_USAGE_TRACKING")
+        return None
+
+    # short timeout so an unreachable database delays a chat request by seconds, not minutes
+    store = UsageStore(lambda: PgVectorConnection(connect_timeout=3).conn)
+    try:
+        store.ensure_schema()
+    except Exception:
+        # keep the store, it retries on the next write once the database is reachable
+        logger.warning("Usage tables could not be created yet, will retry on first use", exc_info=True)
+    return store
+
+
+def _client_id(value: str | None) -> str | None:
+    return value if value is not None and _CLIENT_ID_PATTERN.fullmatch(value) else None
+
+
 def _latest_user_message(messages: list[ChatMessage]) -> str | None:
     for message in reversed(messages):
         if message.role == "user":
@@ -108,8 +136,11 @@ def _latest_user_message(messages: list[ChatMessage]) -> str | None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize the retriever once at process start."""
-    global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name
+    global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name, _usage_tracker
     dotenv.load_dotenv()
+    usage_store = _build_usage_store()
+    admin_api.set_usage_store(usage_store)
+    _usage_tracker = UsageTracker(usage_store)
     try:
         _retriever, _chatbot, _chatbot_model_name, _embedding_model_name = _build_retriever()
         logger.info(
@@ -124,6 +155,8 @@ async def lifespan(app: FastAPI):
         _chatbot_model_name = ""
         _embedding_model_name = ""
     yield
+    if usage_store is not None:
+        usage_store.close()
 
 
 app = FastAPI(
@@ -141,6 +174,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+app.include_router(admin_api.router)
 
 
 def _retrieval_error(exc: Exception) -> HTTPException:
@@ -169,9 +203,19 @@ def health() -> dict[str, object]:
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def chat(request: ChatRequest) -> ChatResponse:
+def chat(
+    request: ChatRequest,
+    x_awn_user_id: Annotated[str | None, Header()] = None,
+    x_awn_session_id: Annotated[str | None, Header()] = None,
+) -> ChatResponse:
     """Endpoint for the frontend to send a conversation and receive a reply."""
+    with _usage_tracker.track(_client_id(x_awn_user_id), _client_id(x_awn_session_id)) as usage:
+        return _answer(request, usage)
+
+
+def _answer(request: ChatRequest, usage: RequestUsage) -> ChatResponse:
     if _retriever is None:
+        usage.status = "unavailable"
         raise HTTPException(
             status_code=503,
             detail="The weather service is temporarily unavailable. Please try again later.",
@@ -179,22 +223,28 @@ def chat(request: ChatRequest) -> ChatResponse:
 
     question = _latest_user_message(request.messages)
     if question is None:
+        usage.record = False
         raise HTTPException(status_code=400, detail="At least one user message is required.")
 
     question = question.strip()
     if not question:
+        usage.record = False
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
         reply = _retriever.retrieve(question, filter=request.filter)
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
+        usage.status = "rate_limited" if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)) else "error"
+        usage.error_type = type(exc).__name__
         raise _retrieval_error(exc) from exc
 
     if not reply.strip():
+        usage.status = "empty"
         raise HTTPException(
             status_code=502,
             detail="The weather service returned an empty answer. Please try again.",
         )
 
+    usage.status = "ok"
     return ChatResponse(reply=reply, model=_chatbot_model_name)

@@ -27,3 +27,8 @@
 - for example to run llm models locally using llama-cpp, docker compose should be called using the profiles flag: `docker compose --profile local_llm up` will launch both the embedding and chatbot models in local docker containers
 - **Note: profiles must also be used for bringing down services!**
     - `docker compose --profile local_llm down` to bring down local model containers.
+
+## Admin dashboard
+- the LLM usage dashboard is built into the frontend container and served at http://localhost:8080/admin/
+- add `AWN_ADMIN_TOKEN=<a long random string>` to `.env` to enable it; admins sign in with that token
+- usage tables are created automatically when the api starts, see `code_/dashboard/README.md` for details and configuration
