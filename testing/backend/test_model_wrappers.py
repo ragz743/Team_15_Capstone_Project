@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from typing import Any
 
@@ -29,7 +30,7 @@ def test_openrouter_chatbot_formats_supported_response_content(monkeypatch, cont
     calls: list[tuple[list[str], dict[str, Any]]] = []
 
     class FakeChatModel:
-        def invoke(self, messages: list[str]) -> SimpleNamespace:
+        async def ainvoke(self, messages: list[str]) -> SimpleNamespace:
             calls.append((messages, {}))
             return SimpleNamespace(content=content)
 
@@ -38,7 +39,7 @@ def test_openrouter_chatbot_formats_supported_response_content(monkeypatch, cont
     config = {"model": "test-model", "temperature": 0.1}
     chatbot = chatbot_openrouter.ChatbotOpenRouter(config)
 
-    assert chatbot.invoke(["question"]) == expected
+    assert asyncio.run(chatbot.ainvoke(["question"])) == expected
     assert calls == [(["question"], {})]
     assert config == {"temperature": 0.1}
 
@@ -139,7 +140,7 @@ def test_copilot_chatbot_joins_prompts_and_returns_assistant_message(monkeypatch
     kwargs = {"model": "test-model"}
     chatbot = chatbot_github_copilot.ChatbotCopilot(kwargs)
 
-    assert chatbot.invoke(["first", "second"]) == "answer"
+    assert asyncio.run(chatbot.ainvoke(["first", "second"])) == "answer"
     assert kwargs == {}
     assert session.sent == ["first\nsecond"]
     assert client_creations == [client]
@@ -167,4 +168,4 @@ def test_copilot_chatbot_reports_missing_or_unexpected_events(
     chatbot = chatbot_github_copilot.ChatbotCopilot({"model": "test-model"})
 
     with pytest.raises(error_type, match=error_text):
-        chatbot.invoke(["question"])
+        asyncio.run(chatbot.ainvoke(["question"]))

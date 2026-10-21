@@ -1,5 +1,6 @@
 """Tests for code.backend.workflow."""
 
+import asyncio
 import logging
 from time import perf_counter_ns
 from typing import Iterator
@@ -50,9 +51,12 @@ def workflow() -> Iterator[ChatbotWorkflow]:
 
 
 @pytest.mark.optional
-@pytest.mark.parametrize(
-    ("user_input", "coords", "county"),
-    [
+def test_chatbot_workflow(
+    workflow: ChatbotWorkflow,
+    conversation_logger: logging.Logger,
+) -> None:
+    """Test the chatbot workflow end to end."""
+    test_cases = (
         ("How's the frost risk looking for my sweet cherries this week?", (46.7319, -117.1510), "whitman"),
         ("How much rain did we get yesterday?", (46.7319, -117.1510), "whitman"),
         ("How's frost looking?", (46.7319, -117.1510), "whitman"),
@@ -62,31 +66,33 @@ def workflow() -> Iterator[ChatbotWorkflow]:
         ("What's the 7-day weather outlook?", (46.7319, -117.1510), "whitman"),
         ("How's the cattle comfort index today?", (46.7319, -117.1510), "whitman"),
         ("When should I spray my cherries?", (46.7319, -117.1510), "whitman"),
-    ],
-)
-def test_chatbot_workflow(
-    workflow: ChatbotWorkflow,
-    conversation_logger: logging.Logger,
-    user_input: str,
-    coords: tuple[float, float],
-    county: str,
-) -> None:
-    """Test the chatbot workflow end to end."""
-    start_time_ns = perf_counter_ns()
-    response = workflow.run(
-        user_input,
-        location_coord=coords,
-        county=county,
     )
-    elapsed_sec = (perf_counter_ns() - start_time_ns) / 1_000_000_000
 
-    conversation_logger.info(
-        "### **Grower**: %s\n\n### **Chatbot ('%s' responded in %.3f sec)**:\n\n%s\n\n",
-        user_input,
-        workflow.workflow_chat_model.model_name,
-        elapsed_sec,
-        response,
-    )
+    async def run_test_cases() -> float:
+        total_elapsed_seconds = 0.0
+        for user_input, coords, county in test_cases:
+            start_time_ns = perf_counter_ns()
+            response = await workflow.run(
+                user_input,
+                location_coord=coords,
+                county=county,
+            )
+            elapsed_sec = (perf_counter_ns() - start_time_ns) / 1_000_000_000
+            total_elapsed_seconds += elapsed_sec
+
+            conversation_logger.info(
+                "### **Grower**: %s\n\n### **Chatbot ('%s' responded in %.4f sec)**:\n\n%s\n\n",
+                user_input,
+                workflow.workflow_chat_model.model_name,
+                elapsed_sec,
+                response,
+            )
+        return total_elapsed_seconds
+
+    total_seconds = asyncio.run(run_test_cases())
+
+    # log average at the bottom
+    conversation_logger.info(f"### **Average Query Time:** {total_seconds / len(test_cases):4f}")
 
 
 @pytest.mark.parametrize(

@@ -22,9 +22,9 @@ class ChatbotLocal(_BaseChatbot):
         )
 
     @override
-    def invoke(self, messages: list[str]) -> str:
-        """Pass a list of messages to the local model and return the response."""
-        response = self._model.invoke(messages)
+    async def ainvoke(self, messages: list[str]) -> str:
+        """Asynchronously send messages to the local model and return the response."""
+        response = await self._model.ainvoke(messages)
         match response.content:
             case str(msg):
                 return msg

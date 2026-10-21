@@ -89,9 +89,9 @@ class ClassifierChatbot:
             QueryClassifications
         )
 
-    def classify(self, state: ChatState) -> dict:
-        """Make a call to the llm."""
-        result = self._model.invoke(
+    async def classify(self, state: ChatState) -> dict:
+        """Asynchronously classify the user's query with the LLM."""
+        result = await self._model.ainvoke(
             [
                 ("system", self._CLASSIFIER_SYSTEM_PROMPT),
                 *state["messages"],
@@ -141,8 +141,8 @@ class ChatbotWorkflow:
             if db.conn.is_connected():
                 db.conn.disconnect()
 
-    def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
-        """Process user input through the graph and return a response."""
+    async def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
+        """Asynchronously process user input through the graph and return a response."""
         nearest_station_id = self._nearest_station_search(
             location_coord,
             county,
@@ -163,7 +163,7 @@ class ChatbotWorkflow:
         # TODO (Gavin): Figure out session key persist
         # Should keep history of past convos if key same
         # refer to docs. Worst case its random and no old convos are used.
-        result = self.graph.invoke(
+        result = await self.graph.ainvoke(
             initial_state,
             config={
                 "configurable": {
@@ -226,40 +226,40 @@ class ChatbotWorkflow:
         station_id, *_ = nearest_result
         return int(station_id)
 
-    def _query_classifier(self, state: ChatState) -> dict:
-        """Given user input classify it before taking action."""
-        update = self.classifier_chat_model.classify(state)
+    async def _query_classifier(self, state: ChatState) -> dict:
+        """Classify user input before taking action."""
+        update = await self.classifier_chat_model.classify(state)
         self._log_state_update("_query_classifier", state, update)
         return update
 
-    def _query_historical(self, state: ChatState) -> dict:
+    async def _query_historical(self, state: ChatState) -> dict:
         """Perform a historical weather data query."""
         sub_queries = self._sub_queries_for(state, "historical_weather")
         if not sub_queries:
             return {}
-        update = self._run_generated_query(sub_queries, state, self.historical_daily_db, "_query_historical")
+        update = await self._run_generated_query(sub_queries, state, self.historical_daily_db, "_query_historical")
         self._log_state_update("_query_historical", state, update)
         return update
 
-    def _query_current(self, state: ChatState) -> dict:
+    async def _query_current(self, state: ChatState) -> dict:
         """Perform a current weather data query."""
         sub_queries = self._sub_queries_for(state, "current_weather")
         if not sub_queries:
             return {}
-        update = self._run_generated_query(sub_queries, state, self.current_db, "_query_current")
+        update = await self._run_generated_query(sub_queries, state, self.current_db, "_query_current")
         self._log_state_update("_query_current", state, update)
         return update
 
-    def _query_forecast(self, state: ChatState) -> dict:
+    async def _query_forecast(self, state: ChatState) -> dict:
         """Perform a forecasted weather data query."""
         sub_queries = self._sub_queries_for(state, "forecast_weather")
         if not sub_queries:
             return {}
-        update = self._run_generated_query(sub_queries, state, self.forecast_db, "_query_forecast")
+        update = await self._run_generated_query(sub_queries, state, self.forecast_db, "_query_forecast")
         self._log_state_update("_query_forecast", state, update)
         return update
 
-    def _query_miscellaneous(self, state: ChatState) -> dict:
+    async def _query_miscellaneous(self, state: ChatState) -> dict:
         """Answer miscellaneous questions without querying a weather database."""
         sub_queries = self._sub_queries_for(state, "miscellaneous")
         if not sub_queries:
@@ -274,12 +274,12 @@ class ChatbotWorkflow:
         is unsupported, explain that briefly and suggest what the user can ask
         about AgWeatherNet weather data instead.
         """
-        answer = self.workflow_chat_model.invoke([prompt])
+        answer = await self.workflow_chat_model.ainvoke([prompt])
         update = {"messages": [("assistant", answer)]}
         self._log_state_update("_query_miscellaneous", state, update)
         return update
 
-    def _run_generated_query(
+    async def _run_generated_query(
         self,
         sub_queries: list[QueryClassification],
         state: ChatState,
@@ -352,7 +352,7 @@ class ChatbotWorkflow:
             Do not use any table other than `{table_name}`. Use query parameters as %s
             when values come from the user, and return the SQL only.{retry_instructions}
             """
-            generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
+            generated_query = (await self.workflow_chat_model.ainvoke([prompt])).strip().rstrip(";").strip()
             self._log_event(node_name, "generated_sql", "\n" + generated_query)
             try:
                 self._validate_generated_query(generated_query, table_name)
@@ -452,7 +452,7 @@ class ChatbotWorkflow:
         ]
         return answers
 
-    def _chatbot_summarize(self, state: ChatState) -> dict:
+    async def _chatbot_summarize(self, state: ChatState) -> dict:
         """Answer the original question using the returned query results."""
         context_messages = "\n\n".join(
             self._message_content(current_message)
@@ -478,7 +478,7 @@ class ChatbotWorkflow:
         the provided context. If the context does not contain enough information,
         say so clearly.
         """
-        answer = self.workflow_chat_model.invoke([prompt])
+        answer = await self.workflow_chat_model.ainvoke([prompt])
         update = {"messages": [("assistant", answer)]}
         self._log_state_update("_chatbot_summarize", state, update)
         return update

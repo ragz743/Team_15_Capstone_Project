@@ -18,9 +18,9 @@ class ChatbotOpenRouter(_BaseChatbot):
             **kwargs,
         )
 
-    def invoke(self, messages: list[str]) -> str:
-        """Pass a list of messages and gets responses from the model."""
-        response = self._model.invoke(messages)
+    async def ainvoke(self, messages: list[str]) -> str:
+        """Asynchronously send messages to the model and return the response."""
+        response = await self._model.ainvoke(messages)
 
         all_responses: str = ""
         match response.content:

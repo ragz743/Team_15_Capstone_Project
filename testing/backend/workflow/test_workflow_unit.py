@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any, NamedTuple, cast
@@ -56,7 +57,7 @@ class FakeGraph:
         self.initial_state: ChatState | None = None
         self.config: dict[str, Any] | None = None
 
-    def invoke(self, initial_state: ChatState, config: dict[str, Any]) -> dict[str, Any]:
+    async def ainvoke(self, initial_state: ChatState, config: dict[str, Any]) -> dict[str, Any]:
         """Record graph inputs and return a deterministic assistant message."""
         self.initial_state = initial_state
         self.config = config
@@ -102,14 +103,14 @@ def test_classifier_uses_structured_output(monkeypatch: pytest.MonkeyPatch) -> N
             assert output_type is workflow_module.QueryClassifications
             return self
 
-        def invoke(self, messages: list[tuple[str, str]]) -> SimpleNamespace:
+        async def ainvoke(self, messages: list[tuple[str, str]]) -> SimpleNamespace:
             calls.append(messages)
             return SimpleNamespace(sub_queries=expected)
 
     monkeypatch.setattr(workflow_module, "ChatOpenRouter", lambda **kwargs: FakeStructuredModel())
     classifier = ClassifierChatbot()
 
-    assert classifier.classify(make_state()) == {"sub_queries": expected}
+    assert asyncio.run(classifier.classify(make_state())) == {"sub_queries": expected}
     assert calls[0][-1] == ("user", "original question")
 
 
@@ -172,7 +173,7 @@ def test_run_passes_station_and_user_question_to_graph() -> None:
     chatbot._nearest_station_search = cast(Any, lambda coords, county: 456)
     chatbot.graph = cast(Any, FakeGraph())
 
-    answer = chatbot.run("Question", (46.0, -117.0), "Whitman")
+    answer = asyncio.run(chatbot.run("Question", (46.0, -117.0), "Whitman"))
 
     assert answer == "answer"
     assert chatbot.graph.initial_state["nearest_station_id"] == 456
@@ -202,7 +203,11 @@ def test_query_classifier_delegates_and_logs_state_update(monkeypatch: pytest.Mo
     """Ensure classifier result is returned and passed to debug logging."""
     chatbot = make_workflow(debug=True)
     update = {"sub_queries": []}
-    chatbot.classifier_chat_model = cast(Any, SimpleNamespace(classify=lambda state: update))
+
+    async def classify(state: ChatState) -> dict:
+        return update
+
+    chatbot.classifier_chat_model = cast(Any, SimpleNamespace(classify=classify))
     log_calls: list[tuple[str, ChatState, dict]] = []
     monkeypatch.setattr(
         chatbot,
@@ -211,7 +216,7 @@ def test_query_classifier_delegates_and_logs_state_update(monkeypatch: pytest.Mo
     )
     state = make_state()
 
-    assert chatbot._query_classifier(state) == update
+    assert asyncio.run(chatbot._query_classifier(state)) == update
     assert log_calls == [("_query_classifier", state, update)]
 
 
@@ -235,16 +240,17 @@ def test_weather_nodes_skip_unmatched_and_delegate_matching_queries(
     setattr(chatbot, db_attribute, cast(Any, database))
     query = QueryClassification(query_type=kind, reworded_query="Weather?")
     invoked: list[tuple[list[QueryClassification], ChatState, object, str]] = []
-    monkeypatch.setattr(
-        chatbot,
-        "_run_generated_query",
-        lambda queries, state, db, name: invoked.append((queries, state, db, name)) or {"messages": []},
-    )
+
+    async def run_generated_query(queries, state, db, name):
+        invoked.append((queries, state, db, name))
+        return {"messages": []}
+
+    monkeypatch.setattr(chatbot, "_run_generated_query", run_generated_query)
     state = make_state()
 
-    assert getattr(chatbot, node)(state) == {}
+    assert asyncio.run(getattr(chatbot, node)(state)) == {}
     state["sub_queries"] = [query]
-    assert getattr(chatbot, node)(state) == {"messages": []}
+    assert asyncio.run(getattr(chatbot, node)(state)) == {"messages": []}
     assert invoked == [([query], state, database, node)]
 
 
@@ -252,18 +258,23 @@ def test_miscellaneous_node_answers_without_database_query(monkeypatch: pytest.M
     """Compose multi-part miscellaneous questions and return the model response."""
     chatbot = make_workflow()
     prompts: list[str] = []
-    chatbot.workflow_chat_model = cast(
-        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or "answer")
-    )
+
+    async def ainvoke(messages):
+        prompts.append(messages[0])
+        return "answer"
+
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
     first = QueryClassification(query_type="miscellaneous", reworded_query="What is dew point?")
     second = QueryClassification(query_type="miscellaneous", reworded_query="What is humidity?")
     state = make_state(first, second)
 
-    assert chatbot._query_miscellaneous(state) == {"messages": [("assistant", "answer")]}
+    assert asyncio.run(chatbot._query_miscellaneous(state)) == {"messages": [("assistant", "answer")]}
     assert "What is dew point?\nWhat is humidity?" in prompts[0]
     assert (
-        chatbot._query_miscellaneous(
-            make_state(QueryClassification(query_type="current_weather", reworded_query="Current?"))
+        asyncio.run(
+            chatbot._query_miscellaneous(
+                make_state(QueryClassification(query_type="current_weather", reworded_query="Current?"))
+            )
         )
         == {}
     )
@@ -275,12 +286,17 @@ def test_run_generated_query_formats_schema_and_results() -> None:
     database = FakeDatabase([SchemaQueryResult("air_temp", "float", "YES", "", "Temperature")])
     chatbot.current_db = cast(Any, database)
     prompts: list[str] = []
-    chatbot.workflow_chat_model = cast(
-        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or "SELECT air_temp FROM station_123;")
-    )
+
+    async def ainvoke(messages):
+        prompts.append(messages[0])
+        return "SELECT air_temp FROM station_123;"
+
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
     queries = [QueryClassification(query_type="current_weather", reworded_query="What is current temperature?")]
 
-    update = chatbot._run_generated_query(queries, make_state(*queries), cast(Any, database), "_query_current")
+    update = asyncio.run(
+        chatbot._run_generated_query(queries, make_state(*queries), cast(Any, database), "_query_current")
+    )
 
     assert database.queries == [("SELECT air_temp FROM station_123", ())]
     assert "air_temp" in prompts[0]
@@ -295,12 +311,15 @@ def test_run_generated_query_retries_programming_error_with_error_context() -> N
     database.failures = 1
     chatbot.current_db = cast(Any, database)
     prompts: list[str] = []
-    chatbot.workflow_chat_model = cast(
-        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or "SELECT * FROM station_123")
-    )
+
+    async def ainvoke(messages):
+        prompts.append(messages[0])
+        return "SELECT * FROM station_123"
+
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
     query = QueryClassification(query_type="current_weather", reworded_query="Temperature?")
 
-    chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current")
+    asyncio.run(chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current"))
 
     assert len(database.queries) == 2
     assert "unknown column" in prompts[1]
@@ -324,10 +343,14 @@ def test_run_generated_query_selects_database_for_each_weather_node(
     chatbot = make_workflow()
     database = FakeDatabase()
     setattr(chatbot, database_attribute, cast(Any, database))
-    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(invoke=lambda messages: "SELECT * FROM station_123"))
+
+    async def ainvoke(messages):
+        return "SELECT * FROM station_123"
+
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
     query = QueryClassification(query_type=query_type, reworded_query="Weather?")
 
-    result = chatbot._run_generated_query([query], make_state(query), cast(Any, database), node_name)
+    result = asyncio.run(chatbot._run_generated_query([query], make_state(query), cast(Any, database), node_name))
 
     assert database.queries == [("SELECT * FROM station_123", ())]
     assert "Database results:" in result["messages"][0][1]
@@ -339,11 +362,15 @@ def test_run_generated_query_raises_after_final_database_failure() -> None:
     database = FakeDatabase()
     database.failures = chatbot._MAX_SQL_ATTEMPTS
     chatbot.current_db = cast(Any, database)
-    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(invoke=lambda messages: "SELECT * FROM station_123"))
+
+    async def ainvoke(messages):
+        return "SELECT * FROM station_123"
+
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
     query = QueryClassification(query_type="current_weather", reworded_query="Weather?")
 
     with pytest.raises(ProgrammingError, match="unknown column"):
-        chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current")
+        asyncio.run(chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current"))
 
     assert len(database.queries) == chatbot._MAX_SQL_ATTEMPTS
 
@@ -357,7 +384,7 @@ def test_run_generated_query_fails_if_retry_limit_is_zero(monkeypatch: pytest.Mo
     query = QueryClassification(query_type="current_weather", reworded_query="Weather?")
 
     with pytest.raises(RuntimeError, match="attempts ended without a result"):
-        chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current")
+        asyncio.run(chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current"))
 
 
 def test_run_generated_query_rejects_unknown_node() -> None:
@@ -366,11 +393,13 @@ def test_run_generated_query_rejects_unknown_node() -> None:
     database = FakeDatabase()
 
     with pytest.raises(ValueError, match="unrecognized query node"):
-        chatbot._run_generated_query(
-            [QueryClassification(query_type="current_weather", reworded_query="Temperature?")],
-            make_state(),
-            cast(Any, database),
-            "_query_other",
+        asyncio.run(
+            chatbot._run_generated_query(
+                [QueryClassification(query_type="current_weather", reworded_query="Temperature?")],
+                make_state(),
+                cast(Any, database),
+                "_query_other",
+            )
         )
 
 
@@ -413,13 +442,16 @@ def test_summarize_uses_context_and_returns_assistant_message() -> None:
     """Pass accumulated context to the model and return the resulting answer."""
     chatbot = make_workflow()
     prompts: list[str] = []
-    chatbot.workflow_chat_model = cast(
-        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or "summary")
-    )
+
+    async def ainvoke(messages):
+        prompts.append(messages[0])
+        return "summary"
+
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
     state = make_state()
     state["messages"] = [("user", "original question"), ("assistant", "72 F")]
 
-    assert chatbot._chatbot_summarize(state) == {"messages": [("assistant", "summary")]}
+    assert asyncio.run(chatbot._chatbot_summarize(state)) == {"messages": [("assistant", "summary")]}
     assert "72 F" in prompts[0]
     assert "original question" in prompts[0]
 
