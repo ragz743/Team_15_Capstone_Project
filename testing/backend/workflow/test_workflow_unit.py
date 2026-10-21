@@ -144,20 +144,21 @@ def test_workflow_initialization_builds_graph_with_injected_dependencies(
     }.issubset(chatbot.graph.get_graph().nodes)
 
 
-def test_close_shuts_down_only_connected_databases() -> None:
+def test_close_disconnects_only_connected_databases() -> None:
     """Close active database connections and leave inactive ones alone."""
     chatbot = make_workflow()
     calls: list[str] = []
     chatbot.current_db = cast(
-        Any, SimpleNamespace(conn=SimpleNamespace(is_connected=lambda: True, shutdown=lambda: calls.append("current")))
+        Any,
+        SimpleNamespace(conn=SimpleNamespace(is_connected=lambda: True, disconnect=lambda: calls.append("current"))),
     )
     chatbot.forecast_db = cast(
         Any,
-        SimpleNamespace(conn=SimpleNamespace(is_connected=lambda: False, shutdown=lambda: calls.append("forecast"))),
+        SimpleNamespace(conn=SimpleNamespace(is_connected=lambda: False, disconnect=lambda: calls.append("forecast"))),
     )
     chatbot.historical_daily_db = cast(
         Any,
-        SimpleNamespace(conn=SimpleNamespace(is_connected=lambda: True, shutdown=lambda: calls.append("historical"))),
+        SimpleNamespace(conn=SimpleNamespace(is_connected=lambda: True, disconnect=lambda: calls.append("historical"))),
     )
 
     chatbot.close()

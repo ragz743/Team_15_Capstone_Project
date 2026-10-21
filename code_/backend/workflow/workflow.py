@@ -136,7 +136,7 @@ class ChatbotWorkflow:
             self.historical_daily_db,
         ):
             if db.conn.is_connected():
-                db.conn.shutdown()
+                db.conn.disconnect()
 
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
