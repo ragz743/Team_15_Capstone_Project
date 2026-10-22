@@ -85,8 +85,8 @@ def test_to_markdown_table() -> None:
     assert actual_table == expected, f"found \n{actual_table},\nexpected\n{expected}"
 
 
-def test_to_markdown_table_drops_all_none_columns() -> None:
-    """Check that columns containing only None values across all rows are omitted."""
+def test_to_markdown_table_includes_all_none_columns() -> None:
+    """Check that columns containing only None values across all rows are retained."""
     rows = [
         SampleMeasurement("2026-09-16 12:00:00", 72.4, None),
         SampleMeasurement("2026-09-16 13:00:00", 74.8, None),
@@ -96,9 +96,29 @@ def test_to_markdown_table_drops_all_none_columns() -> None:
     table = _common.to_markdown_table(rows, units)
 
     assert "air_temp in F" in table
-    assert "precip" not in table
+    assert "precip in inches" in table
+    assert table.count("None") == 2
     assert "72.4" in table
     assert "74.8" in table
+
+
+def test_to_markdown_table_rejects_mismatched_units() -> None:
+    """Report a clear formatting error when headers and units have different lengths."""
+    rows = [SampleMeasurement("2026-09-16 12:00:00", 72.4, 0.1)]
+
+    with pytest.raises(ValueError, match="data and unit mismatch"):
+        _common.to_markdown_table(rows, [""])
+
+
+def test_to_markdown_table_formats_all_supplied_columns() -> None:
+    """Formatting preserves every column, including all-None data."""
+    rows = [SampleMeasurement("2026-09-16 12:00:00", 72.4, None)]
+    units = ["", "F", "inches"]
+
+    table = _common.to_markdown_table(rows, units)
+
+    assert "precip in inches" in table
+    assert "None" in table
 
 
 def test_format_cell_rounds_floats_and_decimals() -> None:
@@ -116,10 +136,10 @@ def test_to_markdown_table_keeps_empty_schema_fields() -> None:
     assert "| air_temp | decimal | YES |  |  |" in table
 
 
-def test_to_markdown_table_preserves_zero_and_precision() -> None:
-    """Keep real measurements and their precision while removing absent columns."""
+def test_to_markdown_table_preserves_zero_with_formatted_measurements() -> None:
+    """Keep zero measurements while applying the shared display precision."""
     table = _common.to_markdown_table([SampleMeasurement("2026-09-16", 0.0, 0.125)], ["", "F", "inches"])
-    assert "| 2026-09-16 | 0.0 | 0.125 |" in table
+    assert "| 2026-09-16 | 0.0 | 0.1 |" in table
 
 
 def test_to_markdown_table_empty_results() -> None:

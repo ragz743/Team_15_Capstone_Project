@@ -148,7 +148,7 @@ from backend.databases.pgvector import PgVectorConnection
 from backend.conversation_store import ConversationStore
 schema, owner, chat = sys.argv[1:]
 def connect():
-    conn = PgVectorConnection(host="127.0.0.1", port=5432).conn
+    conn = PgVectorConnection(host="127.0.0.1").conn
     conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
     conn.commit()
     return conn

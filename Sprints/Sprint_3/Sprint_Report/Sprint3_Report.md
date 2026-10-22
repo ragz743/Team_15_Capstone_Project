@@ -1,4 +1,4 @@
-# Sprint 23 Report (Dates from April 24th, 2026 to May 1st, 2026)
+# Sprint 3 Report (Dates from April 24th, 2026 to May 1st, 2026)
 
 ## YouTube link of Sprint 3
 - [Sprint 3](https://youtu.be/6js8kwauWhU)

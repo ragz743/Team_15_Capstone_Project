@@ -1,49 +1,25 @@
-"""Tests for indexed station identities."""
+"""Station repositories share the existing database connection."""
 
 from unittest.mock import MagicMock
 
 import pytest
 from backend.vector_store import PgVectorStore
-from backend.weather_query import Station
-from pytest import MonkeyPatch
+from weather_fixtures import POINT
 
 
 @pytest.mark.parametrize("table", ["daily_index", "live_index", "forecast_index"])
-def test_station_reads_preserve_identity(monkeypatch: MonkeyPatch, table: str) -> None:
-    """Keep distinct station IDs, including names shared by different counties."""
+def test_lookup_reuses_connection_and_restricts_record_availability(monkeypatch, table):
+    """A repository for one store cannot select a station found only in another store."""
     connection, embedding = MagicMock(), MagicMock()
-    connection.simple_query.side_effect = [
-        [
-            (101, "Pullman", "Whitman", None, None, ""),
-            ("102", "Pullman", "Douglas", None, None, ""),
-            ("103", "Colfax", None, None, None, ""),
-        ],
-        [],
-    ]
-    monkeypatch.setattr("backend.vector_store.PgVectorConnection", lambda: connection)
+    connection.simple_query.return_value = [("1", "Pullman", "Whitman", 46.731, -117.181, "WA")]
+    factory = MagicMock(return_value=connection)
+    monkeypatch.setattr("backend.vector_store.PgVectorConnection", factory)
     store = PgVectorStore(embedding, table=table)
-
-    assert store.stations() == [
-        Station("101", "Pullman", "Whitman"),
-        Station("102", "Pullman", "Douglas"),
-        Station("103", "Colfax", ""),
-    ]
-    assert store.stations() == []
+    assert store.station_catalog().resolve(POINT).id == "1"
+    factory.assert_called_once()
+    query = connection.simple_query.call_args.args[0].decode()
+    assert f"FROM {table} WHERE metadata->>'id' = s.station_id" in query
+    for other in {"daily_index", "live_index", "forecast_index"} - {table}:
+        assert f"FROM {other}" not in query
     embedding.embed_document.assert_not_called()
     embedding.embed_documents.assert_not_called()
-
-
-def test_station_read_recovers_after_failure(monkeypatch: MonkeyPatch) -> None:
-    """Propagate a failed read and query again on the next request."""
-    connection, embedding = MagicMock(), MagicMock()
-    connection.simple_query.side_effect = [
-        RuntimeError("database unavailable"),
-        [("1", "Pullman", "Whitman", None, None, "")],
-    ]
-    monkeypatch.setattr("backend.vector_store.PgVectorConnection", lambda: connection)
-    store = PgVectorStore(embedding)
-
-    with pytest.raises(RuntimeError, match="database unavailable"):
-        store.stations()
-    assert store.stations() == [Station("1", "Pullman", "Whitman")]
-    embedding.embed_document.assert_not_called()

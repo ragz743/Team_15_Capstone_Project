@@ -11,7 +11,7 @@ from backend.chat_turn import AnsweredTurn, PreparedChatTurn
 from backend.conversation_context import TIMEZONE, ConversationContext
 from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.models._chatbot_base import _BaseChatbot
-from backend.station_catalog import StationCatalog, StationList, browse_stations
+from backend.station_catalog import AWNStationCatalog, StationList, browse_stations
 from backend.weather_query import QueryClarificationError, RequestedPoint, Station
 from backend.workflow.contracts import Source, WorkflowAnswer, WorkflowHistory, WorkflowRequest, WorkflowTimeoutError
 from backend.workflow.workflow import ChatbotWorkflow, ClassifierChatbot
@@ -61,7 +61,7 @@ class LangGraphEngine:
         """Share model clients while creating a fresh workflow for each answer."""
         self._model, self._classifier_model = model, classifier_model
         self._directory = directory or AWNStationDirectory()
-        self._catalog = StationCatalog(self._directory.stations)
+        self._catalog = AWNStationCatalog(self._directory.stations)
         self._workflow_factory = workflow_factory
 
     def station_catalog(self, point: RequestedPoint | None = None) -> StationList:

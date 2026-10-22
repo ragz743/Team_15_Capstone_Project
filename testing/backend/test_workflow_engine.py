@@ -46,7 +46,7 @@ def test_selected_point_and_raw_question_reach_graph(weather):
     supplied = runtime.classifier.invoke_json.call_args.args[1]
     assert supplied["question"] == question and "46.7" not in str(supplied)
     assert "LIMIT 200" in runtime.cursor.execute.call_args.args[0]
-    runtime.database.conn.shutdown.assert_called()
+    runtime.database.conn.disconnect.assert_called()
 
 
 def test_followup_preserves_selected_station_and_dated_history(weather):
@@ -110,7 +110,7 @@ def test_failure_closes_graph_and_does_not_fall_back(weather):
         engine.answer_result(engine.prepare_turn("Temperature?", point=POINT))
     runtime.model.invoke.assert_not_called()
     runtime.cursor.execute.assert_not_called()
-    runtime.database.conn.shutdown.assert_called()
+    runtime.database.conn.disconnect.assert_called()
 
 
 def test_sql_repair_rejects_writes_before_executing_a_select(weather):

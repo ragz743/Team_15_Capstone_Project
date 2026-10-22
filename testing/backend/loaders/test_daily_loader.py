@@ -99,6 +99,12 @@ def test_daily_query_result_from_tuple_valid() -> None:
     assert result.avg_wind_dir == Decimal("190.0")
 
 
+def test_daily_query_result_from_tuple_rejects_wrong_row_shape() -> None:
+    """Reject database rows whose column count does not match the daily schema."""
+    with pytest.raises(ValueError, match="unrecognized tuple structure"):
+        DailyQueryResult.from_tuple((date(2026, 9, 16), Decimal("65.5")))
+
+
 def test_daily_query_result_from_dict_valid() -> None:
     """Check converting dictionary into DailyQueryResult."""
     day = datetime(2026, 9, 16)

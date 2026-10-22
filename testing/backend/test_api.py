@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import MagicMock
 
 import backend.api as api
@@ -132,3 +133,120 @@ def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, exp
     assert health["model"] == expected
     assert response.status_code == 200
     assert response.json()["model"] == expected
+
+
+@pytest.mark.parametrize("missing", ["OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"])
+def test_build_retriever_requires_workflow_configuration(monkeypatch, missing) -> None:
+    """Require model and AWN credentials before constructing the workflow."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"):
+        monkeypatch.setenv(name, "test-value")
+    monkeypatch.delenv(missing)
+    chatbot = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
+
+    with pytest.raises(ValueError, match="model and AWN database configuration"):
+        api._build_retriever()
+    chatbot.assert_not_called()
+
+
+def test_build_retriever_configures_workflow_and_classifier_models(monkeypatch) -> None:
+    """Build the graph with independently configured workflow and classifier models."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"):
+        monkeypatch.setenv(name, "test-value")
+    monkeypatch.setenv("OPENROUTER_CHAT_MODEL", "test-chat")
+    monkeypatch.setenv("OPENROUTER_WORKFLOW_MODEL", "test-workflow")
+    monkeypatch.setenv("OPENROUTER_CLASSIFIER_MODEL", "test-classifier")
+    chatbot, classifier, engine = object(), object(), object()
+    model_factory = MagicMock(side_effect=[chatbot, classifier])
+    engine_factory = MagicMock(return_value=engine)
+    monkeypatch.setattr(api, "ChatbotOpenRouter", model_factory)
+    monkeypatch.setattr(api, "LangGraphEngine", engine_factory)
+
+    result = api._build_retriever()
+
+    assert result == (engine, chatbot, "test-workflow", "")
+    assert [call.args[0]["model"] for call in model_factory.call_args_list] == ["test-workflow", "test-classifier"]
+    assert all(call.args[0]["temperature"] == 0 for call in model_factory.call_args_list)
+    engine_factory.assert_called_once_with(chatbot, classifier)
+
+
+def test_build_retriever_uses_default_chat_model_and_temperature(monkeypatch) -> None:
+    """Default both graph models to the API chat model with deterministic settings."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"):
+        monkeypatch.setenv(name, "test-value")
+    for name in ("OPENROUTER_CHAT_MODEL", "OPENROUTER_WORKFLOW_MODEL", "OPENROUTER_CLASSIFIER_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    chatbot_args: list[dict] = []
+    monkeypatch.setattr(api, "ChatbotOpenRouter", lambda kwargs: chatbot_args.append(kwargs) or object())
+    monkeypatch.setattr(api, "LangGraphEngine", lambda *args: object())
+
+    retriever, chatbot, model_name, embedding_name = api._build_retriever()
+
+    assert retriever is not None
+    assert chatbot is not None
+    assert model_name == api._DEFAULT_CHAT_MODEL
+    assert embedding_name == ""
+    assert len(chatbot_args) == 2
+    assert all(kwargs["model"] == api._DEFAULT_CHAT_MODEL and kwargs["temperature"] == 0 for kwargs in chatbot_args)
+
+
+def test_lifespan_initializes_components_and_clears_them_after_failure(monkeypatch) -> None:
+    """Initialize service globals on success and expose unavailable state on failure."""
+    monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
+    monkeypatch.setattr(api, "ChatbotOpenRouter", MagicMock())
+    monkeypatch.setattr(api, "_history_service", None)
+    retriever, chatbot = object(), object()
+    monkeypatch.setattr(api, "_build_retriever", lambda: (retriever, chatbot, "chat", "embedding"))
+    monkeypatch.setattr(api, "_retriever", None)
+    monkeypatch.setattr(api, "_chatbot", None)
+    monkeypatch.setattr(api, "_chatbot_model_name", "")
+    monkeypatch.setattr(api, "_embedding_model_name", "")
+
+    async def run_lifespan() -> None:
+        async with api.lifespan(api.app):
+            assert api._retriever is retriever
+            assert api._chatbot is chatbot
+            assert api._chatbot_model_name == "chat"
+            assert api._embedding_model_name == "embedding"
+
+    asyncio.run(run_lifespan())
+
+    def fail_build():
+        raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(api, "_build_retriever", fail_build)
+
+    async def run_failed_lifespan() -> None:
+        async with api.lifespan(api.app):
+            assert api._retriever is None
+            assert api._chatbot is None
+            assert api._chatbot_model_name == ""
+            assert api._embedding_model_name == ""
+
+    asyncio.run(run_failed_lifespan())
+
+
+def test_retrieval_error_maps_rate_limits_and_general_failures() -> None:
+    """Return a retryable status for rate limiting and gateway status otherwise."""
+    from fastapi import HTTPException
+    from openai import RateLimitError
+
+    rate_limit = RateLimitError("limited", response=MagicMock(), body={})
+
+    rate_error = api._retrieval_error(rate_limit)
+    service_error = api._retrieval_error(RuntimeError("backend failure"))
+
+    assert isinstance(rate_error, HTTPException)
+    assert rate_error.status_code == 503
+    assert service_error.status_code == 502
+
+
+def test_chat_rejects_unavailable_service_and_empty_retrieval_response(monkeypatch) -> None:
+    """Return service errors when startup did not initialize or retrieval is empty."""
+    client = TestClient(api.app)
+    payload = {"messages": [{"role": "user", "content": "weather?"}]}
+    monkeypatch.setattr(api, "_retriever", None)
+    assert client.post("/api/chat", json=payload).status_code == 503
+
+    monkeypatch.setattr(api, "_retriever", MagicMock(retrieve=lambda *args, **kwargs: ""))
+    assert client.post("/api/chat", json=payload).status_code == 502

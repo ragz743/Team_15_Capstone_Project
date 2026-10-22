@@ -34,13 +34,14 @@ def test_awn_database_connection(db_class: type[AWNDatabaseConnectionBase]) -> N
     ("db_class", "table_name"),
     [
         (AWNDatabaseConnection, "METADATA"),
-        # (AWNDatabaseConnection, "station042"),
-        # (AWNDailyDatabaseConnection, "station100004daily"),
-        # (AWNForecastDatabaseConnection, "fcst_100000_2026"),
+        (AWNDatabaseConnection, "station042"),
+        (AWNDailyDatabaseConnection, "station100004daily"),
+        (AWNForecastDatabaseConnection, "fcst_100000_2026"),
     ],
 )
 def test_awn_table_info_query(db_class: type[AWNDatabaseConnectionBase], table_name: str) -> None:
     """Query the table information for each database."""
     with db_class() as awn_db:
         schema = awn_db.query_schema(table_name)
-        print(_common.to_markdown_table(schema, ["", "", "", "", ""]))
+        units = ["", "", "", "", ""]
+        print(_common.to_markdown_table(schema, units))

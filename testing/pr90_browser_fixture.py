@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from history_fixture import FixtureHistoryModel
 from psycopg import sql
 from pytest import MonkeyPatch
+from scripts.migrate_conversations import STARTUP_MIGRATIONS
 from workflow_fixture import make_graph
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,15 +61,15 @@ async def fixture_lifespan(app):
     schema = "test_pr90_browser_" + uuid4().hex
 
     def connect():
-        conn = PgVectorConnection(host="127.0.0.1", port=5432, connect_timeout=5).conn
+        conn = PgVectorConnection(host="127.0.0.1", connect_timeout=5).conn
         conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
         conn.commit()
         return conn
 
     with connect() as conn:
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-        for migration in sorted((ROOT / "deployment/migrations").glob("*.sql")):
-            conn.execute(migration.read_bytes())
+        for name in STARTUP_MIGRATIONS:
+            conn.execute((ROOT / "deployment/migrations" / name).read_bytes())
     patch = MonkeyPatch()
     try:
         api._conversations = ConversationStore(connect)

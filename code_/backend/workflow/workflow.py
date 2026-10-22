@@ -135,6 +135,9 @@ class ClassifierChatbot:
                 *state["messages"],
             ]
         )
+        if not result:
+            msg = "unable to classify input"
+            raise ValueError(msg)
 
         return {"sub_queries": result.sub_queries}  # type: ignore
 
@@ -202,8 +205,8 @@ class ChatbotWorkflow:
         """Close all open connections."""
         for name in ("current_db", "forecast_db", "historical_daily_db"):
             db = getattr(self, name, None)
-            if db is not None:
-                db.conn.shutdown()
+            if db is not None and db.conn.is_connected():
+                db.conn.disconnect()
 
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
@@ -294,10 +297,14 @@ class ChatbotWorkflow:
         LIMIT 1;
         """
         params = (latitude, longitude, latitude, county)
-        results = list(self.current_db.simple_query(nearest_id_query, params))
-        if not results:
-            raise ValueError("No active station was found in the selected county")
-        station_id, *_ = results[0]
+        results = self.current_db.simple_query(nearest_id_query, params)
+        nearest_result = next(iter(results), None)
+
+        if nearest_result is None:
+            msg = f"No nearest station returned with search args:(lat, lng)=({latitude}, {longitude}), county={county}"
+            raise ValueError(msg)
+
+        station_id, *_ = nearest_result
         return int(station_id)
 
     def _query_classifier(self, state: ChatState) -> dict:
