@@ -1026,3 +1026,10 @@ button, input, textarea {
     animation: none !important;
   }
 }
+
+.location-picker { padding: 12px 24px; border-bottom: 1px solid #e6e0dc; }
+.location-picker p { margin: 0 0 8px; font-size: 13px; }
+.location-map { height: 200px; border-radius: 8px; z-index: 0; }
+.location-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 8px; font-size: 12px; }
+.location-picker .map-hint { margin: 6px 0 0; font-size: 12px; color: #615e5b; }
+@media (max-width: 760px) { .location-picker { padding: 8px 16px; } .location-map { height: 150px; } }

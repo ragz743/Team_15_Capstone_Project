@@ -1,28 +1,36 @@
 """Code for the data retriever controller class, Retriever."""
 
 from backend.models._chatbot_base import _BaseChatbot
+from backend.station_catalog import StationCatalog
 from backend.vector_store import PgVectorStore
-from langchain_core.documents import Document
+from backend.weather_intent import WeatherIntent, WeatherInterpreter
+from backend.weather_query import QueryClarificationError, RequestedPoint, WeatherQuery
+from backend.weather_records import (
+    TABLE_LABELS,
+    append_sources,
+    document_context,
+    source_label,
+)
 from langchain_core.prompts import PromptTemplate
 
 RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
     """You are an AgWeatherNet assistant with access to Washington State agricultural weather station data.
 
-        Data sections in the context, and the ONLY time windows available:
-        - [Historical Data]: daily summaries covering the PAST 7 DAYS only.
-          Nothing older than 7 days is available.
-        - [Current Conditions]: a single most-recent reading per station.
-        - [Forecast Data]: hourly predictions covering the NEXT 24 HOURS only.
-          The forecast_time column contains FUTURE timestamps — treat them as
-          upcoming weather, not past events.
+        Data sections in the context:
+        - [Historical Data]: daily summaries for the dates in each record.
+        - [Current Conditions]: observations at the timestamps in each record.
+        - [Forecast Data]: hourly predictions for the forecast dates shown.
+          Treat forecast_time as the prediction time, not an observation time.
 
         Rules you must follow:
-        - If the question asks for a range outside these windows (e.g. "last
-          month", "this week's forecast", "compared to last year"), do not
-          attempt to extrapolate or estimate. State the supported window
-          plainly and offer the closest answer you can give within it.
-        - Never compute trends, averages, or comparisons that would require
-          data outside the windows above.
+        - Answer only for the requested location and dates using the records
+          below. If records are missing, explain the gap rather than using
+          another location or time period.
+        - Retrieved records are a subset and may not cover the entire requested
+          county or period. Do not present a county-wide or date-range aggregate
+          as complete based on this subset.
+        - Never compute trends, averages, or comparisons that require data
+          outside the retrieved records.
         - Only answer questions about AgWeatherNet weather stations in
           Washington State. If the question is unrelated, politely decline
           and explain your scope.
@@ -36,10 +44,8 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
           station or a value.
         - Report timestamps exactly as they appear. If a row shows only a date,
           do not add a time of day.
-        - If the question names a county, city, or station, only discuss
-          stations whose header line matches it. Stations outside that area may
-          appear in the context — ignore them. If none of the stations in the
-          context match, say so instead of answering about a different area.
+        - The source was selected for the user chosen map point. Explain that
+          measurements come from the nearby source, not necessarily the exact point.
         - Always cite the station name and timestamp for every measurement
           you reference (e.g. "At Pullman Station on 2026-04-25 at 14:00").
         - Always include units for every numeric value (e.g. °F, %, mph, inches).
@@ -50,7 +56,7 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
         - If the context does not contain enough information to fully answer
           the question, say so clearly and state what is missing (e.g. the
           station name, time range, or specific metric).
-        - If the question is ambiguous — missing a station, unclear time
+        - If the question is ambiguous — unclear location, unclear time
           range, or unclear metric — ask a clarifying question instead of
           guessing.
 
@@ -64,93 +70,71 @@ RAG_PROMPT_TEMPLATE = PromptTemplate.from_template(
 )
 
 
-# Documents pulled per index. The measurement tables are near-identical in shape,
-# so a small k can rank the wrong stations above the one actually asked about.
+NO_DATA = "No matching weather records were found in the indexed data. I cannot provide an answer to this question."
 _SEARCH_K = 8
-
-_TABLE_LABELS: dict[str, str] = {
-    "daily_index": "Historical Data",
-    "live_index": "Current Conditions",
-    "forecast_index": "Forecast Data",
-}
 
 
 class Retriever:
-    """The class responsible for vector store search and presentation to user process."""
+    """Coordinate location lookup, interpretation, retrieval and grounded answers."""
 
-    # Retriever now holds a list[PgVectorStore]
-    _vector_stores: list[PgVectorStore]
-    _chatbot: _BaseChatbot
-
-    def __init__(self, vector_stores: PgVectorStore | list[PgVectorStore], chatbot: _BaseChatbot) -> None:
-        """Create an instance of the Retriever class."""
+    def __init__(
+        self,
+        vector_stores: PgVectorStore | list[PgVectorStore],
+        chatbot: _BaseChatbot,
+        *,
+        catalog: StationCatalog | None = None,
+        interpreter: WeatherInterpreter | None = None,
+    ) -> None:
+        """Create the reusable catalog and interpretation boundary."""
         self._vector_stores = [vector_stores] if isinstance(vector_stores, PgVectorStore) else vector_stores
+        if not self._vector_stores:
+            raise ValueError("At least one weather index is required")
         self._chatbot = chatbot
-        self._known_values: dict[str, list[str]] | None = None
+        self._catalog = catalog or self._vector_stores[0].station_catalog(
+            tuple(store.table for store in self._vector_stores)
+        )
+        self._interpreter = interpreter or WeatherInterpreter(chatbot)
 
-    def _load_known_values(self) -> dict[str, list[str]]:
-        """Collect the station and county names present across all stores.
-
-        Longest names are matched first so "Pullman NE" wins over "Pullman".
-        """
-        if self._known_values is not None:
-            return self._known_values
-
-        values: dict[str, set[str]] = {"station": set(), "county": set()}
-        for store in self._vector_stores:
-            for key in values:
-                values[key].update(store.distinct_metadata_values(key))
-
-        self._known_values = {key: sorted(vals, key=len, reverse=True) for key, vals in values.items()}
-        return self._known_values
-
-    def _detect_filter(self, question: str) -> dict | None:
-        """Derive a metadata filter from a station or county named in the question.
-
-        A named station is a stronger signal than a county, so it is preferred.
-        Without this, semantic search ranks near-identical measurement tables by
-        embedding distance alone and can miss the very station being asked about.
-        """
-        asked = question.lower()
-        known = self._load_known_values()
-        for key in ("station", "county"):
-            for value in known.get(key, []):
-                if value.lower() in asked:
-                    return {key: value}
-        return None
-
-    # Queries _vector_stores and assembles a labeled context ([Historical Data],
-    # [Current Conditions], [Forecast Data]) so the LLM knows what type of data
-    # it's reading
-    def retrieve(self, question: str, filter: dict | None = None) -> str:
-        """Search all vector stores for relevant context and pass it to the chatbot.
-
-        Args:
-            question: The user's natural-language question.
-            filter: Optional metadata filter passed to every store's similarity_search.
-                Only documents whose metadata contains all key-value pairs are returned.
-                Example: {"station": "Pullman"} or {"county": "Whitman"}. When
-                omitted, a filter is inferred from any station or county named in
-                the question.
-
-        """
-        if filter is None:
-            filter = self._detect_filter(question)
-
-        sections: list[str] = []
-        for store in self._vector_stores:
-            docs: list[Document] = store.similarity_search(question, k=_SEARCH_K, filter=filter)
-            if docs:
-                label = _TABLE_LABELS.get(store.table, store.table)
-                content = "\n\n".join(doc.page_content for doc in docs)
-                sections.append(f"[{label}]\n{content}")
-
+    def retrieve(
+        self,
+        question: str,
+        *,
+        point: RequestedPoint | None = None,
+        history: list[dict[str, str]] | None = None,
+    ) -> str:
+        """Resolve a map point and validate the model interpretation before searching."""
+        if point is None:
+            return "Choose a point on the map before asking about the weather."
+        try:
+            station = self._catalog.resolve(point)
+        except QueryClarificationError as exc:
+            return str(exc)
+        intent = self._interpreter.interpret(question, point, station, history=history)
+        if intent.action != "query":
+            return intent.message
+        if intent.location != "selected":
+            return "Your question refers to another or unclear location. Choose that point on the map, then ask again."
+        selection = intent.selection(station)
+        sections, sources = self._collect_records(intent, selection)
         if not sections:
-            return (
-                "No matching weather records were found in the indexed data. "
-                "I cannot provide an answer to this question."
-            )
+            return NO_DATA
+        prompt = RAG_PROMPT_TEMPLATE.format(context="\n\n".join(sections), question=intent.question)
+        return append_sources(self._chatbot.invoke([prompt]), sources)
 
-        context: str = "\n\n".join(sections)
-        prompt: str = RAG_PROMPT_TEMPLATE.format(context=context, question=question)
-        return self._chatbot.invoke([prompt])
+    def _collect_records(self, intent: WeatherIntent, selection: WeatherQuery) -> tuple[list[str], list[str]]:
+        sections, sources = [], []
+        for store in self._vector_stores:
+            if not _uses_store(intent, store.table):
+                continue
+            docs = store.similarity_search(intent.question, k=_SEARCH_K, selection=selection)
+            if docs:
+                content = "\n\n".join(document_context(doc, store.table) for doc in docs)
+                sections.append(f"[{TABLE_LABELS[store.table]}]\n{content}")
+                sources.extend(source_label(doc, store.table) for doc in docs)
+        return sections, sources
+
+
+def _uses_store(intent: WeatherIntent, table: str) -> bool:
+    if intent.data_kind == "both":
+        return True
+    return (table == "forecast_index") == (intent.data_kind == "forecast")

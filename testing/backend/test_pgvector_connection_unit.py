@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from typing import Any
 
 from backend.databases import pgvector
@@ -19,6 +20,13 @@ class FakeCursor:
     def execute(self, query: bytes, params: Any) -> None:
         """Record a statement and its parameters."""
         self.executed.append((query, tuple(params)))
+
+    def __enter__(self) -> FakeCursor:
+        """Enter the cursor context used by transactional queries."""
+        return self
+
+    def __exit__(self, exc_type, exc_value, exc_tb) -> None:
+        """Exit the cursor context."""
 
     def __iter__(self):
         """Iterate the configured result rows."""
@@ -41,6 +49,10 @@ class FakeConnection:
     def cursor(self) -> FakeCursor:
         """Return the configured cursor."""
         return self._cursor
+
+    def transaction(self):
+        """Provide the transaction context used by the connection wrapper."""
+        return nullcontext()
 
     def close(self) -> None:
         """Record closing the connection."""

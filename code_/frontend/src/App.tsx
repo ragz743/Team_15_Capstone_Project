@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { ApiError, sendChat, type ChatMessage as ApiChatMessage } from "./lib/api";
+import { ApiError, sendChat, type ChatMessage as ApiChatMessage, type RequestedPoint } from "./lib/api";
+import LocationPicker from "./components/LocationPicker";
 import ChatWorkspace from "./components/ChatWorkspace";
 
 /**
@@ -32,6 +33,7 @@ function toApiMessages(messages: Message[]): ApiChatMessage[] {
 }
 
 export default function App() {
+  const [point, setPoint] = useState<RequestedPoint | null>(null);
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   // Single in-flight request guard — keeps the UI from pipelining user turns
@@ -51,7 +53,7 @@ export default function App() {
     event.preventDefault();
 
     const text = draft.trim();
-    if (!text || abortRef.current) {
+    if (!text || !point || abortRef.current) {
       return;
     }
 
@@ -80,7 +82,7 @@ export default function App() {
     abortRef.current = controller;
 
     try {
-      const { reply } = await sendChat(historyForApi, controller.signal);
+      const { reply } = await sendChat(historyForApi, controller.signal, point);
       if (abortRef.current !== controller) {
         return;
       }
@@ -129,6 +131,7 @@ export default function App() {
     abortRef.current?.abort();
     abortRef.current = null;
     setMessages([]);
+    setPoint(null);
     setDraft("");
     setIsSending(false);
   }
@@ -138,6 +141,8 @@ export default function App() {
       messages={messages}
       draft={draft}
       isSending={isSending}
+      ready={point !== null}
+      locationPicker={<LocationPicker point={point} disabled={isSending} onChange={setPoint} />}
       onDraftChange={setDraft}
       onSubmit={handleSubmit}
       onNewConversation={handleClearConversation}
