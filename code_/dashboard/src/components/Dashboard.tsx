@@ -8,13 +8,14 @@ import {
   formatUsd,
 } from "../format";
 import { scaleBasis } from "../projection";
-import type { Metrics } from "../types";
+import type { Metrics, RangeKey } from "../types";
 import ChartCard from "./ChartCard";
 import ColumnChart from "./ColumnChart";
 import DataTable from "./DataTable";
 import LineChart from "./LineChart";
 import ScaleProjection from "./ScaleProjection";
 import StatTile from "./StatTile";
+import UserCostTable from "./UserCostTable";
 import type { Series } from "./chartUtils";
 
 const STATUS_LABELS: Record<string, string> = {
@@ -25,6 +26,13 @@ const STATUS_LABELS: Record<string, string> = {
   unavailable: "Service unavailable",
 };
 
+const COST_SOURCE_LABELS: Record<string, string> = {
+  billed: "Actual (reported by provider)",
+  estimated: "Estimated from tokens",
+  mixed: "Partly actual, partly estimated",
+  unpriced: "No price set",
+};
+
 const periodLabels: Record<number, string> = { 7: "7 days", 30: "30 days", 90: "90 days", 365: "12 months" };
 
 const count = (v: number | null) => formatCount(v);
@@ -32,7 +40,9 @@ const msAxis = (v: number) => (v === 0 ? "0" : formatMs(v));
 const percentAxis = (v: number) => `${Number((v * 100).toFixed(1))}%`;
 const usdAxis = (v: number) => (v === 0 ? "$0" : formatUsd(v));
 
-export default function Dashboard({ metrics }: { metrics: Metrics }) {
+type DashboardProps = { metrics: Metrics; range: RangeKey; token: string; refreshCount: number };
+
+export default function Dashboard({ metrics, range: rangeKey, token, refreshCount }: DashboardProps) {
   const { summary, previous, series, months, range } = metrics;
   const period = periodLabels[range.days] ?? `${range.days} days`;
   const empty = summary.requests === 0;
@@ -106,6 +116,14 @@ export default function Dashboard({ metrics }: { metrics: Metrics }) {
         )}
       </section>
 
+      <section aria-labelledby="users-cost-heading">
+        <h2 id="users-cost-heading" className="section-heading">
+          Cost per user
+        </h2>
+        {/* keyed by range so paging restarts at the first page when the range changes */}
+        <UserCostTable key={rangeKey} range={rangeKey} token={token} refreshCount={refreshCount} periodLabel={period} />
+      </section>
+
       <section aria-labelledby="cost-heading">
         <h2 id="cost-heading" className="section-heading">
           Cost and calls
@@ -113,7 +131,7 @@ export default function Dashboard({ metrics }: { metrics: Metrics }) {
         <div className="chart-grid">
           <ChartCard
             title={`LLM cost per ${range.bucket}`}
-            subtitle="Estimated from token usage and pricing.yaml"
+            subtitle="Tokens used × each model's price per token. Free models cost $0. Details below."
             empty={empty}
             table={{
               columns: [{ key: "date", label: "Date" }, { key: "cost", label: "LLM cost", numeric: true }],
@@ -150,14 +168,18 @@ export default function Dashboard({ metrics }: { metrics: Metrics }) {
           <header className="card-header">
             <div>
               <h3 id="models-heading">Cost by model</h3>
-              <p className="card-subtitle">Token counts marked estimated were not reported by the provider</p>
+              <p className="card-subtitle">
+                Token counts come from each model response; ~ means the provider did not report them, so they were
+                estimated
+              </p>
             </div>
           </header>
           {unpriced.length > 0 && (
             <p className="note note-warning" role="note">
               <strong>Cost is understated.</strong> {unpriced.map((m) => m.model).join(", ")}{" "}
-              {unpriced.length === 1 ? "has" : "have"} no price in pricing.yaml and {unpriced.length === 1 ? "is" : "are"} counted
-              as $0.
+              {unpriced.length === 1 ? "has" : "have"} no price per token set in <code>pricing.yaml</code>, so{" "}
+              {unpriced.length === 1 ? "its calls are" : "their calls are"} counted as $0. Add the price to{" "}
+              <code>code_/backend/analytics/pricing.yaml</code>.
             </p>
           )}
           <DataTable
@@ -168,6 +190,7 @@ export default function Dashboard({ metrics }: { metrics: Metrics }) {
               { key: "calls", label: "Calls", numeric: true },
               { key: "tokens", label: "Tokens in / out", numeric: true },
               { key: "cost", label: "Cost", numeric: true },
+              { key: "source", label: "Cost source" },
               { key: "per", label: "Cost per call", numeric: true },
               { key: "latency", label: "Median latency", numeric: true },
             ]}
@@ -176,7 +199,8 @@ export default function Dashboard({ metrics }: { metrics: Metrics }) {
               kind: m.kind === "chat" ? "Chat" : "Embedding",
               calls: `${formatCount(m.calls)}${m.failed_calls ? ` (${formatCount(m.failed_calls)} failed)` : ""}`,
               tokens: `${m.tokens_estimated ? "~" : ""}${formatCount(m.input_tokens)} / ${formatCount(m.output_tokens)}`,
-              cost: m.priced ? formatUsd(m.cost_usd) : "Unpriced",
+              cost: m.priced ? formatUsd(m.cost_usd) : "—",
+              source: COST_SOURCE_LABELS[m.cost_source] ?? m.cost_source,
               per: m.priced ? formatUsd(m.avg_cost_per_call) : "—",
               latency: formatMs(m.latency_p50_ms),
             }))}

@@ -50,6 +50,8 @@ export type ModelRow = {
   cost_usd: number;
   avg_cost_per_call: number | null;
   priced: boolean;
+  /** billed: the provider reported the cost; estimated: tokens × pricing.yaml; unpriced: no price known. */
+  cost_source: "billed" | "estimated" | "mixed" | "unpriced";
   tokens_estimated: boolean;
   latency_p50_ms: number | null;
 };
@@ -63,4 +65,29 @@ export type Metrics = {
   months: MonthPoint[];
   by_model: ModelRow[];
   by_status: { status: string; requests: number }[];
+};
+
+export type UserRow = {
+  user_id: string | null; // null for the unidentified group
+  requests: number;
+  sessions: number;
+  llm_calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+  cost_share: number | null;
+  avg_cost_per_request: number | null;
+  first_seen: string | null;
+  last_seen: string | null;
+};
+
+/** GET /api/admin/users: one page of users, most expensive first. */
+export type UsersPage = {
+  total_users: number;
+  total_cost_usd: number;
+  top_decile_cost_share: number | null;
+  limit: number;
+  offset: number;
+  users: UserRow[];
+  unidentified: UserRow | null;
 };

@@ -135,6 +135,8 @@ _BY_MODEL_SQL = (
         sum(output_tokens) AS output_tokens,
         sum(cost_usd) AS cost_usd,
         bool_and(priced) AS priced,
+        bool_and(cost_reported) AS all_cost_reported,
+        bool_or(cost_reported) AS any_cost_reported,
         bool_or(tokens_estimated) AS tokens_estimated,
         percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS latency_p50_ms
     FROM c
@@ -147,6 +149,58 @@ _BY_STATUS_SQL = (
     _WINDOW
     + """
     SELECT status, count(*) AS requests FROM r GROUP BY status ORDER BY requests DESC, status
+"""
+)
+
+# Per user totals; requests without a user id are grouped under NULL and reported separately.
+_PER_USER = """
+    , per_request AS (
+        SELECT request_id, count(*) AS llm_calls, sum(input_tokens) AS input_tokens,
+               sum(output_tokens) AS output_tokens, sum(cost_usd) AS cost_usd
+        FROM c GROUP BY request_id
+    ),
+    per_user AS (
+        SELECT
+            r.user_id,
+            count(*) AS requests,
+            count(DISTINCT r.session_id) AS sessions,
+            coalesce(sum(pr.llm_calls), 0) AS llm_calls,
+            coalesce(sum(pr.input_tokens), 0) AS input_tokens,
+            coalesce(sum(pr.output_tokens), 0) AS output_tokens,
+            coalesce(sum(pr.cost_usd), 0) AS cost_usd,
+            min(r.started_at) AS first_seen,
+            max(r.started_at) AS last_seen
+        FROM r LEFT JOIN per_request pr USING (request_id)
+        GROUP BY r.user_id
+    )
+"""
+
+_USERS_SQL = (
+    _WINDOW
+    + _PER_USER
+    + """
+    SELECT * FROM per_user WHERE user_id IS NOT NULL
+    ORDER BY cost_usd DESC, requests DESC, user_id
+    LIMIT %(limit)s OFFSET %(offset)s
+"""
+)
+
+_USERS_TOTALS_SQL = (
+    _WINDOW
+    + _PER_USER
+    + """
+    , ranked AS (
+        SELECT cost_usd, row_number() OVER (ORDER BY cost_usd DESC) AS rank, count(*) OVER () AS users
+        FROM per_user WHERE user_id IS NOT NULL
+    )
+    SELECT
+        (SELECT count(*) FROM per_user WHERE user_id IS NOT NULL) AS users,
+        (SELECT coalesce(sum(cost_usd), 0) FROM per_user) AS total_cost_usd,
+        (SELECT sum(cost_usd) FILTER (WHERE rank <= ceil(users * 0.1)) / nullif(sum(cost_usd), 0)
+            FROM ranked) AS top_decile_cost_share,
+        (SELECT row_to_json(u) FROM (
+            SELECT requests, sessions, llm_calls, input_tokens, output_tokens, cost_usd, first_seen, last_seen
+            FROM per_user WHERE user_id IS NULL) u) AS unidentified
 """
 )
 
@@ -170,6 +224,8 @@ class UsageStore:
 
     def ensure_schema(self) -> None:
         """Create the usage tables if they do not exist yet."""
+        if self._schema_ready:
+            return  # common case: skip the write lock so dashboard reads never wait on chat requests
         with self._lock:
             self._ensure_schema_locked()
 
@@ -186,7 +242,11 @@ class UsageStore:
         )
         call_rows = []
         for call in usage.calls:
-            cost, priced = self._prices.cost(call.model, call.input_tokens, call.output_tokens)
+            if call.cost_usd is not None:
+                # the provider told us what it billed; no estimate needed
+                cost, priced = call.cost_usd, True
+            else:
+                cost, priced = self._prices.cost(call.model, call.input_tokens, call.output_tokens)
             if not priced and call.requested_model and call.requested_model != call.model:
                 # routers (e.g. openrouter/free) answer with another model's name; fall back to the configured one
                 cost, priced = self._prices.cost(call.requested_model, call.input_tokens, call.output_tokens)
@@ -201,6 +261,7 @@ class UsageStore:
                     call.tokens_estimated,
                     cost,
                     priced,
+                    call.cost_usd is not None,
                     call.latency_ms,
                     call.succeeded,
                 )
@@ -217,8 +278,8 @@ class UsageStore:
                 if call_rows:
                     cur.executemany(
                         "INSERT INTO usage_llm_calls (request_id, called_at, kind, model, input_tokens,"
-                        " output_tokens, tokens_estimated, cost_usd, priced, latency_ms, succeeded)"
-                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        " output_tokens, tokens_estimated, cost_usd, priced, cost_reported, latency_ms, succeeded)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         call_rows,
                     )
 
@@ -226,9 +287,7 @@ class UsageStore:
 
     def metrics(self, days: int, tz: str, now: datetime | None = None) -> dict[str, Any]:
         """Return every metric the dashboard shows for the last `days` local calendar days."""
-        zone = ZoneInfo(tz)
-        now = (now or datetime.now(zone)).astimezone(zone)
-        start = datetime.combine(now.date() - timedelta(days=days - 1), datetime.min.time(), zone)
+        start, now = _window(days, tz, now)
         previous_start = start - (now - start)
         # months are always whole calendar months so monthly users are comparable
         month_start = start.replace(day=1)
@@ -262,6 +321,7 @@ class UsageStore:
             }
 
         # reads use their own short lived connection so a slow dashboard query never holds up chat requests
+        self.ensure_schema()  # tables may not exist yet if nothing has been recorded since the database came up
         with self._connect() as conn:
             conn.autocommit = True
             rows = query(conn)
@@ -283,6 +343,34 @@ class UsageStore:
             ],
             "by_model": [_model_row(row) for row in rows["by_model"]],
             "by_status": [{"status": row["status"], "requests": row["requests"]} for row in rows["by_status"]],
+        }
+
+    def users(
+        self, days: int, tz: str, limit: int = 50, offset: int = 0, now: datetime | None = None
+    ) -> dict[str, Any]:
+        """Return each identified user's LLM usage and cost in the window, most expensive first."""
+        start, now = _window(days, tz, now)
+        params = {"start": start, "end": now, "limit": limit, "offset": offset}
+        self.ensure_schema()
+        with self._connect() as conn:
+            conn.autocommit = True
+            with conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(_USERS_TOTALS_SQL, params)
+                totals = cur.fetchone() or {}
+                cur.execute(_USERS_SQL, params)
+                rows = cur.fetchall()
+
+        total_cost = float(totals.get("total_cost_usd") or 0)
+        unidentified = totals.get("unidentified")
+        return {
+            "range": {"start": start.isoformat(), "end": now.isoformat(), "days": days, "timezone": tz},
+            "total_users": totals.get("users") or 0,
+            "total_cost_usd": total_cost,
+            "top_decile_cost_share": _num(totals.get("top_decile_cost_share")),
+            "limit": limit,
+            "offset": offset,
+            "users": [_user_row(row, total_cost) for row in rows],
+            "unidentified": _user_row({**unidentified, "user_id": None}, total_cost) if unidentified else None,
         }
 
     def close(self) -> None:
@@ -392,6 +480,46 @@ def _series_point(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _window(days: int, tz: str, now: datetime | None) -> tuple[datetime, datetime]:
+    """Return (start, now) for the last `days` local calendar days, starting at local midnight."""
+    zone = ZoneInfo(tz)
+    now = (now or datetime.now(zone)).astimezone(zone)
+    return datetime.combine(now.date() - timedelta(days=days - 1), datetime.min.time(), zone), now
+
+
+def _timestamp(value: Any) -> str | None:
+    """ISO string for a timestamp from a row or from row_to_json (already a string)."""
+    if value is None:
+        return None
+    return value if isinstance(value, str) else value.isoformat()
+
+
+def _user_row(row: dict[str, Any], total_cost: float) -> dict[str, Any]:
+    cost = float(row["cost_usd"] or 0)
+    return {
+        "user_id": row["user_id"],
+        "requests": row["requests"],
+        "sessions": row["sessions"],
+        "llm_calls": int(row["llm_calls"] or 0),
+        "input_tokens": int(row["input_tokens"] or 0),
+        "output_tokens": int(row["output_tokens"] or 0),
+        "cost_usd": cost,
+        "cost_share": _ratio(cost, total_cost),
+        "avg_cost_per_request": _ratio(cost, row["requests"]),
+        "first_seen": _timestamp(row["first_seen"]),
+        "last_seen": _timestamp(row["last_seen"]),
+    }
+
+
+def _cost_source(row: dict[str, Any]) -> str:
+    """Whether a model's cost is what the provider billed, a pricing.yaml estimate, a mix, or unknown."""
+    if row["all_cost_reported"]:
+        return "billed"
+    if not row["priced"]:
+        return "unpriced"
+    return "mixed" if row["any_cost_reported"] else "estimated"
+
+
 def _model_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         "kind": row["kind"],
@@ -403,6 +531,7 @@ def _model_row(row: dict[str, Any]) -> dict[str, Any]:
         "cost_usd": float(row["cost_usd"] or 0),
         "avg_cost_per_call": _ratio(float(row["cost_usd"] or 0), row["calls"]),
         "priced": bool(row["priced"]),
+        "cost_source": _cost_source(row),
         "tokens_estimated": bool(row["tokens_estimated"]),
         "latency_p50_ms": _num(row["latency_p50_ms"]),
     }

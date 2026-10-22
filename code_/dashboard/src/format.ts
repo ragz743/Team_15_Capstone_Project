@@ -12,13 +12,13 @@ const compactUsd = new Intl.NumberFormat("en-US", {
 });
 const usd = new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
 
-/** Dollars, keeping enough precision for the sub-cent costs of individual LLM calls. */
+/** Dollars, keeping two significant digits below $1 so small per call and per user costs stay distinguishable. */
 export function formatUsd(value: number | null | undefined): string {
   if (value == null) return EMPTY;
   if (value === 0) return "$0.00";
   const abs = Math.abs(value);
   if (abs < 0.000001) return value < 0 ? "-<$0.000001" : "<$0.000001";
-  if (abs < 0.01) return `${value < 0 ? "-" : ""}$${abs.toPrecision(2)}`;
+  if (abs < 1) return `${value < 0 ? "-" : ""}$${abs.toPrecision(2)}`;
   if (abs >= 10_000) return compactUsd.format(value);
   return usd.format(value);
 }

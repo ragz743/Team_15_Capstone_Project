@@ -152,7 +152,7 @@ export default function App() {
 
         {metrics ? (
           <div className={loading ? "dashboard is-refreshing" : "dashboard"} aria-busy={loading}>
-            <Dashboard metrics={metrics} />
+            <Dashboard metrics={metrics} range={range} token={token} refreshCount={refreshCount} />
           </div>
         ) : (
           !error && <p className="muted loading-note">Loading metrics…</p>
@@ -163,10 +163,17 @@ export default function App() {
           <dl>
             <dt>LLM calls</dt>
             <dd>Every request to a chat or embedding model made while answering a question.</dd>
+            <dt>Tokens</dt>
+            <dd>
+              The units of text a model reads and writes (roughly ¾ of a word each). Every model response reports how many
+              tokens went in and came out, including each step of the LangGraph workflow.
+            </dd>
             <dt>LLM cost</dt>
             <dd>
-              Token usage × the prices in <code>pricing.yaml</code>. Free tier and local models cost $0; models missing from
-              the file are flagged as unpriced.
+              Each call&rsquo;s cost is estimated as <strong>tokens used × that model&rsquo;s price per token</strong>. Prices
+              are set in <code>code_/backend/analytics/pricing.yaml</code>. Free-tier and locally hosted models cost $0. If
+              the provider reports the exact amount it charged, that amount is used instead of the estimate (shown as
+              &ldquo;Actual&rdquo; under Cost source). Models with no price in the file count as $0 and show a warning.
             </dd>
             <dt>Users and sessions</dt>
             <dd>

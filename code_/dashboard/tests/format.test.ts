@@ -8,6 +8,8 @@ test("formats dollars with enough precision for sub-cent call costs", () => {
   assert.equal(formatUsd(0.0000004), "<$0.000001");
   assert.equal(formatUsd(0.000093), "$0.000093");
   assert.equal(formatUsd(0.00037151), "$0.00037");
+  assert.equal(formatUsd(0.01935122), "$0.019");
+  assert.equal(formatUsd(0.5), "$0.50");
   assert.equal(formatUsd(2.18377), "$2.18");
   assert.equal(formatUsd(48_250), "$48.3K");
 });

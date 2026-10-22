@@ -148,3 +148,56 @@ def test_dashboard_reads_do_not_wait_for_the_write_connection(store: UsageStore)
 
     assert not reader.is_alive(), "metrics waited on the write lock"
     assert result["metrics"]["summary"]["requests"] == 1
+
+
+def test_cost_source_distinguishes_billed_and_estimated_costs(store: UsageStore) -> None:
+    """Models whose cost the provider reported are labelled billed; pricing.yaml ones estimated."""
+    usage = _request("u1", "s1", 0, "ok", 100)
+    usage.calls = [
+        LlmCall(kind="chat", model="billed/model", called_at=usage.started_at, input_tokens=10, cost_usd=0.25),
+        LlmCall(kind="chat", model="paid/chat", called_at=usage.started_at, input_tokens=1_000_000),
+    ]
+    store.record(usage)
+
+    rows = {row["model"]: row for row in store.metrics(7, _TZ, now=_NOW)["by_model"]}
+    assert (rows["billed/model"]["cost_source"], rows["billed/model"]["cost_usd"]) == ("billed", 0.25)
+    assert (rows["paid/chat"]["cost_source"], rows["paid/chat"]["cost_usd"]) == ("estimated", 1.0)
+
+
+def test_users_break_down_cost_per_user_most_expensive_first(store: UsageStore) -> None:
+    """Each user's questions, sessions, calls, tokens, and cost add up, sorted by cost with paging."""
+    for usage in [
+        _request("heavy", "s1", 0, "ok", 100),
+        _request("heavy", "s2", 1, "ok", 100),
+        _request("heavy", "s2", 1, "error", 100),
+        _request("light", "s3", 2, "ok", 100),
+        _request(None, None, 2, "ok", 100),
+        _request("old", "s4", 40, "ok", 100),  # outside the 7 day window
+    ]:
+        store.record(usage)
+    call_cost = 1_000 * 0.02 / 1e6 + (1_000 * 1.0 + 250 * 4.0) / 1e6
+
+    result = store.users(7, _TZ, now=_NOW)
+
+    assert (result["total_users"], [u["user_id"] for u in result["users"]]) == (2, ["heavy", "light"])
+    heavy = result["users"][0]
+    assert (heavy["requests"], heavy["sessions"], heavy["llm_calls"]) == (3, 2, 6)
+    assert (heavy["input_tokens"], heavy["output_tokens"]) == (6_000, 750)
+    assert heavy["cost_usd"] == pytest.approx(3 * call_cost)
+    assert heavy["cost_share"] == pytest.approx(3 / 5)
+    assert heavy["avg_cost_per_request"] == pytest.approx(call_cost)
+    assert result["total_cost_usd"] == pytest.approx(5 * call_cost)
+    # requests without a user id are reported separately, not as a user
+    assert (result["unidentified"]["requests"], result["unidentified"]["cost_share"]) == (1, pytest.approx(1 / 5))
+    # 2 users: the top 10% rounds up to the single most expensive user
+    assert result["top_decile_cost_share"] == pytest.approx(3 / 4)
+
+    second_page = store.users(7, _TZ, limit=1, offset=1, now=_NOW)
+    assert [u["user_id"] for u in second_page["users"]] == ["light"]
+
+
+def test_users_without_any_traffic(store: UsageStore) -> None:
+    """An empty window returns no users and no unidentified group."""
+    result = store.users(7, _TZ, now=_NOW)
+    assert (result["total_users"], result["users"], result["unidentified"]) == (0, [], None)
+    assert result["top_decile_cost_share"] is None

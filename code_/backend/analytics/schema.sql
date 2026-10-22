@@ -30,3 +30,7 @@ CREATE TABLE IF NOT EXISTS usage_llm_calls (
     succeeded BOOLEAN NOT NULL DEFAULT true
 );
 CREATE INDEX IF NOT EXISTS usage_llm_calls_request_idx ON usage_llm_calls (request_id);
+
+-- true when cost_usd is the amount the provider billed rather than a pricing.yaml estimate
+-- (added after the first release, so existing databases get the column here)
+ALTER TABLE usage_llm_calls ADD COLUMN IF NOT EXISTS cost_reported BOOLEAN NOT NULL DEFAULT false;

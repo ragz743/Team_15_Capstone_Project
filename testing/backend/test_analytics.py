@@ -150,6 +150,24 @@ def test_store_prices_routed_models_by_the_requested_model() -> None:
     assert priced == [True, False]
 
 
+def test_store_prefers_cost_billed_by_the_provider() -> None:
+    """A provider reported cost is stored as is, even for a model missing from pricing.yaml."""
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    store = UsageStore(lambda: conn, PriceTable({"paid/model": ModelPrice(100.0, 100.0)}))
+    usage = RequestUsage(status="ok")
+    usage.calls = [
+        LlmCall(kind="chat", model="paid/model", called_at=usage.started_at, input_tokens=1_000, cost_usd=0.0042),
+        LlmCall(kind="chat", model="unlisted/model", called_at=usage.started_at, cost_usd=0.001),
+        LlmCall(kind="chat", model="paid/model", called_at=usage.started_at, input_tokens=1_000),
+    ]
+    store.record(usage)
+
+    [rows] = [c.args[1] for c in cursor.executemany.call_args_list]
+    # columns: cost_usd, priced, cost_reported
+    assert [(row[7], row[8], row[9]) for row in rows] == [(0.0042, True, True), (0.001, True, True), (0.1, True, False)]
+
+
 def test_store_backs_off_after_the_database_is_unreachable() -> None:
     """After a failed connect, writes are skipped quickly instead of every request waiting on the database."""
     connect = MagicMock(side_effect=OperationalError("connection refused"))
@@ -322,3 +340,39 @@ def test_admin_metrics_rejects_unknown_range(admin_store: MagicMock) -> None:
         "/api/admin/metrics", params={"range": "5y"}, headers={"Authorization": "Bearer s3cret"}
     )
     assert response.status_code == 422
+
+
+def test_admin_users_returns_a_page_of_per_user_costs(admin_store: MagicMock) -> None:
+    """The per user endpoint passes range and paging through to the store."""
+    admin_store.users.return_value = {"users": [], "total_users": 0}
+    response = TestClient(api.app).get(
+        "/api/admin/users",
+        params={"range": "7d", "limit": 25, "offset": 50},
+        headers={"Authorization": "Bearer s3cret"},
+    )
+    assert response.status_code == 200
+    admin_store.users.assert_called_once_with(7, "America/Los_Angeles", limit=25, offset=50)
+
+
+@pytest.mark.parametrize("path", ["/api/admin/users", "/api/admin/users.csv"])
+def test_admin_user_endpoints_require_the_token(admin_store: MagicMock, path: str) -> None:
+    """Per user costs are admin only."""
+    assert TestClient(api.app).get(path).status_code == 401
+    admin_store.users.assert_not_called()
+
+
+def test_admin_users_csv_lists_every_user_and_the_unidentified_total(admin_store: MagicMock) -> None:
+    """The CSV export has one row per user plus an unidentified row."""
+    row = {"requests": 3, "sessions": 2, "llm_calls": 12, "input_tokens": 9, "output_tokens": 4, "cost_usd": 0.5}
+    admin_store.users.return_value = {
+        "users": [{**row, "user_id": "browser-1", "cost_share": 0.8}],
+        "unidentified": {**row, "user_id": None, "cost_share": 0.2},
+    }
+    response = TestClient(api.app).get("/api/admin/users.csv", headers={"Authorization": "Bearer s3cret"})
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "awn-llm-cost-by-user-30d.csv" in response.headers["content-disposition"]
+    lines = response.text.strip().splitlines()
+    assert lines[0].startswith("user_id,requests,sessions,llm_calls")
+    assert [line.split(",")[0] for line in lines[1:]] == ["browser-1", "(unidentified)"]

@@ -49,6 +49,7 @@ class LlmCall:
     latency_ms: int | None = None
     succeeded: bool = True
     requested_model: str | None = None  # configured model, when the provider answered under another name
+    cost_usd: float | None = None  # cost billed by the provider (OpenRouter reports it), None when not reported
 
 
 @dataclass
@@ -92,6 +93,7 @@ class _LlmCallRecorder(BaseCallbackHandler):
                 kind="chat",
                 model=_response_model_name(response) or model,
                 requested_model=model,
+                cost_usd=_reported_cost(response),
                 called_at=datetime.now(UTC),
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
@@ -207,6 +209,17 @@ def _response_model_name(response: LLMResult) -> str | None:
                 if name:
                     return str(name)
     return None
+
+
+def _reported_cost(response: LLMResult) -> float | None:
+    """Return the cost the provider billed for this call, when it reports one (OpenRouter does)."""
+    costs = [
+        float(generation.message.response_metadata["cost"])
+        for generations in response.generations
+        for generation in generations
+        if isinstance(generation, ChatGeneration) and generation.message.response_metadata.get("cost") is not None
+    ]
+    return sum(costs) if costs else None
 
 
 def _token_usage(response: LLMResult, prompt_chars: int) -> tuple[int, int, bool]:

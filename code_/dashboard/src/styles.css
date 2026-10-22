@@ -559,6 +559,31 @@ code {
   padding-left: 20px;
 }
 
+/* ---------- per user table ---------- */
+
+.user-id {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.is-refreshing {
+  opacity: 0.55;
+  transition: opacity 160ms ease;
+}
+
 /* ---------- tables ---------- */
 
 .table-scroll {
