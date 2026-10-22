@@ -43,6 +43,7 @@ class AWNDatabaseConnectionBase(ABC):
 
     def __init__(self) -> None:
         """Create a new AWN Database Connection."""
+        self._schema_cache: dict[str, tuple[SchemaQueryResult, ...]] = {}
         self.conn: connector.MySQLConnection = connector.MySQLConnection(
             user=os.getenv("AWN_DB_USER"),
             password=os.getenv("AWN_DB_PASSWORD"),
@@ -75,7 +76,11 @@ class AWNDatabaseConnectionBase(ABC):
             yield query_fields
 
     def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
-        """Query table schema given a table name."""
+        """Return cached schema metadata, querying the database on a cache miss."""
+        cached_schema = self._schema_cache.get(table_name)
+        if cached_schema is not None:
+            return list(cached_schema)
+
         cols = ", ".join(map(lambda s: s.upper(), SchemaQueryResult._fields))
         # column list is built from fixed field names, not user input, so inlining it is safe
         query_schema = f"""
@@ -86,7 +91,16 @@ class AWNDatabaseConnectionBase(ABC):
         ORDER BY ORDINAL_POSITION
         """
         results = self.simple_query(query_schema, (self._DB_NAME, table_name))
-        return [SchemaQueryResult.from_tuple(tup) for tup in results]
+        schema = tuple(SchemaQueryResult.from_tuple(tup) for tup in results)
+        self._schema_cache[table_name] = schema
+        return list(schema)
+
+    def clear_schema_cache(self, table_name: str | None = None) -> None:
+        """Clear cached schema for one table, or all tables when omitted."""
+        if table_name is None:
+            self._schema_cache.clear()
+        else:
+            self._schema_cache.pop(table_name, None)
 
     @abstractmethod
     def format_table_name(self, station_id: int) -> str:
