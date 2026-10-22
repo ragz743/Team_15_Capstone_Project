@@ -38,3 +38,9 @@ starts. Scripts can be repeated and preserve existing records.
 For a local API outside Docker, run `python -m scripts.migrate_conversations` before
 starting Uvicorn. The script adds conversation tables, durable retry fields and search
 indexes. The seed file alone only runs when PostgreSQL initializes a new volume.
+
+The station directory is a separate, one-time upgrade. For a database created before
+station lookup was added, apply `migrations/001_station_search_indexes.sql` and then
+`migrations/002_station_directory.sql` once before starting the API. The directory
+migration backfills existing weather records and must not run on every API startup.
+Fresh PostgreSQL images apply it automatically after the seed script.

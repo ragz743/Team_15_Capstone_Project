@@ -13,6 +13,12 @@ pytestmark = pytest.mark.skipif(os.getenv("RUN_PGVECTOR_TESTS") != "1", reason="
 SNAPSHOT_MIGRATION = Path(__file__).resolve().parents[2] / "deployment/migrations/002_turn_snapshots.sql"
 
 
+def _database_now(database) -> datetime:
+    """Use the same clock as persisted turn timestamps, including under Docker."""
+    with database() as conn:
+        return conn.execute("SELECT clock_timestamp()").fetchone()[0]
+
+
 def test_snapshot_upgrade_preserves_legacy_conversations(store, database, completed):
     """Upgrade rows with no snapshot fields without inventing input or source metadata."""
     owner, _ = store.create_owner()
@@ -39,7 +45,7 @@ def test_history_search_topics_dates_current_scope_and_owner_isolation(store, da
     foreign = store.create(foreign_owner)["id"]
     frost = completed(store, owner, old, "Did my crops get cold on January 1?", "We discussed freezing and frost.")
     completed(store, foreign_owner, foreign, "Foreign frost secret", "PRIVATE")
-    now = datetime.now(UTC)
+    now = _database_now(database)
     with database() as conn:
         conn.execute(
             "UPDATE conversation_turns SET requested_at = %s, completed_at = %s WHERE request_id = %s",
@@ -58,7 +64,7 @@ def test_history_search_topics_dates_current_scope_and_owner_isolation(store, da
     assert "January 1" in rows[0]["user_content"]
     assert store.search_history(owner, current, before=now, scope="current", terms=["frost"]) == []
     completed(store, owner, current, "Frost here too?", "The current chat reply")
-    rows = store.search_history(owner, current, before=datetime.now(UTC), scope="current", terms=["frost"])
+    rows = store.search_history(owner, current, before=_database_now(database), scope="current", terms=["frost"])
     assert len(rows) == 1 and rows[0]["conversation_id"] == current
     for method in [
         lambda: store.search_history(foreign_owner, current, before=now, scope="all", terms=[]),
@@ -85,7 +91,7 @@ def test_history_acceptance_cutoff_ignores_later_messages_and_completions(store,
     assert len(window) == 1 and window[0]["assistant"] == ""
 
 
-def test_history_limits_literal_terms_and_failed_questions(store, completed):
+def test_history_limits_literal_terms_and_failed_questions(store, database, completed):
     """Bound large results; SQL/wildcard-like topics are literal text, not a widened search."""
     owner, _ = store.create_owner()
     old, current = store.create(owner)["id"], store.create(owner)["id"]
@@ -94,18 +100,18 @@ def test_history_limits_literal_terms_and_failed_questions(store, completed):
     failed = uuid4()
     accepted = store.begin(owner, old, failed, "Frost question with no answer")
     store.fail(owner, old, failed, accepted.attempt_id)
-    rows = store.search_history(owner, current, before=datetime.now(UTC), scope="all", terms=["frost"])
+    rows = store.search_history(owner, current, before=_database_now(database), scope="all", terms=["frost"])
     assert len(rows) == 13 and rows[0]["assistant_content"] is None
     for term in ["%", "_", "' OR true --"]:
-        assert store.search_history(owner, current, before=datetime.now(UTC), scope="all", terms=[term]) == []
+        assert store.search_history(owner, current, before=_database_now(database), scope="all", terms=[term]) == []
 
 
-def test_previous_scope_does_not_skip_to_an_older_matching_topic(store, completed):
+def test_previous_scope_does_not_skip_to_an_older_matching_topic(store, database, completed):
     """The previous chat is chosen before applying topic constraints."""
     owner, _ = store.create_owner()
     old, recent, current = [store.create(owner)["id"] for _ in range(3)]
     completed(store, owner, old, "Frost earlier", "Old frost reply")
     completed(store, owner, recent, "Wind recently", "Recent wind reply")
-    assert store.search_history(owner, current, before=datetime.now(UTC), scope="previous", terms=["frost"]) == []
-    rows = store.search_history(owner, current, before=datetime.now(UTC), scope="all", terms=["frost"])
+    assert store.search_history(owner, current, before=_database_now(database), scope="previous", terms=["frost"]) == []
+    rows = store.search_history(owner, current, before=_database_now(database), scope="all", terms=["frost"])
     assert len(rows) == 1 and rows[0]["conversation_id"] == old

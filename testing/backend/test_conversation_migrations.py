@@ -9,6 +9,7 @@ import dotenv
 import pytest
 from backend.databases.pgvector import PgVectorConnection
 from psycopg import sql
+from psycopg.types.json import Jsonb
 
 pytestmark = pytest.mark.skipif(os.getenv("RUN_PGVECTOR_TESTS") != "1", reason="Opt-in local PostgreSQL checks")
 MIGRATION = Path(__file__).resolve().parents[2] / "deployment/migrations/001_conversations.sql"
@@ -22,7 +23,7 @@ def database():
     schema = "test_history_migrations_" + uuid4().hex
 
     def connect():
-        conn = PgVectorConnection(host="127.0.0.1", port=5432).conn
+        conn = PgVectorConnection(host="127.0.0.1").conn
         conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
         conn.commit()
         return conn
@@ -70,11 +71,30 @@ def test_fresh_seed_and_upgrade_preserve_weather_tables(database):
 
 
 def test_migration_command_upgrades_existing_schema(database, monkeypatch, capsys):
-    """The documented command locates and reapplies its SQL without touching weather records."""
+    """Repeated API startup preserves existing weather and the one-time station directory."""
     from contextlib import contextmanager
     from types import SimpleNamespace
 
     from scripts.migrate_conversations import main
+
+    with database() as conn:
+        for table in ("daily_index", "live_index", "forecast_index"):
+            conn.execute(
+                sql.SQL("CREATE TABLE {} (id integer PRIMARY KEY, document text, metadata jsonb)").format(
+                    sql.Identifier(table)
+                )
+            )
+        directory_sql = MIGRATION.with_name("002_station_directory.sql").read_text()
+        conn.execute(directory_sql.removeprefix("BEGIN;\n").removesuffix("\nCOMMIT;\n").encode())
+        metadata = {
+            "id": "1",
+            "station": "Pullman",
+            "county": "Whitman",
+            "state": "WA",
+            "latitude": "46.73",
+            "longitude": "-117.18",
+        }
+        conn.execute("INSERT INTO daily_index VALUES (1, 'original weather', %s)", (Jsonb(metadata),))
 
     @contextmanager
     def connection():
@@ -86,3 +106,6 @@ def test_migration_command_upgrades_existing_schema(database, monkeypatch, capsy
     main()
     main()
     assert "Existing records were preserved" in capsys.readouterr().out
+    with database() as conn:
+        assert conn.execute("SELECT document FROM daily_index").fetchall() == [("original weather",)]
+        assert conn.execute("SELECT station_id, name FROM indexed_stations").fetchall() == [("1", "Pullman")]

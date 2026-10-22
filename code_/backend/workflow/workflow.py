@@ -97,6 +97,9 @@ class ClassifierChatbot:
                 *state["messages"],
             ]
         )
+        if not result:
+            msg = "unable to classify input"
+            raise ValueError(msg)
 
         return {"sub_queries": result.sub_queries}  # type: ignore
 
@@ -136,7 +139,7 @@ class ChatbotWorkflow:
             self.historical_daily_db,
         ):
             if db.conn.is_connected():
-                db.conn.shutdown()
+                db.conn.disconnect()
 
     def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Process user input through the graph and return a response."""
@@ -214,12 +217,13 @@ class ChatbotWorkflow:
         """
         params = (latitude, longitude, latitude, county)
         results = self.current_db.simple_query(nearest_id_query, params)
+        nearest_result = next(iter(results), None)
 
-        if not results:
+        if nearest_result is None:
             msg = f"No nearest station returned with search args:(lat, lng)=({latitude}, {longitude}), county={county}"
             raise ValueError(msg)
 
-        station_id, *_ = next(results)
+        station_id, *_ = nearest_result
         return int(station_id)
 
     def _query_classifier(self, state: ChatState) -> dict:
@@ -298,10 +302,26 @@ class ChatbotWorkflow:
             case _:
                 msg = f"unrecognized query node '{node_name}'"
                 raise ValueError(msg)
-        schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
-        schema_context = (
-            _common.to_markdown_table(schema, ["", "", "", "", ""]) if schema else "No station schema was found."
-        )
+
+        fetch_schema_done = False
+        schema_context = ""
+        attempts = 0
+        while not fetch_schema_done and attempts < 3:
+            try:
+                schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
+                schema_context = (
+                    _common.to_markdown_table(schema, [""] * len(schema[0]))
+                    if schema
+                    else "No station schema was found."
+                )
+                fetch_schema_done = True
+            except IndexError:
+                pass
+            attempts += 1
+
+        if not fetch_schema_done:
+            msg = f"unable to fetch schema of station {state['nearest_station_id']}"
+            raise RuntimeError(msg)
 
         for attempt in range(1, self._MAX_SQL_ATTEMPTS + 1):
             retry_instructions = ""

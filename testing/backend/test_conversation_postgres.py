@@ -180,7 +180,7 @@ def test_saved_weather_retry_keeps_original_date_after_provider_failure(store, d
         )
     weather, model = MagicMock(spec=PgVectorStore), MagicMock()
     weather.table = "daily_index"
-    weather.stations.return_value = [STATION]
+    weather.station_catalog.return_value.resolve.return_value = STATION
     weather.similarity_search.side_effect = RuntimeError("provider failure")
     interpreter = MagicMock()
     interpreter.interpret.return_value = WeatherIntent.model_validate_json(intent_json())
@@ -193,7 +193,7 @@ def test_saved_weather_retry_keeps_original_date_after_provider_failure(store, d
     }
     assert client.post("/api/chat", json=payload).status_code == 502
     assert weather.similarity_search.call_args.kwargs["selection"].start == date(2026, 9, 9)
-    weather.stations.side_effect = AssertionError("Retry must reuse its saved resolution")
+    weather.station_catalog.return_value.resolve.side_effect = AssertionError("Retry must reuse its saved resolution")
     weather.similarity_search.side_effect = None
     weather.similarity_search.return_value = [
         Document(page_content="Temperature 72 F", metadata={"id": "1", "station": "Pullman", "date": "2026-09-09"})
@@ -215,10 +215,13 @@ def test_saved_weather_followup_chain_uses_fresh_evidence_after_reopening(store,
     weather.table = "daily_index"
     second = replace(STATION, id="2", name="Colfax", latitude="46.88")
     second_point = RequestedPoint(latitude=46.88, longitude=-117.181)
-    weather.stations.return_value = [STATION, second]
+    stations = [STATION, second]
+    weather.station_catalog.return_value.resolve.side_effect = lambda point: (
+        second if point == second_point else STATION
+    )
 
     def matching_records(question, *, selection, **kwargs):
-        station = next(item for item in weather.stations.return_value if item.id == selection.station_ids[0])
+        station = next(item for item in stations if item.id == selection.station_ids[0])
         return [
             Document(
                 page_content="Temperature 72 F; humidity 45%",
@@ -285,7 +288,8 @@ def test_saved_weather_followup_chain_uses_fresh_evidence_after_reopening(store,
         assert context["point"] == point.model_dump()
         assert day in response.json()["reply"]
         assert weather.similarity_search.call_count == model.invoke.call_count == index + 1
-    assert weather.stations.call_count == 1
+    weather.station_catalog.assert_called_once_with(("daily_index",))
+    assert weather.station_catalog.return_value.resolve.call_count == len(requests)
 
 
 def test_llm_history_http_reload_same_chat_and_browser_isolation(store, database, monkeypatch, completed):

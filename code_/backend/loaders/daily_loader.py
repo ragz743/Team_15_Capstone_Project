@@ -116,8 +116,10 @@ class DailyLoader(_BaseLoader):
         stations_daily = self._query_station_daily(metadata_results)
         for meta, station in stations_daily:
             header = f"Station: {meta.station} (ID: {meta.unit_id}) — {meta.county} County, {meta.state}\n\n"
+            rows = (station,)
+            units = DailyQueryResult.get_units()
             d = Document(
-                page_content=header + _common.to_markdown_table((station,), DailyQueryResult.get_units()),
+                page_content=header + _common.to_markdown_table(rows, units),
                 metadata={
                     "id": meta.unit_id,
                     "date": station.date,

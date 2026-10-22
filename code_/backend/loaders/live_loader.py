@@ -115,8 +115,10 @@ class LiveLoader(_BaseLoader):
         stations_live = self._query_station_most_recent(metadata_results)
         for meta, station in stations_live:
             header = f"Station: {meta.station} (ID: {meta.unit_id}) — {meta.county} County, {meta.state}\n\n"
+            rows = (station,)
+            units = LiveQueryResult.get_units()
             d = Document(
-                page_content=header + _common.to_markdown_table((station,), LiveQueryResult.get_units()),
+                page_content=header + _common.to_markdown_table(rows, units),
                 metadata={
                     "id": meta.unit_id,
                     "station": meta.station,

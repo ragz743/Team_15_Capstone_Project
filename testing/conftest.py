@@ -23,7 +23,7 @@ def database():
     schema = "test_conversations_" + uuid4().hex
 
     def connect():
-        connection = PgVectorConnection(host="127.0.0.1", port=5432).conn
+        connection = PgVectorConnection(host="127.0.0.1").conn
         connection.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
         connection.commit()
         return connection

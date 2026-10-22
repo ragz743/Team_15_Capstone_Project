@@ -6,6 +6,15 @@ from pathlib import Path
 import dotenv
 from backend.databases.pgvector import PgVectorConnection
 
+# Only repeatable migrations belong in the API startup path. The station
+# directory migration is a one-time backfill applied separately on upgrades.
+STARTUP_MIGRATIONS = (
+    "001_conversations.sql",
+    "001_station_search_indexes.sql",
+    "002_turn_snapshots.sql",
+    "003_search_indexes.sql",
+)
+
 
 def main() -> None:
     """Upgrade an existing database using the same SQL as fresh installations."""
@@ -17,9 +26,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     directory = Path(__file__).resolve().parents[2] / "deployment/migrations"
-    migrations = [args.sql] if args.sql is not None else sorted(directory.glob("[0-9][0-9][0-9]_*.sql"))
-    if not migrations:
-        parser.error("No conversation migrations were found")
+    migrations = [args.sql] if args.sql is not None else [directory / name for name in STARTUP_MIGRATIONS]
+    if not all(migration.is_file() for migration in migrations):
+        parser.error("One or more conversation migrations were not found")
     dotenv.load_dotenv()
     with PgVectorConnection() as database:
         with database.conn.transaction(), database.conn.cursor() as cur:

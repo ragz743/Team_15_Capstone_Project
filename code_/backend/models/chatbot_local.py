@@ -12,10 +12,10 @@ class ChatbotLocal(_BaseChatbot):
 
     def __init__(self, kwargs: dict) -> None:
         """Create an instance of ChatbotLocal."""
-        model: str = kwargs.pop("model")
+        self.model_name: str = kwargs.pop("model")
         base_url: str = kwargs.pop("base_url")
         self._model = ChatOpenAI(
-            model=model,
+            model=self.model_name,
             base_url=base_url,
             api_key=SecretStr("local"),  # llama.cpp server does not validate the key
             **kwargs,

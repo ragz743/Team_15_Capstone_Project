@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 from history_fixture import FixtureHistoryModel
 from langchain_core.documents import Document
 from psycopg import sql
+from scripts.migrate_conversations import STARTUP_MIGRATIONS
 from weather_fixtures import intent_json
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,17 +43,25 @@ def weather_store():
     """Supply indexed sources without using application weather data."""
     store = MagicMock(spec=PgVectorStore)
     store.table = "daily_index"
-    store.stations.return_value = [
+    stations = [
         Station("1", "Central source", "Kittitas", "47.201", "120.501", "WA"),
         Station("2", "Eastern source", "Grant", "47.201", "120.001", "WA"),
     ]
+
+    def distance(station: Station, point):
+        assert station.latitude is not None and station.longitude is not None
+        return (float(station.latitude) - point.latitude) ** 2 + (-abs(float(station.longitude)) - point.longitude) ** 2
+
+    store.station_catalog.return_value.resolve.side_effect = lambda point: min(
+        stations, key=lambda station: distance(station, point)
+    )
     attempts = {}
 
     def search(question, *, selection, **kwargs):
         attempts[question] = attempts.get(question, 0) + 1
         if question == "Retry weather" and attempts[question] == 1:
             raise RuntimeError("Controlled retrieval failure")
-        station = next(station for station in store.stations.return_value if station.id == selection.station_ids[0])
+        station = next(station for station in stations if station.id == selection.station_ids[0])
         return [
             Document(
                 page_content="Temperature 72 F",
@@ -75,15 +84,15 @@ async def fixture_lifespan(app):
     schema = "test_pr90_browser_" + uuid4().hex
 
     def connect():
-        conn = PgVectorConnection(host="127.0.0.1", port=5432, connect_timeout=5).conn
+        conn = PgVectorConnection(host="127.0.0.1", connect_timeout=5).conn
         conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
         conn.commit()
         return conn
 
     with connect() as conn:
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-        for migration in sorted((ROOT / "deployment/migrations").glob("*.sql")):
-            conn.execute(migration.read_bytes())
+        for name in STARTUP_MIGRATIONS:
+            conn.execute((ROOT / "deployment/migrations" / name).read_bytes())
     try:
         api._conversations = ConversationStore(connect)
         api._history_service = HistoryService(FixtureHistoryModel(), "fixture-history")

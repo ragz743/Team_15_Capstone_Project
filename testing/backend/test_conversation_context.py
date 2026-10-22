@@ -45,7 +45,8 @@ def test_legacy_context_loads_but_does_not_choose_a_station_for_the_user():
     turn = Retriever(stores, model).prepare_turn("Humidity?", context)
     assert turn.reply is not None
     assert turn.outcome == "needs_clarification" and "map" in turn.reply
-    assert all(not store.stations.called for store in stores)
+    for store in stores:
+        store.station_catalog.return_value.resolve.assert_not_called()
     model.invoke_json.assert_not_called()
 
 
@@ -78,7 +79,7 @@ def test_preparation_freezes_dates_and_does_not_interpret_again_for_answers():
     turn = retriever.prepare_turn("Yesterday?", point=POINT, today=date(2026, 9, 10))
     model.invoke_json.side_effect = AssertionError("must not reinterpret")
     for store in stores:
-        store.stations.side_effect = AssertionError("must not resolve again")
+        store.station_catalog.return_value.resolve.side_effect = AssertionError("must not resolve again")
     result = retriever.answer_result(turn)
     assert result.outcome == "no_data"
     assert all(store.similarity_search.call_args.kwargs["selection"].start == date(2026, 9, 9) for store in stores)
