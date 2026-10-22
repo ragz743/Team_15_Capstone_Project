@@ -11,9 +11,9 @@ class ChatbotOpenRouter(_BaseChatbot):
 
     def __init__(self, kwargs) -> None:
         """Create an instance of the ChatbotOpenRouter."""
-        model: str = kwargs.pop("model")
+        self.model_name: str = kwargs.pop("model")
         self._model = ChatOpenRouter(
-            model=model,
+            model=self.model_name,
             api_key=os.getenv("OPENROUTER_API_KEY"),  # type: ignore (can't get SecretStr type)
             **kwargs,
         )
@@ -26,7 +26,7 @@ class ChatbotOpenRouter(_BaseChatbot):
         match response.content:
             case [msgs]:
                 if isinstance(msgs, str):
-                    all_responses = "\n".join(msgs)
+                    all_responses = msgs
                 else:
                     # TODO (Any): figure out what kind of responses return a dict
                     # is this handling ok or are we missing out on info?
