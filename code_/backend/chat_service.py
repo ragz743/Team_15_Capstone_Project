@@ -3,15 +3,16 @@
 import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Literal
 from uuid import UUID
 
 import psycopg
 from backend.chat_turn import AnsweredTurn, PreparedChatTurn
-from backend.conversation_context import TIMEZONE, ConversationContext
+from backend.conversation_context import ConversationContext
 from backend.conversation_store import AcceptedTurn, ConversationNotFoundError, ConversationStore, TurnConflictError
-from backend.history_service import HistoryResolution, HistoryService
-from backend.retriever import Retriever
+from backend.history_service import HistoryService
 from backend.weather_query import RequestedPoint
+from backend.workflow.engine import LangGraphEngine
 
 logger = logging.getLogger(__name__)
 
@@ -53,23 +54,35 @@ class SavedChatService:
     """Accept, prepare, answer and persist each turn with short transactions."""
 
     def __init__(
-        self, store: ConversationStore, history: HistoryService | None, weather: Retriever | None, model_name: str
+        self, store: ConversationStore, history: HistoryService | None, weather: LangGraphEngine | None, model_name: str
     ):
         """Use the application services without opening connections or invoking models."""
         self.store, self.history, self.weather, self.model_name = store, history, weather, model_name
 
     def run(
-        self, owner: UUID, conversation: UUID, request: UUID, question: str, *, point: RequestedPoint | None = None
+        self,
+        owner: UUID,
+        conversation: UUID,
+        request: UUID,
+        question: str,
+        *,
+        point: RequestedPoint | None = None,
+        station_id: str | None = None,
+        mode: Literal["weather", "history"] = "weather",
     ) -> ChatCompletion:
         """Replay completed results and freeze new inputs before answer generation."""
-        request_input = {"point": point.model_dump()} if point is not None else {}
+        request_input: dict = {"point": point.model_dump()} if point is not None else {}
+        if station_id is not None:
+            request_input["station_id"] = station_id
+        if mode == "history":
+            request_input["mode"] = mode
         turn = self.store.begin(owner, conversation, request, question, request_input=request_input)
         if turn.completed is not None:
             return self._replay(turn)
         try:
             prepared = turn.prepared
             if prepared is None:
-                prepared = self._prepare(owner, conversation, question, turn, point)
+                prepared = self._prepare(owner, conversation, question, turn, point, station_id, mode)
                 self.store.prepare(owner, conversation, request, turn.attempt_id, prepared)
             result = self._answer(prepared)
             self.store.complete(
@@ -91,11 +104,47 @@ class SavedChatService:
         assert turn.completed is not None
         result = turn.completed
         return ChatCompletion(
-            AnsweredTurn(reply=result["reply"], outcome=result.get("outcome", "success")), result["model"], turn.context
+            AnsweredTurn(
+                reply=result["reply"],
+                outcome=result.get("outcome", "success"),
+                sources=result.get("sources", []),
+                coverage=result.get("coverage"),
+            ),
+            result["model"],
+            turn.context,
         )
 
     def _prepare(
-        self, owner: UUID, conversation: UUID, question: str, turn: AcceptedTurn, point: RequestedPoint | None
+        self,
+        owner: UUID,
+        conversation: UUID,
+        question: str,
+        turn: AcceptedTurn,
+        point: RequestedPoint | None,
+        station_id: str | None,
+        mode: Literal["weather", "history"],
+    ) -> PreparedChatTurn:
+        if mode == "history":
+            return self._prepare_history(owner, conversation, question, turn)
+        with _operation("weather"):
+            if self.weather is None:
+                raise ChatServiceError("weather", "unavailable")
+            recent = self.store.history_window(owner, conversation, before=turn.requested_at)
+            return self.weather.prepare_turn(
+                question,
+                turn.context,
+                point=point,
+                station_id=station_id,
+                reference_time=turn.requested_at,
+                history=recent,
+            )
+
+    def _prepare_history(
+        self,
+        owner: UUID,
+        conversation: UUID,
+        question: str,
+        turn: AcceptedTurn,
     ) -> PreparedChatTurn:
         with _operation("history"):
             if self.history is None:
@@ -103,7 +152,10 @@ class SavedChatService:
             resolution = self.history.prepare(self.store, owner, conversation, question, accepted_at=turn.requested_at)
         if resolution.snapshot is not None:
             return PreparedChatTurn(
-                outcome="history", question=question, context=turn.context, history=resolution.snapshot
+                outcome="history",
+                question=question,
+                context=turn.context,
+                history=resolution.snapshot,
             )
         if resolution.reply is not None:
             return PreparedChatTurn(
@@ -112,26 +164,14 @@ class SavedChatService:
                 context=turn.context,
                 reply=resolution.reply,
             )
-        return self._prepare_weather(question, turn, resolution, point)
-
-    def _prepare_weather(
-        self, question: str, turn: AcceptedTurn, resolution: HistoryResolution, point: RequestedPoint | None
-    ) -> PreparedChatTurn:
-        """Resolve weather inputs using the accepted time and selected context."""
-        context = turn.context
-        if resolution.intent.action == "reuse":
-            question = resolution.intent.weather_question or question
-            context = resolution.context or context
-        with _operation("weather"):
-            if self.weather is None:
-                raise ChatServiceError("weather", "unavailable")
-            return self.weather.prepare_turn(
-                question,
-                context,
-                point=point,
-                today=turn.requested_at.astimezone(TIMEZONE).date(),
-                history=resolution.recent if resolution.intent.action == "weather" else [],
-            )
+        return PreparedChatTurn(
+            outcome="needs_clarification",
+            question=question,
+            context=turn.context,
+            reply=(
+                "Choose Weather to ask a new weather question. To recall a saved conversation, name its topic or date."
+            ),
+        )
 
     def _answer(self, prepared: PreparedChatTurn) -> ChatCompletion:
         operation = "history" if prepared.history is not None or prepared.outcome == "history" else "weather"

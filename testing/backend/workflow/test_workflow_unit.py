@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from contextlib import nullcontext
+from time import monotonic
 from types import SimpleNamespace
-from typing import Any, NamedTuple, cast
+from typing import Any, cast
+from uuid import UUID
 
 import pytest
 from backend.databases._awn_connection_base import SchemaQueryResult
@@ -25,9 +27,20 @@ class FakeDatabase:
 
     def __init__(self, schema: list[SchemaQueryResult] | None = None) -> None:
         """Set up schema, query recording, and deterministic results."""
-        self.schema = schema or []
+        self.schema = (
+            schema
+            if schema is not None
+            else [
+                SchemaQueryResult("air_temp", "float", "YES", "", "Temperature"),
+                SchemaQueryResult("TSTAMP", "datetime", "YES", "", "Observation time"),
+                SchemaQueryResult("JULDATE", "date", "YES", "", "Observation date"),
+                SchemaQueryResult("Forecast_time", "datetime", "YES", "", "Forecast time"),
+            ]
+        )
+        self.conn = self
+        self.description = [("air_temp",)]
         self.queries: list[tuple[str, tuple[Any, ...]]] = []
-        self.results: list[tuple[Any, ...]] = [("72 F",)]
+        self.results: list[tuple[Any, ...]] = [(72.0,)]
         self.failures = 0
 
     def format_table_name(self, station_id: int) -> str:
@@ -39,13 +52,20 @@ class FakeDatabase:
         assert table_name == "station_123"
         return self.schema
 
-    def simple_query(self, query: str, params: tuple[Any, ...]) -> Iterator[tuple[Any, ...]]:
-        """Record SQL and return results or raise a configured database error."""
-        self.queries.append((query, params))
+    def cursor(self):
+        """Provide a cursor context for generated SQL."""
+        return nullcontext(self)
+
+    def execute(self, query: str) -> None:
+        """Record SQL or raise a configured database error."""
+        self.queries.append((query, ()))
         if self.failures:
             self.failures -= 1
             raise ProgrammingError("unknown column")
-        return iter(self.results)
+
+    def fetchall(self):
+        """Return the configured measurement rows."""
+        return self.results
 
 
 class FakeGraph:
@@ -60,19 +80,24 @@ class FakeGraph:
         """Record graph inputs and return a deterministic assistant message."""
         self.initial_state = initial_state
         self.config = config
-        return {"messages": [SimpleNamespace(content="answer")]}
+        return {"messages": [SimpleNamespace(content="answer")], "executions": []}
 
 
-class SampleRow(NamedTuple):
-    """Schema row for markdown conversion."""
-
-    column: str
+def weather_sql(query_type: QueryType = "current_weather") -> str:
+    """Select a measurement over a fixed period in the selected database."""
+    date_column = {
+        "current_weather": "TSTAMP",
+        "historical_weather": "JULDATE",
+        "forecast_weather": "Forecast_time",
+    }[query_type]
+    return f"SELECT air_temp FROM station_123 WHERE {date_column} = '2026-09-29'"
 
 
 def make_workflow(debug: bool = False) -> ChatbotWorkflow:
     """Construct a workflow without opening database or model connections."""
     chatbot = object.__new__(ChatbotWorkflow)
     chatbot._debug = debug
+    chatbot._deadline = monotonic() + 90
     chatbot._query_handlers = {
         "current_weather": "_query_current",
         "forecast_weather": "_query_forecast",
@@ -89,6 +114,10 @@ def make_state(*queries: QueryClassification) -> ChatState:
         "sub_queries": list(queries),
         "nearest_station_id": 123,
         "original_user_input": "original question",
+        "reference_time": "2026-09-30T12:00:00+00:00",
+        "station_label": "Test station",
+        "history": [],
+        "executions": [],
     }
 
 
@@ -119,15 +148,22 @@ def test_workflow_initialization_builds_graph_with_injected_dependencies(
     """Verify initialization wires graph, model, and database dependencies."""
     database_instances = [SimpleNamespace(conn=object()) for _ in range(3)]
     database_factories = iter(database_instances)
-    monkeypatch.setattr(workflow_module, "AWNDatabaseConnection", lambda: next(database_factories))
-    monkeypatch.setattr(workflow_module, "AWNDailyDatabaseConnection", lambda: next(database_factories))
-    monkeypatch.setattr(workflow_module, "AWNForecastDatabaseConnection", lambda: next(database_factories))
+    database_settings = []
+
+    def make_database(**kwargs):
+        database_settings.append(kwargs)
+        return next(database_factories)
+
+    monkeypatch.setattr(workflow_module, "AWNDatabaseConnection", make_database)
+    monkeypatch.setattr(workflow_module, "AWNDailyDatabaseConnection", make_database)
+    monkeypatch.setattr(workflow_module, "AWNForecastDatabaseConnection", make_database)
     monkeypatch.setattr(workflow_module, "ClassifierChatbot", lambda: "classifier")
     monkeypatch.setattr(workflow_module.ModelFactory, "load_from_models_yaml", lambda: ("embedding", "chatbot"))
     checkpoint = InMemorySaver()
 
     chatbot = ChatbotWorkflow(checkpointer=checkpoint)
 
+    assert database_settings == [{"statement_timeout": 8}] * 3
     assert chatbot.checkpointer is checkpoint
     assert chatbot.classifier_chat_model == "classifier"
     assert chatbot.workflow_chat_model == "chatbot"
@@ -177,7 +213,10 @@ def test_run_passes_station_and_user_question_to_graph() -> None:
     assert answer == "answer"
     assert chatbot.graph.initial_state["nearest_station_id"] == 456
     assert chatbot.graph.initial_state["original_user_input"] == "Question"
-    assert chatbot.graph.config == {"configurable": {"thread_id": "TEMP_KEY_REPLACE_ME"}}
+    assert chatbot.graph.config["max_concurrency"] == 1
+    first_thread = UUID(chatbot.graph.config["configurable"]["thread_id"])
+    chatbot.run("Another question", (46.0, -117.0), "Whitman")
+    assert UUID(chatbot.graph.config["configurable"]["thread_id"]) != first_thread
 
 
 @pytest.mark.parametrize("rows", [[], iter(())])
@@ -272,20 +311,24 @@ def test_miscellaneous_node_answers_without_database_query(monkeypatch: pytest.M
 def test_run_generated_query_formats_schema_and_results() -> None:
     """Generate a valid query, execute it, and format results for summarization."""
     chatbot = make_workflow()
-    database = FakeDatabase([SchemaQueryResult("air_temp", "float", "YES", "", "Temperature")])
+    database = FakeDatabase()
     chatbot.current_db = cast(Any, database)
     prompts: list[str] = []
     chatbot.workflow_chat_model = cast(
-        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or "SELECT air_temp FROM station_123;")
+        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or weather_sql() + ";")
     )
     queries = [QueryClassification(query_type="current_weather", reworded_query="What is current temperature?")]
 
     update = chatbot._run_generated_query(queries, make_state(*queries), cast(Any, database), "_query_current")
 
-    assert database.queries == [("SELECT air_temp FROM station_123", ())]
+    assert database.queries == [(weather_sql() + " LIMIT 200", ())]
     assert "air_temp" in prompts[0]
-    assert "SQL query used:\nSELECT air_temp FROM station_123" in update["messages"][0][1]
-    assert "('72 F',)" in update["messages"][0][1]
+    assert "2026-09-30T12:00:00+00:00" in prompts[0]
+    execution = update["executions"][0]
+    assert execution.columns == ("air_temp",)
+    assert execution.rows == [(72.0,)]
+    assert execution.measurements == ["air_temp (F)"]
+    assert "(72.0,)" in update["messages"][0][1]
 
 
 def test_run_generated_query_retries_programming_error_with_error_context() -> None:
@@ -296,7 +339,7 @@ def test_run_generated_query_retries_programming_error_with_error_context() -> N
     chatbot.current_db = cast(Any, database)
     prompts: list[str] = []
     chatbot.workflow_chat_model = cast(
-        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or "SELECT * FROM station_123")
+        Any, SimpleNamespace(invoke=lambda messages: prompts.append(messages[0]) or weather_sql())
     )
     query = QueryClassification(query_type="current_weather", reworded_query="Temperature?")
 
@@ -304,7 +347,7 @@ def test_run_generated_query_retries_programming_error_with_error_context() -> N
 
     assert len(database.queries) == 2
     assert "unknown column" in prompts[1]
-    assert "SELECT * FROM station_123" in prompts[1]
+    assert weather_sql() in prompts[1]
 
 
 @pytest.mark.parametrize(
@@ -324,12 +367,13 @@ def test_run_generated_query_selects_database_for_each_weather_node(
     chatbot = make_workflow()
     database = FakeDatabase()
     setattr(chatbot, database_attribute, cast(Any, database))
-    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(invoke=lambda messages: "SELECT * FROM station_123"))
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(invoke=lambda messages: weather_sql(query_type)))
     query = QueryClassification(query_type=query_type, reworded_query="Weather?")
 
     result = chatbot._run_generated_query([query], make_state(query), cast(Any, database), node_name)
 
-    assert database.queries == [("SELECT * FROM station_123", ())]
+    assert database.queries == [(weather_sql(query_type) + " LIMIT 200", ())]
+    assert result["executions"][0].query_type == query_type
     assert "Database results:" in result["messages"][0][1]
 
 
@@ -339,7 +383,7 @@ def test_run_generated_query_raises_after_final_database_failure() -> None:
     database = FakeDatabase()
     database.failures = chatbot._MAX_SQL_ATTEMPTS
     chatbot.current_db = cast(Any, database)
-    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(invoke=lambda messages: "SELECT * FROM station_123"))
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(invoke=lambda messages: weather_sql()))
     query = QueryClassification(query_type="current_weather", reworded_query="Weather?")
 
     with pytest.raises(ProgrammingError, match="unknown column"):
@@ -360,38 +404,44 @@ def test_run_generated_query_fails_if_retry_limit_is_zero(monkeypatch: pytest.Mo
         chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current")
 
 
-def test_run_generated_query_rejects_unknown_node() -> None:
-    """Reject query generation requests from an unrecognized workflow node."""
+def test_run_generated_query_handles_missing_weather_schema() -> None:
+    """Return no data without querying a model or database when no schema is available."""
     chatbot = make_workflow()
-    database = FakeDatabase()
+    database = FakeDatabase([])
+    query = QueryClassification(query_type="current_weather", reworded_query="Temperature?")
 
-    with pytest.raises(ValueError, match="unrecognized query node"):
-        chatbot._run_generated_query(
-            [QueryClassification(query_type="current_weather", reworded_query="Temperature?")],
-            make_state(),
-            cast(Any, database),
-            "_query_other",
-        )
+    result = chatbot._run_generated_query([query], make_state(query), cast(Any, database), "_query_current")
+
+    assert database.queries == []
+    assert result["executions"][0].rows == []
+    assert "No matching weather data was found." in result["messages"][0][1]
 
 
 @pytest.mark.parametrize(
     ("query", "message"),
     [
-        ("DELETE FROM station_123", "must be a SELECT"),
-        ("SELECT * FROM station_123; DROP TABLE station_123", "only one statement"),
-        ("SELECT * FROM another_station", "references a table"),
-        ("SELECT 1", "references a table"),
+        ("DELETE FROM station_123", "Only one SELECT statement"),
+        ("SELECT * FROM station_123; DROP TABLE station_123", "Only one SELECT statement"),
+        ("SELECT * FROM another_station", "Only the selected station table"),
+        ("SELECT 1", "Only the selected station table"),
     ],
 )
 def test_validate_generated_query_rejects_unsafe_or_unscoped_sql(query: str, message: str) -> None:
     """Reject non-SELECT, multi-statement, and wrong-table model output."""
     with pytest.raises(ProgrammingError, match=message):
-        ChatbotWorkflow._validate_generated_query(query, "station_123")
+        ChatbotWorkflow._validate_query(query, "station_123", {"air_temp", "TSTAMP"}, "current_weather")
 
 
 def test_validate_generated_query_accepts_case_and_backticks() -> None:
     """Allow case-insensitive SELECT and the selected table quoted with backticks."""
-    ChatbotWorkflow._validate_generated_query(" select * from `STATION_123` ", "station_123")
+    sql = ChatbotWorkflow._validate_query(
+        " select air_temp from `STATION_123` where TSTAMP = '2026-09-29' ",
+        "station_123",
+        {"air_temp", "TSTAMP"},
+        "current_weather",
+    )
+    assert "`STATION_123`" in sql
+    assert sql.endswith("LIMIT 200")
 
 
 def test_sub_queries_result_message_and_routing() -> None:
@@ -401,7 +451,7 @@ def test_sub_queries_result_message_and_routing() -> None:
     state = make_state(current, misc)
 
     assert ChatbotWorkflow._sub_queries_for(state, "current_weather") == [current]
-    result = ChatbotWorkflow._query_result_message([current], "SELECT 1", [])
+    result = ChatbotWorkflow._query_result_message([current], [])
     assert "No matching weather data was found." in result["messages"][0][1]
 
     chatbot = make_workflow()

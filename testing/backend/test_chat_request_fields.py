@@ -17,6 +17,9 @@ from weather_fixtures import POINT
         {"point": {"latitude": 95, "longitude": -117}},
         {"point": {"latitude": "46.7", "longitude": -117}},
         {"point": {"latitude": 46.7, "longitude": -117, "station_id": "99"}},
+        {"station_id": "1; DROP TABLE weather"},
+        {"station_id": 1},
+        {"station_id": "1", "point": POINT.model_dump()},
     ],
 )
 def test_invalid_fields_are_rejected_before_retrieval(monkeypatch, fields):
@@ -48,3 +51,15 @@ def test_valid_point_reaches_retrieval(monkeypatch):
     )
     assert response.status_code == 200
     retriever.retrieve.assert_called_once_with("Weather?", point=POINT, history=[])
+
+
+def test_explicit_station_reaches_retrieval(monkeypatch):
+    """Selection uses a validated identifier without synthesizing a map point."""
+    retriever = MagicMock()
+    retriever.retrieve.return_value = "Weather reply"
+    monkeypatch.setattr(api, "_retriever", retriever)
+    result = TestClient(api.app).post(
+        "/api/chat", json={"messages": [{"role": "user", "content": "Weather?"}], "station_id": "1"}
+    )
+    assert result.status_code == 200
+    retriever.retrieve.assert_called_once_with("Weather?", station_id="1", point=None, history=[])

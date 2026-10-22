@@ -18,7 +18,7 @@ class FakeRetriever:
         self.question: str | None = None
         self.point = None
 
-    def retrieve(self, question: str, *, point=None, history=None) -> str:
+    def retrieve(self, question: str, *, point=None, station_id=None, history=None) -> str:
         """Return a deterministic response for API tests."""
         self.question = question
         self.point = point
@@ -40,6 +40,7 @@ def test_health_returns_readiness_metadata(monkeypatch) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
+        "engine": "langgraph",
         "chatbot_ready": True,
         "retriever_ready": True,
         "history_ready": False,
@@ -114,9 +115,11 @@ def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, exp
     monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
     chatbot = MagicMock()
     monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
-    monkeypatch.setattr(api, "EmbeddingOpenRouter", MagicMock())
-    monkeypatch.setattr(api, "PgVectorStore", MagicMock())
-    monkeypatch.setattr(api, "Retriever", MagicMock(return_value=FakeRetriever()))
+    for name in ("AWN_DB_HOST", "AWN_DB_USER", "AWN_DB_PASSWORD"):
+        monkeypatch.setenv(name, "test")
+    for name in ("OPENROUTER_WORKFLOW_MODEL", "OPENROUTER_CLASSIFIER_MODEL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(api, "LangGraphEngine", MagicMock(return_value=FakeRetriever()))
     for name in ("_chatbot", "_retriever", "_chatbot_model_name", "_embedding_model_name", "_history_service"):
         monkeypatch.setattr(api, name, getattr(api, name))
 
@@ -124,77 +127,67 @@ def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, exp
         health = client.get("/api/health").json()
         response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Temperature yesterday?"}]})
 
-    assert chatbot.call_count == 2
-    assert [call.args[0]["model"] for call in chatbot.call_args_list] == [expected, expected]
+    assert chatbot.call_count == 3
+    assert [call.args[0]["model"] for call in chatbot.call_args_list] == [expected, expected, expected]
     assert health["chatbot_ready"] and health["retriever_ready"]
     assert health["model"] == expected
     assert response.status_code == 200
     assert response.json()["model"] == expected
 
 
-def test_build_retriever_requires_embedding_model(monkeypatch) -> None:
-    """Require an embedding model before constructing retrieval components."""
-    monkeypatch.delenv("OPENROUTER_EMBEDDING_MODEL", raising=False)
+@pytest.mark.parametrize("missing", ["OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"])
+def test_build_retriever_requires_workflow_configuration(monkeypatch, missing) -> None:
+    """Require model and AWN credentials before constructing the workflow."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"):
+        monkeypatch.setenv(name, "test-value")
+    monkeypatch.delenv(missing)
+    chatbot = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
 
-    with pytest.raises(ValueError, match="OPENROUTER_EMBEDDING_MODEL"):
+    with pytest.raises(ValueError, match="model and AWN database configuration"):
         api._build_retriever()
+    chatbot.assert_not_called()
 
 
-def test_build_retriever_configures_models_and_all_indexes(monkeypatch) -> None:
-    """Build retriever dependencies from environment settings."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+def test_build_retriever_configures_workflow_and_classifier_models(monkeypatch) -> None:
+    """Build the graph with independently configured workflow and classifier models."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"):
+        monkeypatch.setenv(name, "test-value")
     monkeypatch.setenv("OPENROUTER_CHAT_MODEL", "test-chat")
-    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding")
-    monkeypatch.setenv("OPENROUTER_CHAT_TEMPERATURE", "0.25")
-    embedding = object()
-    chatbot = object()
-    stores: list[tuple[object, str, int | None]] = []
-    monkeypatch.setattr(api, "EmbeddingOpenRouter", lambda name: embedding)
-    monkeypatch.setattr(api, "ChatbotOpenRouter", lambda kwargs: chatbot)
-    monkeypatch.setattr(
-        api,
-        "PgVectorStore",
-        lambda model, table, staleness_days=None: stores.append((model, table, staleness_days)) or MagicMock(),
-    )
-    retriever = object()
-    retriever_args: list[tuple[list[object], object]] = []
-
-    def make_retriever(vector_stores, model):
-        retriever_args.append((vector_stores, model))
-        return retriever
-
-    monkeypatch.setattr(api, "Retriever", make_retriever)
+    monkeypatch.setenv("OPENROUTER_WORKFLOW_MODEL", "test-workflow")
+    monkeypatch.setenv("OPENROUTER_CLASSIFIER_MODEL", "test-classifier")
+    chatbot, classifier, engine = object(), object(), object()
+    model_factory = MagicMock(side_effect=[chatbot, classifier])
+    engine_factory = MagicMock(return_value=engine)
+    monkeypatch.setattr(api, "ChatbotOpenRouter", model_factory)
+    monkeypatch.setattr(api, "LangGraphEngine", engine_factory)
 
     result = api._build_retriever()
 
-    assert result == (retriever, chatbot, "test-chat", "test-embedding")
-    assert stores == [
-        (embedding, "daily_index", None),
-        (embedding, "live_index", 30),
-        (embedding, "forecast_index", 2),
-    ]
-    assert len(retriever_args[0][0]) == 3
-    assert retriever_args[0][1] is chatbot
+    assert result == (engine, chatbot, "test-workflow", "")
+    assert [call.args[0]["model"] for call in model_factory.call_args_list] == ["test-workflow", "test-classifier"]
+    assert all(call.args[0]["temperature"] == 0 for call in model_factory.call_args_list)
+    engine_factory.assert_called_once_with(chatbot, classifier)
 
 
 def test_build_retriever_uses_default_chat_model_and_temperature(monkeypatch) -> None:
-    """Use API defaults when optional chat settings are absent."""
-    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding")
-    monkeypatch.delenv("OPENROUTER_CHAT_MODEL", raising=False)
-    monkeypatch.delenv("OPENROUTER_CHAT_TEMPERATURE", raising=False)
+    """Default both graph models to the API chat model with deterministic settings."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST"):
+        monkeypatch.setenv(name, "test-value")
+    for name in ("OPENROUTER_CHAT_MODEL", "OPENROUTER_WORKFLOW_MODEL", "OPENROUTER_CLASSIFIER_MODEL"):
+        monkeypatch.delenv(name, raising=False)
     chatbot_args: list[dict] = []
-    monkeypatch.setattr(api, "EmbeddingOpenRouter", lambda name: object())
     monkeypatch.setattr(api, "ChatbotOpenRouter", lambda kwargs: chatbot_args.append(kwargs) or object())
-    monkeypatch.setattr(api, "PgVectorStore", lambda *args, **kwargs: object())
-    monkeypatch.setattr(api, "Retriever", lambda *args: object())
+    monkeypatch.setattr(api, "LangGraphEngine", lambda *args: object())
 
     retriever, chatbot, model_name, embedding_name = api._build_retriever()
 
     assert retriever is not None
     assert chatbot is not None
     assert model_name == api._DEFAULT_CHAT_MODEL
-    assert embedding_name == "test-embedding"
-    assert chatbot_args == [{"model": api._DEFAULT_CHAT_MODEL, "temperature": 0.0}]
+    assert embedding_name == ""
+    assert len(chatbot_args) == 2
+    assert all(kwargs["model"] == api._DEFAULT_CHAT_MODEL and kwargs["temperature"] == 0 for kwargs in chatbot_args)
 
 
 def test_lifespan_initializes_components_and_clears_them_after_failure(monkeypatch) -> None:

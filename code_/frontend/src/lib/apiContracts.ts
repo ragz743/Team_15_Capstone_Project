@@ -26,7 +26,35 @@ export interface RequestedPoint {
   longitude: number;
 }
 
+export interface PublicStation {
+  id: string;
+  name: string;
+  county: string;
+  distance_km: number | null;
+}
+
+export interface StationCatalog {
+  stations: PublicStation[];
+  counties: string[];
+  located_count: number;
+}
+
+export type ChatMode = "weather" | "history";
+
 export type ChatOutcome = "success" | "history" | "needs_clarification" | "no_data";
+
+export interface Source {
+  station_id: string;
+  station: string;
+  county: string | null;
+  kind: "observation" | "forecast";
+  times: string[];
+  measurements: string[];
+}
+export interface ResultMetadata {
+  sources?: Source[];
+  coverage?: "subset" | "complete" | null;
+}
 
 export interface ConversationContext {
   point?: RequestedPoint | null;
@@ -51,7 +79,8 @@ export interface SavedMessage {
   content: string;
   created_at: string;
   status: "pending" | "completed" | "failed";
-  request_input?: { point?: RequestedPoint | null };
+  metadata?: ResultMetadata;
+  request_input?: { point?: RequestedPoint | null; station_id?: string | null; mode?: ChatMode | null };
 }
 export interface SavedConversation extends ConversationSummary {
   context: ConversationContext;
@@ -59,7 +88,7 @@ export interface SavedConversation extends ConversationSummary {
   next_before: number | null;
 }
 
-export interface SavedChatResponse extends ChatResponse {
+export interface SavedChatResponse extends ChatResponse, ResultMetadata {
   outcome: ChatOutcome;
   context: ConversationContext;
   conversation_id: string;
@@ -80,13 +109,42 @@ function isPoint(value: unknown): value is RequestedPoint {
     Math.abs(value.longitude) <= 180
   );
 }
+function isStationId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9]{1,20}$/.test(value);
+}
+export function isStationCatalog(value: unknown): value is StationCatalog {
+  if (!isObject(value) || !Array.isArray(value.stations) || !Array.isArray(value.counties) ||
+    !value.counties.every(county => typeof county === "string") || !Number.isInteger(value.located_count) ||
+    Number(value.located_count) < 0 || Number(value.located_count) > value.stations.length) return false;
+  return value.stations.every(station => isObject(station) && isStationId(station.id) &&
+    typeof station.name === "string" && !!station.name.trim() && typeof station.county === "string" &&
+    (station.distance_km === null || (typeof station.distance_km === "number" &&
+      Number.isFinite(station.distance_km) && station.distance_km >= 0)) &&
+    Object.keys(station).every(key => ["id", "name", "county", "distance_km"].includes(key))) &&
+    new Set(value.stations.map(station => station.id)).size === value.stations.length;
+}
 function isOutcome(value: unknown): value is ChatOutcome {
   return typeof value === "string" && ["success", "history", "needs_clarification", "no_data"].includes(value);
+}
+function isSource(value: unknown): value is Source {
+  return isObject(value) && typeof value.station_id === "string" && typeof value.station === "string" &&
+    (value.county === null || typeof value.county === "string") &&
+    (value.kind === "observation" || value.kind === "forecast") &&
+    Array.isArray(value.times) && value.times.every((item) => typeof item === "string") &&
+    Array.isArray(value.measurements) && value.measurements.every((item) => typeof item === "string");
+}
+function isMetadata(value: unknown): value is ResultMetadata | undefined {
+  return value === undefined || (isObject(value) &&
+    (value.sources === undefined || (Array.isArray(value.sources) && value.sources.every(isSource))) &&
+    (value.coverage === undefined || value.coverage === null || value.coverage === "subset" || value.coverage === "complete"));
 }
 function isRequestInput(value: unknown): boolean {
   return (
     value === undefined ||
-    (isObject(value) && (value.point === undefined || value.point === null || isPoint(value.point)))
+    (isObject(value) &&
+      (value.point === undefined || value.point === null || isPoint(value.point)) &&
+      (value.station_id === undefined || value.station_id === null || isStationId(value.station_id)) &&
+      (value.mode === undefined || value.mode === null || value.mode === "weather" || value.mode === "history"))
   );
 }
 function isContext(value: unknown): value is ConversationContext {
@@ -124,6 +182,7 @@ function isMessage(value: unknown): value is SavedMessage {
     isDate(value.created_at) &&
     typeof value.status === "string" &&
     ["pending", "completed", "failed"].includes(value.status) &&
+    isMetadata(value.metadata) &&
     isRequestInput(value.request_input)
   );
 }
@@ -145,6 +204,7 @@ export function isSavedReply(value: unknown): value is SavedChatResponse {
   return (
     isObject(value) &&
     isChatReply(value) &&
+    isMetadata(value) &&
     isOutcome(value.outcome) &&
     isContext(value.context) &&
     isId(value.conversation_id) &&
