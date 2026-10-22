@@ -1,4 +1,4 @@
-import type { Metrics, RangeKey, UsersPage } from "./types.ts";
+import type { Metrics, RangeKey, UserQuery, UsersPage } from "./types.ts";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -31,22 +31,31 @@ export async function fetchMetrics(range: RangeKey, token: string, signal?: Abor
   return (await response.json()) as Metrics;
 }
 
-/** Fetch one page of per user costs, most expensive first. */
+function userParams(range: RangeKey, query: UserQuery): URLSearchParams {
+  const params = new URLSearchParams({ range, sort: query.sort, order: query.order });
+  if (query.search.trim()) params.set("search", query.search.trim());
+  return params;
+}
+
+/** Fetch one page of per user costs, filtered and sorted on the server. */
 export async function fetchUsers(
   range: RangeKey,
   token: string,
+  query: UserQuery,
   offset: number,
   limit: number,
   signal?: AbortSignal,
 ): Promise<UsersPage> {
-  const query = new URLSearchParams({ range, offset: String(offset), limit: String(limit) });
-  const response = await adminGet(`/api/admin/users?${query}`, token, signal);
+  const params = userParams(range, query);
+  params.set("offset", String(offset));
+  params.set("limit", String(limit));
+  const response = await adminGet(`/api/admin/users?${params}`, token, signal);
   return (await response.json()) as UsersPage;
 }
 
-/** Download every user's costs as CSV (the header carries the token, so a plain link cannot be used). */
-export async function downloadUsersCsv(range: RangeKey, token: string): Promise<void> {
-  const response = await adminGet(`/api/admin/users.csv?range=${encodeURIComponent(range)}`, token);
+/** Download the users in the table, every page, as CSV (the header carries the token, so a plain link cannot be used). */
+export async function downloadUsersCsv(range: RangeKey, token: string, query: UserQuery): Promise<void> {
+  const response = await adminGet(`/api/admin/users.csv?${userParams(range, query)}`, token);
   const url = URL.createObjectURL(await response.blob());
   const link = document.createElement("a");
   link.href = url;

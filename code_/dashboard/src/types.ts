@@ -81,9 +81,25 @@ export type UserRow = {
   last_seen: string | null;
 };
 
-/** GET /api/admin/users: one page of users, most expensive first. */
+/** Columns /api/admin/users can sort by (backend/analytics/usage_store.py UserSort). */
+export type UserSortField =
+  | "user_id"
+  | "requests"
+  | "sessions"
+  | "llm_calls"
+  | "total_tokens"
+  | "cost_usd"
+  | "avg_cost_per_request"
+  | "last_seen";
+
+export type UserQuery = { search: string; sort: UserSortField; order: "asc" | "desc" };
+
+/** GET /api/admin/users: one page of users matching the search, in the requested order. */
 export type UsersPage = {
   total_users: number;
+  /** Users matching the search (equals total_users without a search). */
+  matched_users: number;
+  search: string | null;
   total_cost_usd: number;
   top_decile_cost_share: number | null;
   limit: number;

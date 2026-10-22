@@ -9,7 +9,7 @@ import logging
 import os
 from typing import Annotated, Any, Literal
 
-from backend.analytics.usage_store import UsageStore
+from backend.analytics.usage_store import UsageStore, UserSort
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
 
@@ -80,16 +80,33 @@ def metrics(
         raise HTTPException(status_code=503, detail="Usage metrics could not be loaded.") from exc
 
 
+# search and sort options shared by the JSON and CSV endpoints
+SearchParam = Annotated[str | None, Query(max_length=64, description="Show users whose id contains this text")]
+SortParam = Annotated[UserSort, Query(description="Column to sort by")]
+OrderParam = Annotated[Literal["asc", "desc"], Query()]
+
+
 @router.get("/users", dependencies=[Depends(require_admin)])
 def users(
     store: Annotated[UsageStore, Depends(get_usage_store)],
     range: Annotated[RangeKey, Query()] = "30d",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
+    search: SearchParam = None,
+    sort: SortParam = "cost_usd",
+    order: OrderParam = "desc",
 ) -> dict[str, Any]:
-    """Return each user's LLM usage and cost for the range, most expensive first, one page at a time."""
+    """Return each user's LLM usage and cost for the range, one page at a time, filtered and sorted."""
     try:
-        return store.users(_RANGE_DAYS[range], _timezone(), limit=limit, offset=offset)
+        return store.users(
+            _RANGE_DAYS[range],
+            _timezone(),
+            limit=limit,
+            offset=offset,
+            search=search,
+            sort=sort,
+            descending=order == "desc",
+        )
     except Exception as exc:
         logger.exception("Failed to load per user costs")
         raise HTTPException(status_code=503, detail="Per user costs could not be loaded.") from exc
@@ -99,10 +116,20 @@ def users(
 def users_csv(
     store: Annotated[UsageStore, Depends(get_usage_store)],
     range: Annotated[RangeKey, Query()] = "30d",
+    search: SearchParam = None,
+    sort: SortParam = "cost_usd",
+    order: OrderParam = "desc",
 ) -> Response:
-    """Download every user's LLM usage and cost for the range as CSV."""
+    """Download the users shown in the table (same search and sort, every page) as CSV."""
     try:
-        result = store.users(_RANGE_DAYS[range], _timezone(), limit=_CSV_MAX_USERS)
+        result = store.users(
+            _RANGE_DAYS[range],
+            _timezone(),
+            limit=_CSV_MAX_USERS,
+            search=search,
+            sort=sort,
+            descending=order == "desc",
+        )
     except Exception as exc:
         logger.exception("Failed to export per user costs")
         raise HTTPException(status_code=503, detail="Per user costs could not be loaded.") from exc
@@ -111,7 +138,7 @@ def users_csv(
     writer = csv.DictWriter(buffer, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(result["users"])
-    if result["unidentified"]:
+    if result["unidentified"] and not search:
         writer.writerow({**result["unidentified"], "user_id": "(unidentified)"})
     return Response(
         content=buffer.getvalue(),

@@ -571,6 +571,58 @@ code {
   font-size: 12px;
 }
 
+.table-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.search-input {
+  width: min(320px, 100%);
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  background: var(--page);
+  font-size: 14px;
+}
+
+.search-input:focus-visible {
+  outline-offset: 0;
+}
+
+.sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  white-space: nowrap;
+}
+
+.sort-button:hover,
+.sort-button.is-sorted {
+  color: var(--ink);
+}
+
+.sort-indicator {
+  color: var(--ink-muted);
+  font-size: 11px;
+}
+
+.sort-button.is-sorted .sort-indicator {
+  color: var(--accent);
+}
+
+.data-table th.numeric .sort-button {
+  flex-direction: row-reverse;
+}
+
 .pager {
   display: flex;
   align-items: center;

@@ -351,7 +351,30 @@ def test_admin_users_returns_a_page_of_per_user_costs(admin_store: MagicMock) ->
         headers={"Authorization": "Bearer s3cret"},
     )
     assert response.status_code == 200
-    admin_store.users.assert_called_once_with(7, "America/Los_Angeles", limit=25, offset=50)
+    admin_store.users.assert_called_once_with(
+        7, "America/Los_Angeles", limit=25, offset=50, search=None, sort="cost_usd", descending=True
+    )
+
+
+def test_admin_users_passes_search_and_sort(admin_store: MagicMock) -> None:
+    """Search text and the clicked column and direction reach the store."""
+    admin_store.users.return_value = {"users": []}
+    response = TestClient(api.app).get(
+        "/api/admin/users",
+        params={"search": "browser-1", "sort": "last_seen", "order": "asc"},
+        headers={"Authorization": "Bearer s3cret"},
+    )
+    assert response.status_code == 200
+    _, kwargs = admin_store.users.call_args
+    assert (kwargs["search"], kwargs["sort"], kwargs["descending"]) == ("browser-1", "last_seen", False)
+
+
+@pytest.mark.parametrize("params", [{"sort": "user_id; DROP TABLE x"}, {"order": "sideways"}, {"search": "x" * 65}])
+def test_admin_users_rejects_invalid_search_and_sort(admin_store: MagicMock, params: dict) -> None:
+    """Unknown sort columns, directions, and overlong searches are rejected before reaching the database."""
+    response = TestClient(api.app).get("/api/admin/users", params=params, headers={"Authorization": "Bearer s3cret"})
+    assert response.status_code == 422
+    admin_store.users.assert_not_called()
 
 
 @pytest.mark.parametrize("path", ["/api/admin/users", "/api/admin/users.csv"])
@@ -376,3 +399,17 @@ def test_admin_users_csv_lists_every_user_and_the_unidentified_total(admin_store
     lines = response.text.strip().splitlines()
     assert lines[0].startswith("user_id,requests,sessions,llm_calls")
     assert [line.split(",")[0] for line in lines[1:]] == ["browser-1", "(unidentified)"]
+
+
+def test_admin_users_csv_follows_the_table_search(admin_store: MagicMock) -> None:
+    """A searched export lists only the matches and leaves out the unidentified row."""
+    row = {"requests": 1, "sessions": 1, "llm_calls": 4, "input_tokens": 9, "output_tokens": 4, "cost_usd": 0.1}
+    admin_store.users.return_value = {
+        "users": [{**row, "user_id": "browser-1"}],
+        "unidentified": {**row, "user_id": None},
+    }
+    response = TestClient(api.app).get(
+        "/api/admin/users.csv", params={"search": "browser"}, headers={"Authorization": "Bearer s3cret"}
+    )
+    assert [line.split(",")[0] for line in response.text.strip().splitlines()[1:]] == ["browser-1"]
+    assert admin_store.users.call_args.kwargs["search"] == "browser"

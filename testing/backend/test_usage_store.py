@@ -201,3 +201,62 @@ def test_users_without_any_traffic(store: UsageStore) -> None:
     result = store.users(7, _TZ, now=_NOW)
     assert (result["total_users"], result["users"], result["unidentified"]) == (0, [], None)
     assert result["top_decile_cost_share"] is None
+
+
+def _seed_users(store: UsageStore) -> None:
+    """Three identified users with different activity, plus one unidentified question."""
+    for usage in [
+        _request("alice", "a1", 0, "ok", 100),
+        _request("alice", "a2", 1, "ok", 100),
+        _request("alice", "a2", 1, "ok", 100),
+        _request("bob_smith", "b1", 2, "ok", 100),
+        _request("carol%x", "c1", 0.5, "ok", 100),
+        _request("carol%x", "c1", 0.6, "ok", 100),
+        _request(None, None, 1, "ok", 100),
+    ]:
+        store.record(usage)
+
+
+@pytest.mark.parametrize(
+    ("sort", "descending", "expected"),
+    [
+        ("cost_usd", True, ["alice", "carol%x", "bob_smith"]),
+        ("cost_usd", False, ["bob_smith", "carol%x", "alice"]),
+        ("requests", True, ["alice", "carol%x", "bob_smith"]),
+        ("sessions", True, ["alice", "bob_smith", "carol%x"]),  # ties break on user id
+        ("user_id", False, ["alice", "bob_smith", "carol%x"]),
+        ("user_id", True, ["carol%x", "bob_smith", "alice"]),
+        ("last_seen", True, ["alice", "carol%x", "bob_smith"]),
+        ("total_tokens", False, ["bob_smith", "carol%x", "alice"]),
+    ],
+)
+def test_users_sort_by_any_column(store: UsageStore, sort, descending: bool, expected: list[str]) -> None:
+    """Every sortable column orders users in both directions."""
+    _seed_users(store)
+    result = store.users(7, _TZ, sort=sort, descending=descending, now=_NOW)
+    assert [u["user_id"] for u in result["users"]] == expected
+    assert (result["sort"], result["order"]) == (sort, "desc" if descending else "asc")
+
+
+def test_users_search_matches_part_of_the_id_case_insensitively(store: UsageStore) -> None:
+    """Search keeps users whose id contains the text; totals still describe everyone."""
+    _seed_users(store)
+    result = store.users(7, _TZ, search="SMI", now=_NOW)
+
+    assert [u["user_id"] for u in result["users"]] == ["bob_smith"]
+    assert (result["matched_users"], result["total_users"], result["search"]) == (1, 3, "SMI")
+    # share of cost stays relative to everyone's cost, not just the matches
+    assert result["users"][0]["cost_share"] == pytest.approx(1 / 7)
+
+
+@pytest.mark.parametrize(("search", "expected"), [("%", ["carol%x"]), ("_", ["bob_smith"]), ("nobody", [])])
+def test_users_search_treats_wildcards_literally(store: UsageStore, search: str, expected: list[str]) -> None:
+    """% and _ in a search match those characters, not 'anything'."""
+    _seed_users(store)
+    assert [u["user_id"] for u in store.users(7, _TZ, search=search, now=_NOW)["users"]] == expected
+
+
+def test_users_reject_unknown_sort_columns(store: UsageStore) -> None:
+    """Only allowlisted columns can be sorted on, so nothing user supplied reaches ORDER BY."""
+    with pytest.raises(ValueError, match="unsupported sort column"):
+        store.users(7, _TZ, sort="cost_usd; DROP TABLE usage_requests", now=_NOW)  # type: ignore[arg-type]

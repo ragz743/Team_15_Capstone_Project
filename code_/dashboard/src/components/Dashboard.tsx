@@ -169,8 +169,7 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
             <div>
               <h3 id="models-heading">Cost by model</h3>
               <p className="card-subtitle">
-                Token counts come from each model response; ~ means the provider did not report them, so they were
-                estimated
+                Token counts as reported by each model. ~ marks an estimate where no count was reported.
               </p>
             </div>
           </header>

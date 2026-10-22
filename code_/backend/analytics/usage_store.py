@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import psycopg
 from backend.analytics.metering import RequestUsage, metered
 from backend.analytics.pricing import PriceTable
+from psycopg import sql
 from psycopg.rows import dict_row
 
 logger = logging.getLogger("awn.analytics")
@@ -175,13 +176,24 @@ _PER_USER = """
     )
 """
 
-_USERS_SQL = (
+# Columns the per user table can be sorted by. Only these names are ever placed in ORDER BY.
+UserSort = Literal[
+    "user_id", "requests", "sessions", "llm_calls", "total_tokens", "cost_usd", "avg_cost_per_request", "last_seen"
+]
+USER_SORT_COLUMNS: tuple[str, ...] = UserSort.__args__  # type: ignore[attr-defined]
+
+_USERS_SELECT = (
     _WINDOW
     + _PER_USER
     + """
-    SELECT * FROM per_user WHERE user_id IS NOT NULL
-    ORDER BY cost_usd DESC, requests DESC, user_id
-    LIMIT %(limit)s OFFSET %(offset)s
+    , matched AS (
+        SELECT *,
+            input_tokens + output_tokens AS total_tokens,
+            cost_usd / nullif(requests, 0) AS avg_cost_per_request
+        FROM per_user
+        WHERE user_id IS NOT NULL AND user_id ILIKE %(pattern)s ESCAPE '\\'
+    )
+    SELECT * FROM matched
 """
 )
 
@@ -195,6 +207,8 @@ _USERS_TOTALS_SQL = (
     )
     SELECT
         (SELECT count(*) FROM per_user WHERE user_id IS NOT NULL) AS users,
+        (SELECT count(*) FROM per_user
+            WHERE user_id IS NOT NULL AND user_id ILIKE %(pattern)s ESCAPE '\\') AS matched_users,
         (SELECT coalesce(sum(cost_usd), 0) FROM per_user) AS total_cost_usd,
         (SELECT sum(cost_usd) FILTER (WHERE rank <= ceil(users * 0.1)) / nullif(sum(cost_usd), 0)
             FROM ranked) AS top_decile_cost_share,
@@ -346,18 +360,38 @@ class UsageStore:
         }
 
     def users(
-        self, days: int, tz: str, limit: int = 50, offset: int = 0, now: datetime | None = None
+        self,
+        days: int,
+        tz: str,
+        limit: int = 50,
+        offset: int = 0,
+        search: str | None = None,
+        sort: UserSort = "cost_usd",
+        descending: bool = True,
+        now: datetime | None = None,
     ) -> dict[str, Any]:
-        """Return each identified user's LLM usage and cost in the window, most expensive first."""
+        """Return identified users' LLM usage and cost in the window, filtered by `search` and sorted by `sort`."""
+        if sort not in USER_SORT_COLUMNS:
+            msg = f"unsupported sort column: {sort}"
+            raise ValueError(msg)
+
         start, now = _window(days, tz, now)
-        params = {"start": start, "end": now, "limit": limit, "offset": offset}
+        params = {"start": start, "end": now, "limit": limit, "offset": offset, "pattern": _contains_pattern(search)}
+        # the sort column comes from a fixed allowlist and is quoted as an identifier, never interpolated as text
+        query = sql.SQL(
+            "{select} ORDER BY {column} {direction} NULLS LAST, user_id LIMIT %(limit)s OFFSET %(offset)s"
+        ).format(
+            select=sql.SQL(_USERS_SELECT),  # type: ignore[arg-type]
+            column=sql.Identifier(sort),
+            direction=sql.SQL("DESC" if descending else "ASC"),
+        )
         self.ensure_schema()
         with self._connect() as conn:
             conn.autocommit = True
             with conn.transaction(), conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(_USERS_TOTALS_SQL, params)
                 totals = cur.fetchone() or {}
-                cur.execute(_USERS_SQL, params)
+                cur.execute(query, params)
                 rows = cur.fetchall()
 
         total_cost = float(totals.get("total_cost_usd") or 0)
@@ -365,6 +399,10 @@ class UsageStore:
         return {
             "range": {"start": start.isoformat(), "end": now.isoformat(), "days": days, "timezone": tz},
             "total_users": totals.get("users") or 0,
+            "matched_users": totals.get("matched_users") or 0,
+            "search": search or None,
+            "sort": sort,
+            "order": "desc" if descending else "asc",
             "total_cost_usd": total_cost,
             "top_decile_cost_share": _num(totals.get("top_decile_cost_share")),
             "limit": limit,
@@ -485,6 +523,14 @@ def _window(days: int, tz: str, now: datetime | None) -> tuple[datetime, datetim
     zone = ZoneInfo(tz)
     now = (now or datetime.now(zone)).astimezone(zone)
     return datetime.combine(now.date() - timedelta(days=days - 1), datetime.min.time(), zone), now
+
+
+def _contains_pattern(search: str | None) -> str:
+    """ILIKE pattern matching user ids containing `search` literally (its % and _ are not wildcards)."""
+    if not search:
+        return "%"
+    escaped = search.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 def _timestamp(value: Any) -> str | None:
