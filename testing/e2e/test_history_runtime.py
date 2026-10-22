@@ -16,6 +16,7 @@ from backend.models.chatbot_openrouter import ChatbotOpenRouter
 from backend.retriever import Retriever
 from fastapi.testclient import TestClient
 from psycopg import sql
+from scripts.migrate_conversations import STARTUP_MIGRATIONS
 from weather_fixtures import POINT, weather_document, weather_stores
 
 pytestmark = pytest.mark.skipif(
@@ -34,7 +35,7 @@ def history_runtime(monkeypatch):
     schema = "test_history_runtime_" + uuid4().hex
 
     def connect():
-        conn = PgVectorConnection(host="127.0.0.1", port=5432, connect_timeout=5).conn
+        conn = PgVectorConnection(host="127.0.0.1", connect_timeout=5).conn
         conn.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
         conn.commit()
         return conn
@@ -42,8 +43,8 @@ def history_runtime(monkeypatch):
     migrations = Path(__file__).resolve().parents[2] / "deployment/migrations"
     with connect() as conn:
         conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-        for migration in sorted(migrations.glob("*.sql")):
-            conn.execute(migration.read_bytes())
+        for name in STARTUP_MIGRATIONS:
+            conn.execute((migrations / name).read_bytes())
     try:
         model = ChatbotOpenRouter(
             {"model": model_name, "temperature": 0, "max_tokens": 1800, "request_timeout": 25000, "max_retries": 0}
