@@ -23,6 +23,7 @@ dependencies = [
     "langgraph",
     "fastapi",
     "uvicorn[standard]",
+    "sqlglot",
 ]
 
 [project.optional-dependencies]

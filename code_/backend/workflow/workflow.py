@@ -1,10 +1,11 @@
 """AgWeatherNet Chatbot Workflow."""
 
 import logging
-import re
 from datetime import datetime
 from typing import Annotated, Any, Literal, Sequence, TypedDict
 
+import sqlglot
+import sqlglot.errors
 from backend.databases._awn_connection_base import AWNDatabaseConnectionBase
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_fc_connection import AWNForecastDatabaseConnection
@@ -18,6 +19,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph, message, state
 from mysql.connector.errors import ProgrammingError
 from pydantic import BaseModel, Field
+from sqlglot import exp
 
 QueryType = Literal[
     "current_weather",
@@ -27,6 +29,21 @@ QueryType = Literal[
 ]
 
 _LOGGER = logging.getLogger(__name__)
+
+_FORBIDDEN_NODES = (
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Drop,
+    exp.Create,
+    exp.Alter,
+    exp.Command,
+    exp.Into,
+    exp.Lock,
+    exp.Parameter,
+    exp.SessionParameter,
+)
+_BLOCKED_FUNCTIONS = {"SLEEP", "BENCHMARK", "LOAD_FILE", "GET_LOCK", "RELEASE_LOCK", "SYS_EXEC", "SYS_EVAL"}
 
 
 class QueryClassification(BaseModel):
@@ -85,7 +102,7 @@ class ClassifierChatbot:
 
     def __init__(self) -> None:
         """ClassifierChatbot Constructor."""
-        self._model = ChatOpenRouter(model="openrouter/free", temperature=0).with_structured_output(
+        self._model = ChatOpenRouter(model="openai/gpt-6-luna", temperature=0).with_structured_output(
             QueryClassifications
         )
 
@@ -141,7 +158,7 @@ class ChatbotWorkflow:
             if db.conn.is_connected():
                 db.conn.disconnect()
 
-    async def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
+    async def run(self, session_id: str, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Asynchronously process user input through the graph and return a response."""
         nearest_station_id = self._nearest_station_search(
             location_coord,
@@ -167,7 +184,7 @@ class ChatbotWorkflow:
             initial_state,
             config={
                 "configurable": {
-                    "thread_id": "TEMP_KEY_REPLACE_ME",
+                    "thread_id": session_id,
                 }
             },
         )
@@ -355,8 +372,8 @@ class ChatbotWorkflow:
             generated_query = (await self.workflow_chat_model.ainvoke([prompt])).strip().rstrip(";").strip()
             self._log_event(node_name, "generated_sql", "\n" + generated_query)
             try:
-                self._validate_generated_query(generated_query, table_name)
-                results = list(database.simple_query(generated_query, ()))
+                safe_query = self._validate_generated_query(generated_query, table_name)
+                results = list(database.simple_query(safe_query, ()))
             except ProgrammingError as error:
                 retry_context = (generated_query, str(error))
                 self._log_event(
@@ -395,16 +412,27 @@ class ChatbotWorkflow:
             _LOGGER.info("time=%s node=%s event=%s details=%s", timestamp, node_name, event, details)
 
     @staticmethod
-    def _validate_generated_query(query: str, table_name: str) -> None:
-        """Reject generated SQL that is not a single read-only station query."""
-        normalized_query = query.strip()
-        if not re.match(r"^SELECT\b", normalized_query, re.IGNORECASE):
-            raise ProgrammingError("Generated query must be a SELECT statement.")
-        if ";" in normalized_query:
+    def _validate_generated_query(query: str, table_name: str) -> str:
+        """Reject generated SQL that is not a single read-only station query; return normalized SQL."""
+        try:
+            trees = sqlglot.parse(query, read="mysql")
+        except sqlglot.errors.SqlglotError as error:
+            raise ProgrammingError(f"Generated query could not be parsed: {error}") from error
+        if len(trees) != 1 or trees[0] is None:
             raise ProgrammingError("Generated query must contain only one statement.")
-        table_references = re.findall(r"\b(?:FROM|JOIN)\s+`?([A-Za-z0-9_]+)`?", normalized_query, re.IGNORECASE)
-        if not table_references or any(reference.lower() != table_name.lower() for reference in table_references):
+        tree = trees[0]
+        if not isinstance(tree, exp.Select):
+            raise ProgrammingError("Generated query must be a SELECT statement.")
+        if tree.find(*_FORBIDDEN_NODES):
+            raise ProgrammingError("Generated query contains a forbidden clause.")
+        for func in tree.find_all(exp.Func):
+            func_name = func.name if isinstance(func, exp.Anonymous) else func.sql_name()
+            if func_name.upper() in _BLOCKED_FUNCTIONS:
+                raise ProgrammingError(f"Generated query uses a blocked function: {func_name}.")
+        tables = list(tree.find_all(exp.Table))
+        if not tables or any(t.db or t.catalog or t.name.lower() != table_name.lower() for t in tables):
             raise ProgrammingError("Generated query references a table other than the selected station table.")
+        return tree.sql(dialect="mysql")
 
     @staticmethod
     def _sub_queries_for(state: ChatState, query_type: QueryType) -> list[QueryClassification]:

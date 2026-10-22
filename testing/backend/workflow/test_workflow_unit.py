@@ -173,7 +173,7 @@ def test_run_passes_station_and_user_question_to_graph() -> None:
     chatbot._nearest_station_search = cast(Any, lambda coords, county: 456)
     chatbot.graph = cast(Any, FakeGraph())
 
-    answer = asyncio.run(chatbot.run("Question", (46.0, -117.0), "Whitman"))
+    answer = asyncio.run(chatbot.run("0", "Question", (46.0, -117.0), "Whitman"))
 
     assert answer == "answer"
     assert chatbot.graph.initial_state["nearest_station_id"] == 456
@@ -410,6 +410,13 @@ def test_run_generated_query_rejects_unknown_node() -> None:
         ("SELECT * FROM station_123; DROP TABLE station_123", "only one statement"),
         ("SELECT * FROM another_station", "references a table"),
         ("SELECT 1", "references a table"),
+        ("SELECT * FROM station_123 INTO OUTFILE '/tmp/x'", "could not be parsed|forbidden clause"),
+        ("SELECT * FROM station_123 FOR UPDATE", "forbidden clause"),
+        ("SELECT @@version FROM station_123", "forbidden clause"),
+        ("SELECT SLEEP(10) FROM station_123", "blocked function"),
+        ("SELECT * FROM station_123, other", "references a table"),
+        ("SELECT * FROM mysql.station_123", "references a table"),
+        ("SELECT * FROM station_123 WHERE x IN (SELECT y FROM users)", "references a table"),
     ],
 )
 def test_validate_generated_query_rejects_unsafe_or_unscoped_sql(query: str, message: str) -> None:
