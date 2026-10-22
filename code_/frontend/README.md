@@ -34,12 +34,19 @@ npm run dev
 
 Open `http://localhost:5173` in the browser.
 
+## Map selection and saved chats
 
-## Map selection
+Choose a map point to request weather. Only the selected point is plotted.
+Reopening a saved chat restores its point. A new map selection is sent as a location
+override until the server accepts it. Other messages use the saved context, so reusing
+an old location can update the map. Retrying a failed message sends its original input
+even if the map has changed. History recall can run without a selected point.
+The browser loads OpenStreetMap tiles through Leaflet.
 
-Choose a point before sending a weather question. Click the map or move it with the
-arrow keys and select Use map center. The marker represents the requested point;
-source station coordinates stay on the server. New conversation clears the point.
+The workspace composes the sidebar, transcript, map and composer. Conversation state
+uses a reducer. Separate hooks handle history navigation and message submission.
+Request ownership prevents responses from an earlier chat from updating the active chat.
 
-`POST /api/chat` now sends `messages` and `point: {latitude, longitude}`. Deploy this
-client with the matching backend. Source selection and date validation happen there.
+The client separates endpoint calls in `api.ts`, HTTP handling in `http.ts` and response
+types and validation in `apiContracts.ts`. Chat submission and history navigation share
+request handling while keeping their existing cancellation and retry behavior.

@@ -1027,9 +1027,11 @@ button, input, textarea {
   }
 }
 
-.location-picker { padding: 12px 24px; border-bottom: 1px solid #e6e0dc; }
-.location-picker p { margin: 0 0 8px; font-size: 13px; }
-.location-map { height: 200px; border-radius: 8px; z-index: 0; }
-.location-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 8px; font-size: 12px; }
-.location-picker .map-hint { margin: 6px 0 0; font-size: 12px; color: #615e5b; }
-@media (max-width: 760px) { .location-picker { padding: 8px 16px; } .location-map { height: 150px; } }
+.map-panel { flex-shrink: 0; margin: 0 24px; border-bottom: 1px solid #e5e0dc; }
+.map-panel summary { cursor: pointer; padding: 12px 0; font-size: 14px; }
+.location-picker { padding-bottom: 12px; }
+.location-picker p { margin: 8px 0; font-size: 13px; }
+.location-map { height: 230px; border-radius: 8px; z-index: 0; }
+.location-controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin-top: 10px; font-size: 13px; }
+.map-hint { color: #625b57; }
+@media (max-width: 760px) { .map-panel { flex-shrink: 0; margin: 0 16px; } .location-map { height: 180px; } }

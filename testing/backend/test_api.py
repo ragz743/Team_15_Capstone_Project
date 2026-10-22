@@ -25,39 +25,6 @@ class FakeRetriever:
         return f"retrieved: {question}"
 
 
-@pytest.mark.parametrize(
-    ("setting", "expected"),
-    [(None, "openrouter/free"), ("", "openrouter/free"), ("  ", "openrouter/free"), ("custom/model", "custom/model")],
-)
-def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, expected):
-    """Start successfully with unset settings and preserve explicit overrides."""
-    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding-model")
-    monkeypatch.setenv("OPENROUTER_CHAT_TEMPERATURE", "0")
-    if setting is None:
-        monkeypatch.delenv("OPENROUTER_CHAT_MODEL", raising=False)
-    else:
-        monkeypatch.setenv("OPENROUTER_CHAT_MODEL", setting)
-    monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
-    chatbot = MagicMock()
-    monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
-    monkeypatch.setattr(api, "EmbeddingOpenRouter", MagicMock())
-    monkeypatch.setattr(api, "PgVectorStore", MagicMock())
-    monkeypatch.setattr(api, "Retriever", MagicMock(return_value=FakeRetriever()))
-    for name in ("_chatbot", "_retriever", "_chatbot_model_name", "_embedding_model_name"):
-        monkeypatch.setattr(api, name, getattr(api, name))
-
-    with TestClient(api.app) as client:
-        health = client.get("/api/health").json()
-        response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Temperature yesterday?"}]})
-
-    chatbot.assert_called_once_with({"model": expected, "temperature": 0.0})
-    assert health["chatbot_ready"] and health["retriever_ready"]
-    assert health["model"] == expected
-    assert response.status_code == 200
-    assert response.json()["model"] == expected
-
-
 def test_health_returns_readiness_metadata(monkeypatch) -> None:
     """Check health response includes API readiness state."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
@@ -75,6 +42,7 @@ def test_health_returns_readiness_metadata(monkeypatch) -> None:
         "status": "ok",
         "chatbot_ready": True,
         "retriever_ready": True,
+        "history_ready": False,
         "model": "test-chat-model",
         "embedding_model": "test-embedding-model",
         "has_api_key": True,
@@ -127,6 +95,41 @@ def test_chat_requires_user_message(monkeypatch) -> None:
 
     assert response.status_code == 400
     assert response.json()["detail"] == "At least one user message is required."
+
+
+@pytest.mark.parametrize(
+    ("setting", "expected"),
+    [(None, "openrouter/free"), ("", "openrouter/free"), ("  ", "openrouter/free"), ("custom/model", "custom/model")],
+)
+def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, expected):
+    """Start successfully with unset settings and preserve explicit overrides."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding-model")
+    monkeypatch.setenv("OPENROUTER_CHAT_TEMPERATURE", "0")
+    monkeypatch.setenv("OPENROUTER_HISTORY_MODEL", "  ")
+    if setting is None:
+        monkeypatch.delenv("OPENROUTER_CHAT_MODEL", raising=False)
+    else:
+        monkeypatch.setenv("OPENROUTER_CHAT_MODEL", setting)
+    monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
+    chatbot = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", chatbot)
+    monkeypatch.setattr(api, "EmbeddingOpenRouter", MagicMock())
+    monkeypatch.setattr(api, "PgVectorStore", MagicMock())
+    monkeypatch.setattr(api, "Retriever", MagicMock(return_value=FakeRetriever()))
+    for name in ("_chatbot", "_retriever", "_chatbot_model_name", "_embedding_model_name", "_history_service"):
+        monkeypatch.setattr(api, name, getattr(api, name))
+
+    with TestClient(api.app) as client:
+        health = client.get("/api/health").json()
+        response = client.post("/api/chat", json={"messages": [{"role": "user", "content": "Temperature yesterday?"}]})
+
+    assert chatbot.call_count == 2
+    assert [call.args[0]["model"] for call in chatbot.call_args_list] == [expected, expected]
+    assert health["chatbot_ready"] and health["retriever_ready"]
+    assert health["model"] == expected
+    assert response.status_code == 200
+    assert response.json()["model"] == expected
 
 
 def test_build_retriever_requires_embedding_model(monkeypatch) -> None:
@@ -197,6 +200,8 @@ def test_build_retriever_uses_default_chat_model_and_temperature(monkeypatch) ->
 def test_lifespan_initializes_components_and_clears_them_after_failure(monkeypatch) -> None:
     """Initialize service globals on success and expose unavailable state on failure."""
     monkeypatch.setattr(api.dotenv, "load_dotenv", lambda: None)
+    monkeypatch.setattr(api, "ChatbotOpenRouter", MagicMock())
+    monkeypatch.setattr(api, "_history_service", None)
     retriever, chatbot = object(), object()
     monkeypatch.setattr(api, "_build_retriever", lambda: (retriever, chatbot, "chat", "embedding"))
     monkeypatch.setattr(api, "_retriever", None)
@@ -245,14 +250,10 @@ def test_retrieval_error_maps_rate_limits_and_general_failures() -> None:
 
 def test_chat_rejects_unavailable_service_and_empty_retrieval_response(monkeypatch) -> None:
     """Return service errors when startup did not initialize or retrieval is empty."""
-    from fastapi import HTTPException
-
+    client = TestClient(api.app)
+    payload = {"messages": [{"role": "user", "content": "weather?"}]}
     monkeypatch.setattr(api, "_retriever", None)
-    with pytest.raises(HTTPException) as unavailable:
-        api.chat(api.ChatRequest(messages=[api.ChatMessage(role="user", content="weather?")]))
-    assert unavailable.value.status_code == 503
+    assert client.post("/api/chat", json=payload).status_code == 503
 
     monkeypatch.setattr(api, "_retriever", MagicMock(retrieve=lambda *args, **kwargs: ""))
-    with pytest.raises(HTTPException) as empty_response:
-        api.chat(api.ChatRequest(messages=[api.ChatMessage(role="user", content="weather?")]))
-    assert empty_response.value.status_code == 502
+    assert client.post("/api/chat", json=payload).status_code == 502
