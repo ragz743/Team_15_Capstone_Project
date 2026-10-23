@@ -22,6 +22,12 @@ _EMBEDDINGS = [
 ]
 
 
+@pytest.fixture(autouse=True)
+def _require_optional_package(target: str) -> None:
+    """Skip wrapper tests when their optional integration is not installed."""
+    pytest.importorskip(target.rsplit(".", 1)[0])
+
+
 @pytest.mark.parametrize(("wrapper", "target", "kwargs"), _CHATBOTS)
 def test_chatbot_passes_kwargs_and_returns_text(wrapper, target, kwargs) -> None:
     """Chatbot wrappers forward yaml kwargs to langchain and return the response text."""
