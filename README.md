@@ -42,6 +42,16 @@ models:
   - `kwargs`: the key word arguments to pass to the class constructor
     - this will be depended on the python class and may very between model hosts!
     - this also leaves the door open for customization based on model and machine as configuration can greatly influence how a model responds
+- local models are supported out of the box (install with `pip install -e ".[local]"`):
+
+  | Host | `class_file` / `class` | required kwargs |
+  | --- | --- | --- |
+  | llama-cpp (in-process GGUF) | `chatbot_local.py` / `ChatbotLlamaCpp`, `embedding_local.py` / `EmbeddingLlamaCpp` | `model_path` |
+  | Ollama | `chatbot_local.py` / `ChatbotOllama`, `embedding_local.py` / `EmbeddingOllama` | `model` (`base_url` defaults to `http://localhost:11434`) |
+  | llama-cpp server (docker `local_llm` profile) | `chatbot_local.py` / `ChatbotLocal`, `embedding_local.py` / `EmbeddingLocal` | `model`, `base_url` |
+
+  - any other kwargs are passed straight to the wrapped langchain class (e.g. `n_ctx`, `n_gpu_layers`, `temperature`)
+  - the embedding model must output at least 768 dimensions (e.g. `nomic-embed-text`), larger vectors are truncated
 
 ### Add-ons
 
