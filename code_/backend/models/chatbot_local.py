@@ -1,5 +1,6 @@
 """Chatbot wrappers for locally hosted models (llama.cpp server, in-process llama-cpp, Ollama)."""
 
+import pathlib
 from typing import override
 
 from backend.models._chatbot_base import _BaseChatbot
@@ -25,10 +26,10 @@ class ChatbotLocal(_LangchainChatbot):
     def __init__(self, kwargs: dict) -> None:
         """Create an instance of ChatbotLocal."""
         config = dict(kwargs)
-        model: str = config.pop("model")
+        self.model_name: str = config.pop("model")
         base_url: str = config.pop("base_url")
         self._model = ChatOpenAI(
-            model=model,
+            model=self.model_name,
             base_url=base_url,
             api_key=SecretStr("local"),  # llama.cpp server does not validate the key
             **config,
@@ -45,6 +46,7 @@ class ChatbotLlamaCpp(_LangchainChatbot):
 
         config = dict(kwargs)
         model_path: str = config.pop("model_path")
+        self.model_name: str = pathlib.Path(model_path).name  # the GGUF file name identifies the model
         self._model = ChatLlamaCpp(model_path=model_path, **config)
 
 
@@ -56,5 +58,5 @@ class ChatbotOllama(_LangchainChatbot):
         from langchain_ollama import ChatOllama
 
         config = dict(kwargs)
-        model: str = config.pop("model")
-        self._model = ChatOllama(model=model, **config)  # base_url defaults to http://localhost:11434
+        self.model_name: str = config.pop("model")
+        self._model = ChatOllama(model=self.model_name, **config)  # base_url defaults to http://localhost:11434

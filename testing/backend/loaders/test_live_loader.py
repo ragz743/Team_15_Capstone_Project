@@ -96,6 +96,12 @@ def test_live_query_result_from_tuple_valid() -> None:
     assert result.wind_dir == 180.0
 
 
+def test_live_query_result_from_tuple_rejects_wrong_row_shape() -> None:
+    """Reject database rows that do not match the live measurement schema."""
+    with pytest.raises(ValueError, match="unrecognized tuple structure"):
+        LiveQueryResult.from_tuple((datetime(2026, 9, 16), 70.0))
+
+
 def test_live_query_result_from_dict_valid() -> None:
     """Check converting dictionary into LiveQueryResult."""
     now = datetime(2026, 9, 16, 14, 30, 0)

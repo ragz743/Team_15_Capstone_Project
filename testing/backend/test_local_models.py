@@ -30,6 +30,7 @@ def test_chatbot_passes_kwargs_and_returns_text(wrapper, target, kwargs) -> None
         chatbot = wrapper(dict(kwargs))
         mock_cls.assert_called_once_with(**kwargs)
         assert isinstance(chatbot, _BaseChatbot)
+        assert chatbot.model_name == (kwargs.get("model") or kwargs["model_path"])  # used by workflow logging
         assert chatbot.invoke(["say hello"]) == "hello world!"
         mock_cls.return_value.invoke.assert_called_once_with(["say hello"])
 

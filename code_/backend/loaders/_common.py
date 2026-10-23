@@ -85,14 +85,22 @@ def _format_cell(value: object) -> str:
     return str(value)
 
 
-def to_markdown_table(tuples: Sequence[NamedTuple], units: list[str]) -> str:
-    """Convert a collection of named tuple object into a markdown table."""
+def to_markdown_table(
+    tuples: Sequence[NamedTuple],
+    units: Sequence[str],
+) -> str:
+    """Render every named tuple field using the supplied units."""
+    if not tuples:
+        return ""
+
     if len(tuples[0]) != len(units):
         msg = f"data and unit mismatch:\ndata='{tuples}'\nunits='{units}'"
         raise ValueError(msg)
-    columns = zip(tuples[0]._fields, units, strict=True)
-    header = "| " + " | ".join(f"{col}{' in ' + unit if unit else ''}" for col, unit in columns) + " |\n"
-    divider = "| " + " | ".join(itertools.repeat("---", len(units))) + " |\n"
-    rows = ["| " + " | ".join(map(str, row)) + " |\n" for row in tuples]
+
+    fields = tuples[0]._fields
+    header_parts = [f"{name} in {unit}" if unit else f"{name}" for name, unit in zip(fields, units, strict=True)]
+    header = "| " + " | ".join(header_parts) + " |\n"
+    divider = "| " + " | ".join(itertools.repeat("---", len(fields))) + " |\n"
+    rows = ["| " + " | ".join(_format_cell(value) for value in row) + " |\n" for row in tuples]
 
     return header + divider + "".join(rows)
