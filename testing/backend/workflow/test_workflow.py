@@ -57,23 +57,22 @@ def test_chatbot_workflow(
 ) -> None:
     """Test the chatbot workflow end to end."""
     test_cases = (
-        (0, "How's the frost risk looking for my sweet cherries this week?", (46.7319, -117.1510), "whitman"),
-        (1, "How much rain did we get yesterday?", (46.7319, -117.1510), "whitman"),
-        (2, "How's frost looking?", (46.7319, -117.1510), "whitman"),
-        (3, "What was the high temperature yesterday?", (46.7319, -117.1510), "whitman"),
-        (4, "Should I irrigate my grapes tomorrow?", (46.7319, -117.1510), "whitman"),
-        (5, "Any pest risks for apples right now?", (46.7319, -117.1510), "whitman"),
-        (6, "What's the 7-day weather outlook?", (46.7319, -117.1510), "whitman"),
-        (7, "How's the cattle comfort index today?", (46.7319, -117.1510), "whitman"),
-        (8, "When should I spray my cherries?", (46.7319, -117.1510), "whitman"),
+        ("How's the frost risk looking for my sweet cherries this week?", (46.7319, -117.1510), "whitman"),
+        ("How much rain did we get yesterday?", (46.7319, -117.1510), "whitman"),
+        ("How's frost looking?", (46.7319, -117.1510), "whitman"),
+        ("What was the high temperature yesterday?", (46.7319, -117.1510), "whitman"),
+        ("Should I irrigate my grapes tomorrow?", (46.7319, -117.1510), "whitman"),
+        ("Any pest risks for apples right now?", (46.7319, -117.1510), "whitman"),
+        ("What's the 7-day weather outlook?", (46.7319, -117.1510), "whitman"),
+        ("How's the cattle comfort index today?", (46.7319, -117.1510), "whitman"),
+        ("When should I spray my cherries?", (46.7319, -117.1510), "whitman"),
     )
 
     async def run_test_cases() -> float:
         total_elapsed_seconds = 0.0
-        for session_id, user_input, coords, county in test_cases:
+        for user_input, coords, county in test_cases:
             start_time_ns = perf_counter_ns()
             response = await workflow.run(
-                str(session_id),
                 user_input,
                 location_coord=coords,
                 county=county,

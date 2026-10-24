@@ -17,7 +17,6 @@ from backend.workflow.workflow import (
     QueryClassification,
     QueryType,
 )
-from langgraph.checkpoint.memory import InMemorySaver
 from mysql.connector.errors import ProgrammingError
 
 
@@ -125,11 +124,9 @@ def test_workflow_initialization_builds_graph_with_injected_dependencies(
     monkeypatch.setattr(workflow_module, "AWNForecastDatabaseConnection", lambda: next(database_factories))
     monkeypatch.setattr(workflow_module, "ClassifierChatbot", lambda: "classifier")
     monkeypatch.setattr(workflow_module.ModelFactory, "load_from_models_yaml", lambda: ("embedding", "chatbot"))
-    checkpoint = InMemorySaver()
 
-    chatbot = ChatbotWorkflow(checkpointer=checkpoint)
+    chatbot = ChatbotWorkflow()
 
-    assert chatbot.checkpointer is checkpoint
     assert chatbot.classifier_chat_model == "classifier"
     assert chatbot.workflow_chat_model == "chatbot"
     assert chatbot.current_db is database_instances[0]
@@ -173,7 +170,7 @@ def test_run_passes_station_and_user_question_to_graph() -> None:
     chatbot._nearest_station_search = cast(Any, lambda coords, county: 456)
     chatbot.graph = cast(Any, FakeGraph())
 
-    answer = asyncio.run(chatbot.run("0", "Question", (46.0, -117.0), "Whitman"))
+    answer = asyncio.run(chatbot.run("Question", (46.0, -117.0), "Whitman"))
 
     assert answer == "answer"
     assert chatbot.graph.initial_state["nearest_station_id"] == 456

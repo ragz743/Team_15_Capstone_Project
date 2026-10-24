@@ -14,8 +14,6 @@ from backend.loaders import _common
 from backend.model_factory import ModelFactory
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph, message, state
 from mysql.connector.errors import ProgrammingError
 from pydantic import BaseModel, Field
@@ -128,11 +126,9 @@ class ChatbotWorkflow:
 
     def __init__(
         self,
-        checkpointer: BaseCheckpointSaver | None = None,
         debug: bool = False,
     ):
         """ChatbotWorflow constructor."""
-        self.checkpointer = checkpointer or InMemorySaver()
         self._debug = debug
         self._query_handlers = {
             "current_weather": "_query_current",
@@ -158,7 +154,7 @@ class ChatbotWorkflow:
             if db.conn.is_connected():
                 db.conn.disconnect()
 
-    async def run(self, session_id: str, user_input: str, location_coord: tuple[float, float], county: str) -> str:
+    async def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
         """Asynchronously process user input through the graph and return a response."""
         nearest_station_id = self._nearest_station_search(
             location_coord,
@@ -182,11 +178,7 @@ class ChatbotWorkflow:
         # refer to docs. Worst case its random and no old convos are used.
         result = await self.graph.ainvoke(
             initial_state,
-            config={
-                "configurable": {
-                    "thread_id": session_id,
-                }
-            },
+            config={"configurable": {}},
         )
 
         # return last message in the chain
@@ -211,7 +203,7 @@ class ChatbotWorkflow:
             graph.add_edge(node, "_chatbot_summarize")
         graph.add_edge("_chatbot_summarize", END)
 
-        return graph.compile(checkpointer=self.checkpointer)
+        return graph.compile()
 
     def _nearest_station_search(self, location_coord: tuple[float, float], county: str) -> int:
         """Given a coordinate, find the nearest AWN station id to query against."""
