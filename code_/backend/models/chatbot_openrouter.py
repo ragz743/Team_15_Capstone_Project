@@ -1,6 +1,7 @@
 """A Wrapper for the langchain ChatOpenRouter class to be instantiated by the model factory."""
 
 import os
+from collections.abc import AsyncIterator
 
 from backend.models._chatbot_base import _BaseChatbot
 from langchain_openrouter import ChatOpenRouter
@@ -17,6 +18,18 @@ class ChatbotOpenRouter(_BaseChatbot):
             api_key=os.getenv("OPENROUTER_API_KEY"),  # type: ignore (can't get SecretStr type)
             **kwargs,
         )
+
+    async def astream(self, messages: list[str]) -> AsyncIterator[str]:
+        """Asynchronously stream the response in text chunks."""
+        async for chunk in self._model.astream(messages):
+            if isinstance(chunk.content, str):
+                if chunk.content:
+                    yield chunk.content
+            else:
+                for part in chunk.content:
+                    text = part if isinstance(part, str) else part.get("text", "")
+                    if text:
+                        yield text
 
     async def ainvoke(self, messages: list[str]) -> str:
         """Asynchronously send messages to the model and return the response."""

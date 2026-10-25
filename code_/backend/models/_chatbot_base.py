@@ -2,6 +2,7 @@
 
 import asyncio
 from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
 
 
 class _BaseChatbot(ABC):
@@ -13,6 +14,10 @@ class _BaseChatbot(ABC):
     async def ainvoke(self, messages: list[str]) -> str:
         """Asynchronously send messages to the model and return its response."""
         raise NotImplementedError
+
+    async def astream(self, messages: list[str]) -> AsyncIterator[str]:
+        """Asynchronously stream the response in text chunks; defaults to a single chunk."""
+        yield await self.ainvoke(messages)
 
     def invoke(self, messages: list[str]) -> str:
         """Invoke the model synchronously for backward compatibility.

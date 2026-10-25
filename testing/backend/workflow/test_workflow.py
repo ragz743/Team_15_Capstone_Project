@@ -71,17 +71,35 @@ def test_chatbot_workflow(
     async def run_test_cases() -> float:
         total_elapsed_seconds = 0.0
         for user_input, coords, county in test_cases:
+            first_chunk_found = False
+            elapsed_sec = -1
+            response = ""
             start_time_ns = perf_counter_ns()
-            response = await workflow.run(
+            async for chunk in workflow.run(
                 user_input,
                 location_coord=coords,
                 county=county,
-            )
-            elapsed_sec = (perf_counter_ns() - start_time_ns) / 1_000_000_000
-            total_elapsed_seconds += elapsed_sec
+            ):
+                # response = "".join(
+                #     [
+                #         chunk
+                #         async for chunk in workflow.run(
+                #             user_input,
+                #             location_coord=coords,
+                #             county=county,
+                #         )
+                #     ]
+                # )
+                # track time to first response chunk, not response finish
+                if not first_chunk_found:
+                    elapsed_sec = (perf_counter_ns() - start_time_ns) / 1_000_000_000
+                    total_elapsed_seconds += elapsed_sec
+                    first_chunk_found = True
+
+                response += chunk
 
             conversation_logger.info(
-                "### **Grower**: %s\n\n### **Chatbot ('%s' responded in %.4f sec)**:\n\n%s\n\n",
+                "### **Grower**: %s\n\n### **Chatbot ('%s' responded with first chunk in %.4f sec)**:\n\n%s\n\n",
                 user_input,
                 workflow.workflow_chat_model.model_name,
                 elapsed_sec,

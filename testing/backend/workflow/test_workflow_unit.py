@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from types import SimpleNamespace
 from typing import Any, NamedTuple, cast
 
@@ -56,11 +56,13 @@ class FakeGraph:
         self.initial_state: ChatState | None = None
         self.config: dict[str, Any] | None = None
 
-    async def ainvoke(self, initial_state: ChatState, config: dict[str, Any]) -> dict[str, Any]:
-        """Record graph inputs and return a deterministic assistant message."""
+    async def astream(self, initial_state: ChatState, config: dict[str, Any], stream_mode: str) -> AsyncIterator[str]:
+        """Record graph inputs and stream deterministic custom chunks."""
         self.initial_state = initial_state
         self.config = config
-        return {"messages": [SimpleNamespace(content="answer")]}
+        self.stream_mode = stream_mode
+        for chunk in ("ans", "wer"):  # codespell:ignore
+            yield chunk
 
 
 class SampleRow(NamedTuple):
@@ -165,17 +167,21 @@ def test_close_disconnects_only_connected_databases() -> None:
 
 
 def test_run_passes_station_and_user_question_to_graph() -> None:
-    """Check run finds a station, invokes the graph, and returns its answer."""
+    """Check run finds a station, streams the graph, and yields its answer chunks."""
     chatbot = make_workflow()
     chatbot._nearest_station_search = cast(Any, lambda coords, county: 456)
     chatbot.graph = cast(Any, FakeGraph())
 
-    answer = asyncio.run(chatbot.run("Question", (46.0, -117.0), "Whitman"))
+    async def collect() -> list[str]:
+        return [chunk async for chunk in chatbot.run("Question", (46.0, -117.0), "Whitman")]
 
-    assert answer == "answer"
+    chunks = asyncio.run(collect())
+
+    assert chunks == ["ans", "wer"]  # codespell:ignore
     assert chatbot.graph.initial_state["nearest_station_id"] == 456
     assert chatbot.graph.initial_state["original_user_input"] == "Question"
-    assert chatbot.graph.config == {"configurable": {"thread_id": "TEMP_KEY_REPLACE_ME"}}
+    assert chatbot.graph.config == {"configurable": {}}
+    assert chatbot.graph.stream_mode == "custom"
 
 
 @pytest.mark.parametrize("rows", [[], iter(())])
@@ -442,20 +448,24 @@ def test_sub_queries_result_message_and_routing() -> None:
     assert [send.node for send in sends] == ["_query_current", "_query_miscellaneous"]
 
 
-def test_summarize_uses_context_and_returns_assistant_message() -> None:
-    """Pass accumulated context to the model and return the resulting answer."""
+def test_summarize_streams_chunks_and_returns_assistant_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass accumulated context to the model, emit each chunk, and return the joined answer."""
     chatbot = make_workflow()
     prompts: list[str] = []
+    emitted: list[str] = []
+    monkeypatch.setattr(workflow_module, "get_stream_writer", lambda: emitted.append)
 
-    async def ainvoke(messages):
+    async def astream(messages):
         prompts.append(messages[0])
-        return "summary"
+        for chunk in ("sum", "mary"):
+            yield chunk
 
-    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(ainvoke=ainvoke))
+    chatbot.workflow_chat_model = cast(Any, SimpleNamespace(astream=astream))
     state = make_state()
     state["messages"] = [("user", "original question"), ("assistant", "72 F")]
 
     assert asyncio.run(chatbot._chatbot_summarize(state)) == {"messages": [("assistant", "summary")]}
+    assert emitted == ["sum", "mary"]
     assert "72 F" in prompts[0]
     assert "original question" in prompts[0]
 

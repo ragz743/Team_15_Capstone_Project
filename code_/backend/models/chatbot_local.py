@@ -1,5 +1,6 @@
 """Chatbot wrapper for a local llama.cpp server (OpenAI-compatible API)."""
 
+from collections.abc import AsyncIterator
 from typing import override
 
 from backend.models._chatbot_base import _BaseChatbot
@@ -20,6 +21,19 @@ class ChatbotLocal(_BaseChatbot):
             api_key=SecretStr("local"),  # llama.cpp server does not validate the key
             **kwargs,
         )
+
+    @override
+    async def astream(self, messages: list[str]) -> AsyncIterator[str]:
+        """Asynchronously stream the local model response in text chunks."""
+        async for chunk in self._model.astream(messages):
+            if isinstance(chunk.content, str):
+                if chunk.content:
+                    yield chunk.content
+            else:
+                for part in chunk.content:
+                    text = part if isinstance(part, str) else part.get("text", "")
+                    if text:
+                        yield text
 
     @override
     async def ainvoke(self, messages: list[str]) -> str:

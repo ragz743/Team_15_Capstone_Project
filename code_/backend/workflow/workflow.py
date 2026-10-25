@@ -1,6 +1,7 @@
 """AgWeatherNet Chatbot Workflow."""
 
 import logging
+from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Annotated, Any, Literal, Sequence, TypedDict
 
@@ -14,6 +15,7 @@ from backend.loaders import _common
 from backend.model_factory import ModelFactory
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph, message, state
 from mysql.connector.errors import ProgrammingError
 from pydantic import BaseModel, Field
@@ -154,8 +156,8 @@ class ChatbotWorkflow:
             if db.conn.is_connected():
                 db.conn.disconnect()
 
-    async def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
-        """Asynchronously process user input through the graph and return a response."""
+    async def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> AsyncIterator[str]:
+        """Asynchronously process user input through the graph, yielding the response text as it streams."""
         nearest_station_id = self._nearest_station_search(
             location_coord,
             county,
@@ -173,16 +175,13 @@ class ChatbotWorkflow:
             "nearest_station_id": nearest_station_id,
         }
 
-        # TODO (Gavin): Figure out session key persist
-        # Should keep history of past convos if key same
-        # refer to docs. Worst case its random and no old convos are used.
-        result = await self.graph.ainvoke(
+        # "custom" mode yields only what nodes emit via the stream writer (summarizer chunks)
+        async for chunk in self.graph.astream(
             initial_state,
             config={"configurable": {}},
-        )
-
-        # return last message in the chain
-        return result["messages"][-1].content
+            stream_mode="custom",
+        ):
+            yield str(chunk)
 
     def _build_graph(self) -> state.CompiledStateGraph:
         """Create the graph with nodes, edges, and state."""
@@ -498,8 +497,12 @@ class ChatbotWorkflow:
         the provided context. If the context does not contain enough information,
         say so clearly.
         """
-        answer = await self.workflow_chat_model.ainvoke([prompt])
-        update = {"messages": [("assistant", answer)]}
+        writer = get_stream_writer()
+        chunks: list[str] = []
+        async for text in self.workflow_chat_model.astream([prompt]):
+            chunks.append(text)
+            writer(text)
+        update = {"messages": [("assistant", "".join(chunks))]}
         self._log_state_update("_chatbot_summarize", state, update)
         return update
 
