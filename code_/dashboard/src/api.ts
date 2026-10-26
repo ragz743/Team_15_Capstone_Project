@@ -1,4 +1,4 @@
-import type { Metrics, RangeKey, UserQuery, UsersPage } from "./types.ts";
+import type { Bucket, Metrics, RangeKey, UserQuery, UsersPage } from "./types.ts";
 
 export class ApiError extends Error {
   readonly status: number;
@@ -25,10 +25,26 @@ async function adminGet(path: string, token: string, signal?: AbortSignal): Prom
   return response;
 }
 
-/** Fetch dashboard metrics for a range, authenticating with the admin token. */
-export async function fetchMetrics(range: RangeKey, token: string, signal?: AbortSignal): Promise<Metrics> {
-  const response = await adminGet(`/api/admin/metrics?range=${encodeURIComponent(range)}`, token, signal);
+/** Fetch dashboard metrics for a range at a daily, weekly, or monthly granularity. */
+export async function fetchMetrics(range: RangeKey, bucket: Bucket, token: string, signal?: AbortSignal): Promise<Metrics> {
+  const response = await adminGet(`/api/admin/metrics?${new URLSearchParams({ range, bucket })}`, token, signal);
   return (await response.json()) as Metrics;
+}
+
+/** Save a browser download of a response body (the token travels in a header, so a plain link cannot be used). */
+async function saveDownload(response: Response, filename: string): Promise<void> {
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Download the time series behind the charts as CSV. */
+export async function downloadMetricsCsv(range: RangeKey, bucket: Bucket, token: string): Promise<void> {
+  const response = await adminGet(`/api/admin/metrics.csv?${new URLSearchParams({ range, bucket })}`, token);
+  await saveDownload(response, `awn-llm-usage-${range}-by-${bucket}.csv`);
 }
 
 function userParams(range: RangeKey, query: UserQuery): URLSearchParams {
@@ -56,10 +72,5 @@ export async function fetchUsers(
 /** Download the users in the table, every page, as CSV (the header carries the token, so a plain link cannot be used). */
 export async function downloadUsersCsv(range: RangeKey, token: string, query: UserQuery): Promise<void> {
   const response = await adminGet(`/api/admin/users.csv?${userParams(range, query)}`, token);
-  const url = URL.createObjectURL(await response.blob());
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = `awn-llm-cost-by-user-${range}.csv`;
-  link.click();
-  URL.revokeObjectURL(url);
+  await saveDownload(response, `awn-llm-cost-by-user-${range}.csv`);
 }

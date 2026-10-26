@@ -6,6 +6,7 @@ Run locally (from repo root, with venv active):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -13,7 +14,8 @@ from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 import dotenv
-from backend.analytics import admin_api
+from backend.analytics import admin_api, retrieval_quality
+from backend.analytics.budget import BudgetConfig, BudgetMonitor
 from backend.analytics.metering import MeteredEmbedding, RequestUsage
 from backend.analytics.usage_store import UsageStore, UsageTracker
 from backend.databases.pgvector import PgVectorConnection
@@ -122,6 +124,27 @@ def _build_usage_store() -> UsageStore | None:
     return store
 
 
+def _check_quality_if_due(store: UsageStore) -> None:
+    """Run the sampled retrieval quality check when the last run is older than AWN_QUALITY_CHECK_HOURS (24)."""
+    every_hours = float(os.getenv("AWN_QUALITY_CHECK_HOURS") or 24)
+    if _retriever is None or not retrieval_quality.is_due(store.latest_quality_run_at(), every_hours):
+        return
+    run = retrieval_quality.run_and_record(_retriever.find_context, store)
+    logger.info("Retrieval quality check: %d of %d sample questions found the right data", run.passed, run.samples)
+
+
+async def _hourly_checks(monitor: BudgetMonitor, store: UsageStore) -> None:
+    """Check the monthly LLM budget and the retrieval quality schedule now and then every hour."""
+    interval = int(os.getenv("AWN_BUDGET_CHECK_SECONDS") or 3600)
+    while True:
+        for check in (monitor.check, lambda: _check_quality_if_due(store)):
+            try:
+                await asyncio.to_thread(check)
+            except Exception:
+                logger.warning("Scheduled dashboard check failed, will retry next hour", exc_info=True)
+        await asyncio.sleep(interval)
+
+
 def _client_id(value: str | None) -> str | None:
     return value if value is not None and _CLIENT_ID_PATTERN.fullmatch(value) else None
 
@@ -141,6 +164,10 @@ async def lifespan(app: FastAPI):
     usage_store = _build_usage_store()
     admin_api.set_usage_store(usage_store)
     _usage_tracker = UsageTracker(usage_store)
+    budget_task = None
+    if usage_store is not None:
+        monitor = BudgetMonitor(usage_store, BudgetConfig.from_env(), admin_api.dashboard_timezone())
+        budget_task = asyncio.create_task(_hourly_checks(monitor, usage_store))
     try:
         _retriever, _chatbot, _chatbot_model_name, _embedding_model_name = _build_retriever()
         logger.info(
@@ -155,6 +182,8 @@ async def lifespan(app: FastAPI):
         _chatbot_model_name = ""
         _embedding_model_name = ""
     yield
+    if budget_task is not None:
+        budget_task.cancel()
     if usage_store is not None:
         usage_store.close()
 

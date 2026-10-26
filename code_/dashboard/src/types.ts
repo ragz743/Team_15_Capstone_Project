@@ -1,44 +1,81 @@
 /** Shapes returned by GET /api/admin/metrics (see backend/analytics/usage_store.py). */
 
 export type RangeKey = "7d" | "30d" | "90d" | "12m";
+export type Bucket = "day" | "week" | "month";
 
+/**
+ * A "call" is one end to end question and answer. "Model requests" are the chat and embedding
+ * requests made inside a call. "Users" are logged-in users; sign-in is required to use the chatbot, so
+ * unidentified calls (no user id) point to a problem in how the chat app sends the user id.
+ * A session is one login session; it is successful when every call in it was answered.
+ */
 export type Summary = {
-  requests: number;
-  unidentified_requests: number;
-  failed_requests: number;
+  calls: number;
+  unidentified_calls: number;
+  failed_calls: number;
   error_rate: number | null;
   users: number;
   sessions: number;
+  successful_sessions: number;
+  successful_session_rate: number | null;
   avg_sessions_per_user: number | null;
-  avg_requests_per_session: number | null;
-  chat_calls: number;
-  embedding_calls: number;
-  llm_calls: number;
+  avg_calls_per_session: number | null;
+  model_requests: number;
   cost_usd: number;
   avg_cost_per_user: number | null;
   avg_cost_per_call: number | null;
-  avg_cost_per_request: number | null;
+  cost_per_1000_calls: number | null;
   latency_p50_ms: number | null;
   latency_p95_ms: number | null;
+  within_target_rate: number | null;
 };
 
 export type SeriesPoint = {
   bucket: string; // YYYY-MM-DD, start of the day / week / month in the dashboard timezone
-  requests: number;
-  failed_requests: number;
+  calls: number;
+  unidentified_calls: number;
+  failed_calls: number;
   error_rate: number | null;
   users: number;
+  sessions: number;
+  successful_sessions: number;
+  successful_session_rate: number | null;
   avg_sessions_per_user: number | null;
-  chat_calls: number;
-  embedding_calls: number;
-  llm_calls: number;
+  model_requests: number;
   cost_usd: number;
   avg_cost_per_user: number | null;
+  cost_per_1000_calls: number | null;
   latency_p50_ms: number | null;
   latency_p95_ms: number | null;
+  within_target_rate: number | null;
 };
 
-export type MonthPoint = SeriesPoint & { partial: boolean };
+export type QualityRun = {
+  run_at: string;
+  samples: number;
+  passed: number;
+  score: number | null;
+  is_demo: boolean;
+};
+
+export type QualityDetail = {
+  question: string;
+  source: "current" | "historical" | "forecast";
+  expected: string;
+  passed: boolean;
+  found: string[];
+  error: string | null;
+};
+
+export type Budget = {
+  month: string;
+  threshold_usd: number;
+  spent_usd: number;
+  used: number | null;
+  email_configured: boolean;
+  recipients: string;
+  alert: { attempted_at: string | null; delivered: boolean; error: string | null; recipients: string } | null;
+};
 
 export type ModelRow = {
   kind: "chat" | "embedding";
@@ -57,14 +94,16 @@ export type ModelRow = {
 };
 
 export type Metrics = {
-  range: { start: string; end: string; days: number; bucket: "day" | "week"; timezone: string };
+  range: { start: string; end: string; days: number; bucket: Bucket; timezone: string };
   includes_demo_data: boolean;
+  target_ms: number;
   summary: Summary;
   previous: Summary;
   series: SeriesPoint[];
-  months: MonthPoint[];
   by_model: ModelRow[];
   by_status: { status: string; requests: number }[];
+  quality: { runs: QualityRun[]; latest: (QualityRun & { details: QualityDetail[] }) | null };
+  budget: Budget;
 };
 
 export type UserRow = {

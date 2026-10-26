@@ -29,6 +29,9 @@
     - `docker compose --profile local_llm down` to bring down local model containers.
 
 ## Admin dashboard
+- the app, including the dashboard, will be deployed on an AWS EC2 instance; the same `docker compose up -d` setup applies there
 - the LLM usage dashboard is built into the frontend container and served at http://localhost:8080/admin/
 - add `AWN_ADMIN_TOKEN=<a long random string>` to `.env` to enable it; admins sign in with that token
 - usage tables are created automatically when the api starts, see `code_/dashboard/README.md` for details and configuration
+- the budget alert email (over $50 a month to weather@wsu.edu) is only sent once the `AWN_SMTP_*` settings are added to `.env`; this will be set up on EC2 (Amazon SES's SMTP interface is one option)
+- admin sign-in uses `AWN_ADMIN_TOKEN` until a proper admin login is set up on EC2

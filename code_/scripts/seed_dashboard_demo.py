@@ -1,6 +1,8 @@
 """Fill the usage tables with synthetic traffic so the admin dashboard can be previewed.
 
-Rows are flagged is_demo and the dashboard shows a "Demo data" badge while any are in range.
+Generates signed-in users (signing in is required to use the chatbot) with 2 day login sessions,
+and a daily retrieval quality check. Rows are flagged is_demo: the dashboard shows a "Demo data" badge while any
+are in range, and demo spending never counts toward the monthly budget alert.
 
     python -m scripts.seed_dashboard_demo            # add ~120 days of demo traffic
     python -m scripts.seed_dashboard_demo --clear    # remove all demo rows
@@ -13,25 +15,49 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import dotenv
+from backend.analytics.retrieval_quality import load_samples
 from backend.analytics.usage_store import UsageStore
 from backend.databases.pgvector import PgVectorConnection
+from psycopg.types.json import Jsonb
 
 # made up prices for the demo chat model, USD per 1M tokens, so cost charts have something to show
 _DEMO_CHAT_MODEL = ("demo/chat-model", 0.10, 0.40)
 _EMBEDDING_MODEL = ("openai/text-embedding-3-small", 0.02, 0.0)
 _EMBEDDING_CALLS_PER_REQUEST = 3  # one per vector store table
+_SESSION_LENGTH = timedelta(days=2)  # login sessions expire after 2 days
 
 
-def _clear(conn) -> int:
+def _clear(conn) -> tuple[int, int]:
     with conn.transaction():
-        deleted = conn.execute("DELETE FROM usage_requests WHERE is_demo").rowcount
-    return deleted
+        requests = conn.execute("DELETE FROM usage_requests WHERE is_demo").rowcount
+        runs = conn.execute("DELETE FROM usage_quality_runs WHERE is_demo").rowcount
+    return requests, runs
 
 
 def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
     now = datetime.now(UTC)
     user_pool = [f"demo-user-{i}" for i in range(max_daily_users * 6)]
     requests, calls = [], []
+
+    sessions: dict[str, tuple[str, datetime]] = {}  # user -> (login session id, expires at)
+    quality_runs = []
+
+    def login_session(user: str, at: datetime) -> str:
+        """Reuse the user's login session until it expires, then log them in again."""
+        current = sessions.get(user)
+        if current is None or current[1] <= at:
+            current = (f"demo-session-{uuid.uuid4().hex[:12]}", at + _SESSION_LENGTH)
+            sessions[user] = current
+        return current[0]
+
+    def visit(user: str, day_start: datetime, incident: bool) -> None:
+        started = day_start + timedelta(seconds=rng.uniform(6 * 3600, 22 * 3600))
+        for _ in range(max(1, round(rng.lognormvariate(1.0, 0.6)))):
+            started += timedelta(seconds=rng.uniform(20, 240))
+            if started >= now:
+                return
+            session = login_session(user, started)
+            _add_request(requests, calls, user, session, started, incident, rng)
 
     for day in range(days, 0, -1):
         day_start = (now - timedelta(days=day)).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -43,13 +69,9 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
 
         for user in rng.sample(user_pool[: int(len(user_pool) * growth) or 1], daily_users):
             for _ in range(rng.choices([1, 2, 3], weights=[70, 22, 8])[0]):
-                session = f"demo-session-{uuid.uuid4().hex[:12]}"
-                started = day_start + timedelta(seconds=rng.uniform(6 * 3600, 22 * 3600))
-                for _ in range(max(1, round(rng.lognormvariate(1.0, 0.6)))):
-                    started += timedelta(seconds=rng.uniform(20, 240))
-                    if started >= now:
-                        break
-                    _add_request(requests, calls, user, session, started, incident, rng)
+                visit(user, day_start, incident)
+
+        quality_runs.append(_quality_run(day_start + timedelta(hours=10), incident, rng))
 
     with conn.transaction(), conn.cursor() as cur:
         cur.executemany(
@@ -63,10 +85,33 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
             " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, true, %s, %s)",
             calls,
         )
+        cur.executemany(
+            "INSERT INTO usage_quality_runs (run_at, samples, passed, details, is_demo) VALUES (%s, %s, %s, %s, true)",
+            quality_runs,
+        )
     return len(requests)
 
 
-def _add_request(requests: list, calls: list, user: str, session: str, started, incident: bool, rng) -> None:
+def _quality_run(run_at: datetime, incident: bool, rng: random.Random) -> tuple:
+    """Build one daily retrieval quality check: most sample questions pass, fewer on a bad provider day."""
+    samples = load_samples()
+    misses = rng.choices([0, 1, 2], weights=[55, 35, 10])[0] + (rng.randint(2, 4) if incident else 0)
+    missed = set(rng.sample(range(len(samples)), min(misses, len(samples))))
+    details = [
+        {
+            "question": sample.question,
+            "source": sample.source,
+            "expected": sample.expected()[1],
+            "passed": i not in missed,
+            "found": [] if i in missed else [sample.expected()[1]],
+            "error": None,
+        }
+        for i, sample in enumerate(samples)
+    ]
+    return (run_at, len(samples), len(samples) - len(missed), Jsonb(details))
+
+
+def _add_request(requests: list, calls: list, user, session, started, incident: bool, rng) -> None:
     request_id = uuid.uuid4()
     roll = rng.random()
     failure_rate = 0.12 if incident else 0.015
@@ -82,7 +127,7 @@ def _add_request(requests: list, calls: list, user: str, session: str, started, 
         tokens = rng.randint(8, 30)
         calls.append((request_id, started, "embedding", model, tokens, 0, True, tokens * embed_in / 1e6, 40, True))
 
-    chat_latency = int(rng.lognormvariate(math.log(2_400 if incident else 1_400), 0.45))
+    chat_latency = int(rng.lognormvariate(math.log(4_200 if incident else 1_400), 0.45))
     if status != "error":
         model, price_in, price_out = _DEMO_CHAT_MODEL
         tokens_in, tokens_out = rng.randint(1_800, 4_200), rng.randint(60, 320)
@@ -106,7 +151,7 @@ def _add_request(requests: list, calls: list, user: str, session: str, started, 
         )
 
     latency = chat_latency + rng.randint(150, 600)
-    requests.append((request_id, user, session if rng.random() > 0.02 else None, started, latency, status, error))
+    requests.append((request_id, user, session, started, latency, status, error))
 
 
 def main() -> None:
@@ -125,10 +170,11 @@ def main() -> None:
         conn = db.conn
         conn.autocommit = True
         if args.clear:
-            print(f"Removed {_clear(conn)} demo requests.")
+            requests, runs = _clear(conn)
+            print(f"Removed {requests} demo calls and {runs} demo quality checks.")
             return
         created = _seed(conn, args.days, args.users, random.Random(args.seed))
-        print(f"Added {created} demo requests over {args.days} days. Remove them with --clear.")
+        print(f"Added {created} demo calls over {args.days} days. Remove them with --clear.")
 
 
 if __name__ == "__main__":

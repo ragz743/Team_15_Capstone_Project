@@ -1,3 +1,4 @@
+import { Table, TableBody, TableCell, TableContainer, TableHead, TableRow, TableSortLabel } from "@mui/material";
 import type { ReactNode } from "react";
 
 export type Column = {
@@ -18,61 +19,57 @@ type DataTableProps = {
   /** The column currently sorted, shown with an arrow and announced via aria-sort. */
   sort?: SortState;
   onSort?: (key: string) => void;
+  /** Cap the height and scroll inside the table (used for chart table views). */
+  maxHeight?: number;
 };
 
-/** Plain table: the accessible twin of every chart, and the form for many-column data. */
-export default function DataTable({ caption, columns, rows, empty = "No data in this range.", sort, onSort }: DataTableProps) {
+/** MUI table: the accessible twin of every chart, and the form for many-column data. */
+export default function DataTable({ caption, columns, rows, empty = "No data in this range.", sort, onSort, maxHeight }: DataTableProps) {
   return (
-    <div className="table-scroll">
-      <table className="data-table">
-        <caption className="visually-hidden">{caption}</caption>
-        <thead>
-          <tr>
+    <TableContainer sx={maxHeight ? { maxHeight } : undefined}>
+      <Table size="small" stickyHeader={Boolean(maxHeight)} aria-label={caption}>
+        <TableHead>
+          <TableRow>
             {columns.map((c) => {
               const active = sort?.key === c.key;
-              const sortable = c.sortable && onSort;
               return (
-                <th
+                <TableCell
                   key={c.key}
-                  scope="col"
-                  className={c.numeric ? "numeric" : undefined}
-                  aria-sort={sortable ? (active ? (sort.direction === "asc" ? "ascending" : "descending") : "none") : undefined}
+                  align={c.numeric ? "right" : "left"}
+                  sortDirection={c.sortable && onSort ? (active ? sort.direction : false) : undefined}
                 >
-                  {sortable ? (
-                    <button type="button" className={active ? "sort-button is-sorted" : "sort-button"} onClick={() => onSort(c.key)}>
+                  {c.sortable && onSort ? (
+                    <TableSortLabel active={active} direction={active ? sort.direction : "asc"} onClick={() => onSort(c.key)}>
                       {c.label}
-                      <span className="sort-indicator" aria-hidden="true">
-                        {active ? (sort.direction === "asc" ? "↑" : "↓") : "↕"}
-                      </span>
-                    </button>
+                    </TableSortLabel>
                   ) : (
                     c.label
                   )}
-                </th>
+                </TableCell>
               );
             })}
-          </tr>
-        </thead>
-        <tbody>
+          </TableRow>
+        </TableHead>
+        <TableBody>
           {rows.length === 0 ? (
-            <tr>
-              <td colSpan={columns.length} className="empty-cell">
+            <TableRow>
+              <TableCell colSpan={columns.length} align="center" sx={{ color: "text.secondary", py: 3 }}>
                 {empty}
-              </td>
-            </tr>
+              </TableCell>
+            </TableRow>
           ) : (
             rows.map((row, i) => (
-              <tr key={i}>
+              <TableRow key={i} hover>
                 {columns.map((c) => (
-                  <td key={c.key} className={c.numeric ? "numeric" : undefined}>
+                  <TableCell key={c.key} align={c.numeric ? "right" : "left"} sx={c.numeric ? { fontVariantNumeric: "tabular-nums" } : undefined}>
                     {row[c.key]}
-                  </td>
+                  </TableCell>
                 ))}
-              </tr>
+              </TableRow>
             ))
           )}
-        </tbody>
-      </table>
-    </div>
+        </TableBody>
+      </Table>
+    </TableContainer>
   );
 }

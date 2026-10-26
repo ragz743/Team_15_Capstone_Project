@@ -119,6 +119,19 @@ class Retriever:
                     return {key: value}
         return None
 
+    def find_context(self, question: str, filter: dict | None = None) -> list[tuple[str, list[Document]]]:
+        """Return the documents each vector store found for a question, as (table name, documents) pairs.
+
+        When `filter` is omitted, it is inferred from any station or county named in the question.
+        Used by `retrieve` and by the sampled retrieval quality check.
+        """
+        if filter is None:
+            filter = self._detect_filter(question)
+        return [
+            (store.table, store.similarity_search(question, k=_SEARCH_K, filter=filter))
+            for store in self._vector_stores
+        ]
+
     # Queries _vector_stores and assembles a labeled context ([Historical Data],
     # [Current Conditions], [Forecast Data]) so the LLM knows what type of data
     # it's reading
@@ -134,14 +147,10 @@ class Retriever:
                 the question.
 
         """
-        if filter is None:
-            filter = self._detect_filter(question)
-
         sections: list[str] = []
-        for store in self._vector_stores:
-            docs: list[Document] = store.similarity_search(question, k=_SEARCH_K, filter=filter)
+        for table, docs in self.find_context(question, filter):
             if docs:
-                label = _TABLE_LABELS.get(store.table, store.table)
+                label = _TABLE_LABELS.get(table, table)
                 content = "\n\n".join(doc.page_content for doc in docs)
                 sections.append(f"[{label}]\n{content}")
 

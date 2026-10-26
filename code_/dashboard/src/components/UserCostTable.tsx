@@ -1,3 +1,17 @@
+import DownloadIcon from "@mui/icons-material/Download";
+import SearchIcon from "@mui/icons-material/Search";
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  InputAdornment,
+  Stack,
+  TablePagination,
+  TextField,
+  Typography,
+} from "@mui/material";
 import { useEffect, useId, useState } from "react";
 import { downloadUsersCsv, fetchUsers } from "../api";
 import { formatCount, formatPercent, formatUsd } from "../format";
@@ -18,13 +32,12 @@ type UserCostTableProps = {
 /** Table columns and the server field each one sorts by. Share of cost sorts the same way as cost. */
 const COLUMNS: (Column & { sortField: UserSortField })[] = [
   { key: "user", label: "User", sortable: true, sortField: "user_id" },
-  { key: "questions", label: "Questions", numeric: true, sortable: true, sortField: "requests" },
+  { key: "calls", label: "Calls", numeric: true, sortable: true, sortField: "requests" },
   { key: "sessions", label: "Sessions", numeric: true, sortable: true, sortField: "sessions" },
-  { key: "calls", label: "LLM calls", numeric: true, sortable: true, sortField: "llm_calls" },
   { key: "tokens", label: "Tokens in / out", numeric: true, sortable: true, sortField: "total_tokens" },
   { key: "cost", label: "LLM cost", numeric: true, sortable: true, sortField: "cost_usd" },
   { key: "share", label: "Share of cost", numeric: true, sortable: true, sortField: "cost_usd" },
-  { key: "perQuestion", label: "Cost per question", numeric: true, sortable: true, sortField: "avg_cost_per_request" },
+  { key: "perCall", label: "Cost per call", numeric: true, sortable: true, sortField: "avg_cost_per_request" },
   { key: "lastActive", label: "Last active", numeric: true, sortable: true, sortField: "last_seen" },
 ];
 
@@ -40,15 +53,14 @@ function row(user: UserRow) {
         {user.user_id}
       </span>
     ) : (
-      <span className="muted">Unidentified (no user id)</span>
+      <span className="muted">Unidentified (missing user ID)</span>
     ),
-    questions: formatCount(user.requests),
+    calls: formatCount(user.requests),
     sessions: user.user_id ? formatCount(user.sessions) : "—",
-    calls: formatCount(user.llm_calls),
     tokens: `${formatCount(user.input_tokens)} / ${formatCount(user.output_tokens)}`,
     cost: formatUsd(user.cost_usd),
     share: formatPercent(user.cost_share),
-    perQuestion: formatUsd(user.avg_cost_per_request),
+    perCall: formatUsd(user.avg_cost_per_request),
     lastActive: user.last_seen ? lastActive.format(new Date(user.last_seen)) : "—",
   };
 }
@@ -120,10 +132,10 @@ export default function UserCostTable({ range, token, refreshCount, periodLabel 
   const searching = search !== "";
   const rows = (page?.users ?? []).map(row);
   const lastPage = page !== null && offset + PAGE_SIZE >= matched;
-  // the unidentified group has no id to search for, so it only appears in the unfiltered list
+  // unidentified calls have no user id to search for, so their row only appears in the unfiltered list
   if (page?.unidentified && lastPage && !searching) rows.push(row(page.unidentified));
 
-  let subtitle = "Each user's questions, LLM calls, and cost";
+  let subtitle = "Each logged-in user's calls, sessions, and spending";
   if (page && searching) {
     subtitle = `${formatCount(matched)} of ${formatCount(total)} users match “${search}”`;
   } else if (page && total > 0) {
@@ -135,78 +147,99 @@ export default function UserCostTable({ range, token, refreshCount, periodLabel 
   }
 
   return (
-    <section className="card" aria-labelledby="users-heading">
-      <header className="card-header">
-        <div>
-          <h3 id="users-heading">Users by LLM cost</h3>
-          <p className="card-subtitle" aria-live="polite">
-            {subtitle}
-          </p>
-        </div>
-        <button type="button" className="ghost-button" onClick={() => void download()} disabled={downloading || matched === 0}>
-          {downloading ? "Preparing…" : searching ? "Download matches (CSV)" : "Download CSV"}
-        </button>
-      </header>
+    <Card component="section" aria-labelledby="users-heading">
+      <CardContent>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={{ xs: 1, sm: 2 }}
+          sx={{ justifyContent: "space-between", alignItems: { xs: "stretch", sm: "flex-start" }, mb: 1.5 }}
+        >
+          <div>
+            <Typography id="users-heading" variant="h3">
+              Users by LLM cost
+            </Typography>
+            <Typography className="card-subtitle" variant="body2" color="text.secondary" aria-live="polite">
+              {subtitle}
+            </Typography>
+          </div>
+          <Button
+            variant="outlined"
+            startIcon={<DownloadIcon />}
+            onClick={() => void download()}
+            disabled={downloading || matched === 0}
+            sx={{ flexShrink: 0 }}
+          >
+            {downloading ? "Preparing…" : searching ? "Download matches (CSV)" : "Download CSV"}
+          </Button>
+        </Stack>
 
-      <div className="table-toolbar">
-        <label htmlFor={searchId} className="visually-hidden">
-          Search users
-        </label>
-        <input
+        <TextField
           id={searchId}
           type="search"
-          className="search-input"
-          placeholder="Search by user id"
+          size="small"
+          placeholder="Search by user ID"
           autoComplete="off"
-          spellCheck={false}
-          maxLength={64}
           value={searchInput}
           onChange={(event) => setSearchInput(event.target.value)}
+          sx={{ width: { xs: "100%", sm: 320 }, mb: 1 }}
+          slotProps={{
+            htmlInput: { maxLength: 64, spellCheck: false, "aria-label": "Search users" },
+            input: {
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            },
+          }}
         />
-      </div>
 
-      {error && (
-        <p className="note note-warning" role="alert">
-          {error}
-        </p>
-      )}
-
-      {page && total === 0 && page.unidentified && (
-        <p className="note note-warning" role="note">
-          <strong>No user ids recorded.</strong> All {formatCount(page.unidentified.requests)} questions in this range arrived
-          without a user id, so cost cannot be split by user. The chat app needs to send an <code>X-AWN-User-Id</code> with
-          each question.
-        </p>
-      )}
-
-      <div className={loading && page ? "is-refreshing" : undefined} aria-busy={loading}>
-        {page ? (
-          <DataTable
-            caption="LLM cost by user"
-            empty={searching ? `No users match “${search}”.` : "No questions recorded in this range yet."}
-            columns={COLUMNS}
-            rows={rows}
-            sort={sort ?? undefined}
-            onSort={changeSort}
-          />
-        ) : (
-          !error && <p className="muted loading-note">Loading users…</p>
+        {error && (
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            {error}
+          </Alert>
         )}
-      </div>
 
-      {matched > PAGE_SIZE && (
-        <nav className="pager" aria-label="Users pages">
-          <button type="button" className="ghost-button" disabled={offset === 0 || loading} onClick={() => setOffset(Math.max(0, offset - PAGE_SIZE))}>
-            Previous
-          </button>
-          <span className="muted">
-            {formatCount(offset + 1)}–{formatCount(Math.min(offset + PAGE_SIZE, matched))} of {formatCount(matched)} users
-          </span>
-          <button type="button" className="ghost-button" disabled={lastPage || loading} onClick={() => setOffset(offset + PAGE_SIZE)}>
-            Next
-          </button>
-        </nav>
-      )}
-    </section>
+        {page && total === 0 && page.unidentified && (
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            <strong>No user IDs recorded.</strong> All {formatCount(page.unidentified.requests)} calls in this range arrived
+            without a user ID, so spending cannot be split by user. The chat app needs to send the signed-in user&rsquo;s ID{" "}
+            <code>X-AWN-User-Id</code> and login session ID <code>X-AWN-Session-Id</code> with each call.
+          </Alert>
+        )}
+
+        <Box sx={{ opacity: loading && page ? 0.55 : 1, transition: "opacity 160ms ease" }} aria-busy={loading}>
+          {page ? (
+            <DataTable
+              caption="LLM cost by user"
+              empty={searching ? `No users match “${search}”.` : "No calls recorded in this range yet."}
+              columns={COLUMNS}
+              rows={rows}
+              sort={sort ?? undefined}
+              onSort={changeSort}
+            />
+          ) : (
+            !error && (
+              <Typography variant="body2" color="text.secondary" sx={{ py: 4, textAlign: "center" }}>
+                Loading users…
+              </Typography>
+            )
+          )}
+        </Box>
+
+        {matched > PAGE_SIZE && (
+          <TablePagination
+            component="div"
+            count={matched}
+            page={Math.floor(offset / PAGE_SIZE)}
+            rowsPerPage={PAGE_SIZE}
+            rowsPerPageOptions={[PAGE_SIZE]}
+            onPageChange={(_, next) => setOffset(next * PAGE_SIZE)}
+            labelDisplayedRows={({ from, to, count }) => `${formatCount(from)}–${formatCount(to)} of ${formatCount(count)} users`}
+            disabled={loading}
+          />
+        )}
+      </CardContent>
+    </Card>
   );
 }

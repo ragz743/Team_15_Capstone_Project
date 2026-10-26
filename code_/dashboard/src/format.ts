@@ -36,10 +36,10 @@ export function formatPercent(value: number | null | undefined): string {
   return `${percent > 0 && percent < 10 ? percent.toFixed(1) : Math.round(percent)}%`;
 }
 
-/** Milliseconds as "850 ms" or "1.8 s". */
+/** Milliseconds as "850 ms", "1.8 s", or "5 s". */
 export function formatMs(value: number | null | undefined): string {
   if (value == null) return EMPTY;
-  return value < 1000 ? `${Math.round(value)} ms` : `${(value / 1000).toFixed(1)} s`;
+  return value < 1000 ? `${Math.round(value)} ms` : `${Number((value / 1000).toFixed(1))} s`;
 }
 
 /** Averages such as sessions per user. */

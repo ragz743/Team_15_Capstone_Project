@@ -71,56 +71,99 @@ def _request(
     return usage
 
 
-def test_metrics_aggregate_cost_users_sessions_and_latency(store: UsageStore) -> None:
-    """KPIs combine requests and calls in the window and ignore older requests."""
+def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -> None:
+    """KPIs follow the client's definitions: calls, logged-in users, guests, login sessions, 5 second target."""
     for usage in [
         _request("u1", "s1", 0, "ok", 1_000),
         _request("u1", "s1", 0, "ok", 3_000),
         _request("u1", "s2", 1, "error", 200),
         _request("u2", "s3", 2, "ok", 2_000),
-        _request(None, None, 3, "empty", 500),
+        _request(None, None, 3, "empty", 500),  # a guest (not logged in)
         _request("u3", "s4", 40, "ok", 9_000),  # older than both the window and the previous period
     ]:
         store.record(usage)
 
-    metrics = store.metrics(7, _TZ, now=_NOW)
+    metrics = store.metrics(7, _TZ, target_ms=2_500, now=_NOW)
     summary = metrics["summary"]
 
     call_cost = 1_000 * 0.02 / 1e6 + (1_000 * 1.0 + 250 * 4.0) / 1e6
-    assert summary["requests"] == 5
-    assert summary["llm_calls"] == 10
-    assert (summary["chat_calls"], summary["embedding_calls"]) == (5, 5)
-    assert summary["cost_usd"] == pytest.approx(5 * call_cost)
-    assert summary["avg_cost_per_call"] == pytest.approx(call_cost / 2)
-    assert (summary["users"], summary["sessions"]) == (2, 3)
-    assert summary["avg_sessions_per_user"] == pytest.approx(1.5)
-    # cost per user only counts requests from identified users
-    assert summary["avg_cost_per_user"] == pytest.approx(4 * call_cost / 2)
-    assert summary["unidentified_requests"] == 1
+    assert (summary["calls"], summary["unidentified_calls"], summary["failed_calls"]) == (5, 1, 1)
     assert summary["error_rate"] == pytest.approx(0.2)
-    # response time only covers answered requests: 500, 1000, 2000, 3000
+    assert summary["model_requests"] == 10
+    assert summary["cost_usd"] == pytest.approx(5 * call_cost)
+    assert summary["avg_cost_per_call"] == pytest.approx(call_cost)  # one call = one end to end question
+    assert summary["cost_per_1000_calls"] == pytest.approx(1_000 * call_cost)
+    assert summary["users"] == 2  # logged-in users only; the guest is not a user
+    assert summary["avg_cost_per_user"] == pytest.approx(4 * call_cost / 2)
+    # login sessions: s1 (all answered), s2 (an error), s3 (all answered)
+    assert (summary["sessions"], summary["successful_sessions"]) == (3, 2)
+    assert summary["successful_session_rate"] == pytest.approx(2 / 3)
+    assert summary["avg_sessions_per_user"] == pytest.approx(1.5)
+    # answered calls took 500, 1000, 2000, 3000 ms; three are within the 2.5 s target
     assert summary["latency_p50_ms"] == pytest.approx(1_500)
-    assert metrics["previous"]["requests"] == 0  # the 40 day old request is outside both windows
+    assert summary["within_target_rate"] == pytest.approx(0.75)
+    assert metrics["previous"]["calls"] == 0
+    assert metrics["target_ms"] == 2_500
 
     assert len(metrics["series"]) == 7
-    assert metrics["series"][-1]["bucket"] == "2026-10-15"
-    assert metrics["series"][-1]["requests"] == 2
+    assert (metrics["series"][-1]["bucket"], metrics["series"][-1]["calls"]) == ("2026-10-15", 2)
     assert {row["status"]: row["requests"] for row in metrics["by_status"]} == {"ok": 3, "error": 1, "empty": 1}
     assert {(row["model"], row["priced"]) for row in metrics["by_model"]} == {("paid/chat", True), ("paid/embed", True)}
     assert not metrics["includes_demo_data"]
+    assert metrics["quality"] == {"runs": [], "latest": None}
+    assert metrics["budget"]["spent_usd"] == pytest.approx(5 * call_cost)  # October so far
 
 
-def test_metrics_months_cover_whole_calendar_months(store: UsageStore) -> None:
-    """Monthly buckets start at the first of the month and flag the current month as partial."""
+@pytest.mark.parametrize(("bucket", "expected"), [("week", 5), ("month", 2)])
+def test_metrics_series_granularity(store: UsageStore, bucket: str, expected: int) -> None:
+    """The time series can be grouped by day, week, or month."""
     store.record(_request("u1", "s1", 20, "ok", 1_000))  # 2026-09-25
     store.record(_request("u2", "s2", 1, "ok", 1_000))  # 2026-10-14
 
-    months = store.metrics(30, _TZ, now=_NOW)["months"]
+    series = store.metrics(30, _TZ, bucket=bucket, now=_NOW)["series"]  # type: ignore[arg-type]
 
-    assert [(m["bucket"], m["users"], m["partial"]) for m in months] == [
-        ("2026-09-01", 1, False),
-        ("2026-10-01", 1, True),
-    ]
+    assert len(series) == expected
+    assert sum(point["calls"] for point in series) == 2
+    if bucket == "month":
+        assert [(p["bucket"], p["users"]) for p in series] == [("2026-09-01", 1), ("2026-10-01", 1)]
+
+
+def test_quality_runs_appear_in_metrics(store: UsageStore) -> None:
+    """Saved retrieval quality runs are listed, with the latest run's question by question details."""
+    details = [{"question": "q", "source": "current", "expected": "Pullman", "passed": True, "found": ["Pullman"]}]
+    store.record_quality_run(samples=4, passed=3, details=details)
+
+    quality = store.metrics(7, _TZ)["quality"]
+
+    assert [(run["samples"], run["passed"], run["score"]) for run in quality["runs"]] == [(4, 3, 0.75)]
+    assert quality["latest"]["details"] == details
+    assert store.latest_quality_run_at() is not None
+
+
+def test_budget_alert_is_claimed_once_per_month(store: UsageStore) -> None:
+    """Only one caller wins the month's alert; a failed send can be retried after about an hour."""
+    month = _NOW.date().replace(day=1)
+    assert store.claim_budget_alert(month, 50.0, 51.0, "weather@wsu.edu")
+    assert not store.claim_budget_alert(month, 50.0, 52.0, "weather@wsu.edu")  # already claimed
+
+    store.finish_budget_alert(month, 50.0, delivered=False, error="SMTP down")
+    assert not store.claim_budget_alert(month, 50.0, 52.0, "weather@wsu.edu")  # too soon to retry
+    with store._connect() as conn:
+        conn.execute("UPDATE usage_budget_alerts SET attempted_at = now() - interval '2 hours'")
+    assert store.claim_budget_alert(month, 50.0, 53.0, "weather@wsu.edu")  # retry allowed
+
+    store.finish_budget_alert(month, 50.0, delivered=True, error=None)
+    with store._connect() as conn:
+        conn.execute("UPDATE usage_budget_alerts SET attempted_at = now() - interval '2 hours'")
+    assert not store.claim_budget_alert(month, 50.0, 60.0, "weather@wsu.edu")  # delivered: never again
+
+
+def test_month_spend_ignores_demo_data(store: UsageStore) -> None:
+    """Demo rows never count toward the real monthly budget."""
+    store.record(_request("u1", "s1", 1, "ok", 100))
+    with store._connect() as conn:
+        conn.execute("UPDATE usage_requests SET is_demo = true")
+    assert store.month_spend(_TZ, now=_NOW)[1] == 0.0
 
 
 def test_unpriced_models_are_recorded_at_zero_and_flagged(store: UsageStore) -> None:
@@ -147,7 +190,7 @@ def test_dashboard_reads_do_not_wait_for_the_write_connection(store: UsageStore)
         reader.join(timeout=10)
 
     assert not reader.is_alive(), "metrics waited on the write lock"
-    assert result["metrics"]["summary"]["requests"] == 1
+    assert result["metrics"]["summary"]["calls"] == 1
 
 
 def test_cost_source_distinguishes_billed_and_estimated_costs(store: UsageStore) -> None:

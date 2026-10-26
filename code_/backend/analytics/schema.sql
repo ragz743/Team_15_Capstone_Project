@@ -34,3 +34,26 @@ CREATE INDEX IF NOT EXISTS usage_llm_calls_request_idx ON usage_llm_calls (reque
 -- true when cost_usd is the amount the provider billed rather than a pricing.yaml estimate
 -- (added after the first release, so existing databases get the column here)
 ALTER TABLE usage_llm_calls ADD COLUMN IF NOT EXISTS cost_reported BOOLEAN NOT NULL DEFAULT false;
+
+-- one row per run of the sampled retrieval quality check (scripts/evaluate_retrieval.py)
+CREATE TABLE IF NOT EXISTS usage_quality_runs (
+    id BIGSERIAL PRIMARY KEY,
+    run_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    samples INTEGER NOT NULL,         -- questions evaluated
+    passed INTEGER NOT NULL,          -- questions whose expected weather data was retrieved
+    details JSONB NOT NULL DEFAULT '[]',  -- per question results, for the latest run table
+    is_demo BOOLEAN NOT NULL DEFAULT false
+);
+CREATE INDEX IF NOT EXISTS usage_quality_runs_run_at_idx ON usage_quality_runs (run_at);
+
+-- monthly budget alerts; one row per month and threshold so an alert is emailed at most once
+CREATE TABLE IF NOT EXISTS usage_budget_alerts (
+    month DATE NOT NULL,              -- first day of the month, dashboard timezone
+    threshold_usd NUMERIC(12, 2) NOT NULL,
+    spent_usd NUMERIC(16, 10) NOT NULL,
+    recipients TEXT NOT NULL,
+    attempted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    delivered BOOLEAN NOT NULL DEFAULT false,
+    error TEXT,
+    PRIMARY KEY (month, threshold_usd)
+);

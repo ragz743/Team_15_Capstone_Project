@@ -22,6 +22,7 @@ test("formats counts, percentages, and durations", () => {
   assert.equal(formatPercent(0), "0%");
   assert.equal(formatMs(850.4), "850 ms");
   assert.equal(formatMs(3309.4), "3.3 s");
+  assert.equal(formatMs(5000), "5 s");
 });
 
 test("relative change needs a non-zero baseline", () => {

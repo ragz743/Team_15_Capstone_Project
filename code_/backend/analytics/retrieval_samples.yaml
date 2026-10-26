@@ -1,0 +1,47 @@
+# Sample questions for the retrieval quality check (python -m scripts.evaluate_retrieval).
+#
+# Each question passes when the retriever finds weather records for the expected station (or county)
+# in the expected kind of data. Keep the sample small: every question costs one embedding call per index.
+#
+# source: current (live_index) | historical (daily_index) | forecast (forecast_index)
+# station / county: what the retrieved records must belong to (station wins when both are given)
+#
+# Update the list when stations are added or removed from the index.
+
+samples:
+  - question: What is the temperature in Pullman right now?
+    source: current
+    station: Pullman
+  - question: How windy is it at Fairfield at the moment?
+    source: current
+    station: Fairfield
+  - question: What is the current humidity at Orondo?
+    source: current
+    station: Orondo
+  - question: Is it raining in LaCrosse right now?
+    source: current
+    station: LaCrosse
+  - question: What was the high temperature in Pullman yesterday?
+    source: historical
+    station: Pullman
+  - question: How much rain fell at Green Bluff over the last week?
+    source: historical
+    station: Green Bluff
+  - question: What were the low temperatures at Mansfield this week?
+    source: historical
+    station: Mansfield
+  - question: What was the weather like in Douglas County over the past few days?
+    source: historical
+    county: Douglas
+  - question: Will it rain in Pullman in the next 24 hours?
+    source: forecast
+    station: Pullman
+  - question: What is the forecast high for Waterville tomorrow?
+    source: forecast
+    station: Waterville
+  - question: Is frost expected at Sunrise tonight?
+    source: forecast
+    station: Sunrise
+  - question: What is the wind forecast for Spokane County?
+    source: forecast
+    county: Spokane

@@ -17,6 +17,7 @@ from backend.analytics.metering import RequestUsage, metered
 from backend.analytics.pricing import PriceTable
 from psycopg import sql
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 logger = logging.getLogger("awn.analytics")
 
@@ -36,8 +37,11 @@ Bucket = Literal["day", "week", "month"]
 _ANSWERED = ("ok", "empty")
 _FAILED = ("error", "rate_limited", "unavailable")
 
-# Shared CTEs: `r` is the requests in the window, `c` the model calls made by those requests.
-# Calls are attributed to their request's start time so cost and request counts always agree.
+# Shared CTEs:
+#   r: the calls (end to end questions, one usage_requests row each) in the window
+#   c: the model requests (chat and embedding) made while answering those calls; attributed to their
+#      call's start time so cost and call counts always agree
+#   s: the login sessions with calls in the window; a session is successful when every call was answered
 _WINDOW = """
     WITH r AS (
         SELECT * FROM usage_requests WHERE started_at >= %(start)s AND started_at < %(end)s
@@ -45,6 +49,10 @@ _WINDOW = """
     c AS (
         SELECT usage_llm_calls.*, r.user_id, r.started_at AS request_started_at
         FROM usage_llm_calls JOIN r USING (request_id)
+    ),
+    s AS (
+        SELECT session_id, min(started_at) AS started_at, bool_and(status = 'ok') AS successful
+        FROM r WHERE session_id IS NOT NULL GROUP BY session_id
     )
 """
 
@@ -56,7 +64,10 @@ _SUMMARY_SQL = (
         (SELECT count(*) FROM r WHERE user_id IS NULL) AS unidentified_requests,
         (SELECT count(*) FROM r WHERE status = ANY(%(failed)s)) AS failed_requests,
         (SELECT count(DISTINCT user_id) FROM r) AS users,
-        (SELECT count(DISTINCT session_id) FROM r) AS sessions,
+        (SELECT count(*) FROM s) AS sessions,
+        (SELECT count(*) FROM s WHERE successful) AS successful_sessions,
+        (SELECT count(*) FROM r WHERE status = ANY(%(answered)s)) AS answered_requests,
+        (SELECT count(*) FROM r WHERE status = ANY(%(answered)s) AND latency_ms <= %(target_ms)s) AS within_target,
         (SELECT count(DISTINCT (user_id, session_id)) FROM r
             WHERE user_id IS NOT NULL AND session_id IS NOT NULL) AS user_sessions,
         (SELECT count(*) FROM r WHERE session_id IS NOT NULL) AS session_requests,
@@ -93,8 +104,19 @@ _SERIES_SQL = (
             percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms)
                 FILTER (WHERE status = ANY(%(answered)s)) AS latency_p50_ms,
             percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)
-                FILTER (WHERE status = ANY(%(answered)s)) AS latency_p95_ms
+                FILTER (WHERE status = ANY(%(answered)s)) AS latency_p95_ms,
+            count(*) FILTER (WHERE user_id IS NULL) AS unidentified_requests,
+            count(*) FILTER (WHERE status = ANY(%(answered)s)) AS answered_requests,
+            count(*) FILTER (WHERE status = ANY(%(answered)s) AND latency_ms <= %(target_ms)s) AS within_target
         FROM r GROUP BY 1
+    ),
+    ss AS (
+        -- sessions count in the bucket where they started
+        SELECT
+            date_trunc(%(bucket)s, started_at AT TIME ZONE %(tz)s) AS bucket,
+            count(*) AS sessions,
+            count(*) FILTER (WHERE successful) AS successful_sessions
+        FROM s GROUP BY 1
     ),
     cs AS (
         SELECT
@@ -113,12 +135,18 @@ _SERIES_SQL = (
         coalesce(rs.user_sessions, 0) AS user_sessions,
         rs.latency_p50_ms,
         rs.latency_p95_ms,
+        coalesce(rs.unidentified_requests, 0) AS unidentified_requests,
+        coalesce(rs.answered_requests, 0) AS answered_requests,
+        coalesce(rs.within_target, 0) AS within_target,
+        coalesce(ss.sessions, 0) AS sessions,
+        coalesce(ss.successful_sessions, 0) AS successful_sessions,
         coalesce(cs.chat_calls, 0) AS chat_calls,
         coalesce(cs.embedding_calls, 0) AS embedding_calls,
         coalesce(cs.cost_usd, 0) AS cost_usd,
         coalesce(cs.identified_cost_usd, 0) AS identified_cost_usd
     FROM buckets
     LEFT JOIN rs USING (bucket)
+    LEFT JOIN ss USING (bucket)
     LEFT JOIN cs USING (bucket)
     ORDER BY buckets.bucket
 """
@@ -152,6 +180,41 @@ _BY_STATUS_SQL = (
     SELECT status, count(*) AS requests FROM r GROUP BY status ORDER BY requests DESC, status
 """
 )
+
+_QUALITY_RUNS_SQL = """
+    SELECT run_at, samples, passed, is_demo FROM usage_quality_runs
+    WHERE run_at >= %(start)s AND run_at < %(end)s ORDER BY run_at
+"""
+
+_LATEST_QUALITY_RUN_SQL = """
+    SELECT run_at, samples, passed, details, is_demo FROM usage_quality_runs ORDER BY run_at DESC LIMIT 1
+"""
+
+# real (non demo) LLM spending in the calendar month containing %(now)s, in the dashboard timezone
+_MONTH_SPEND_SQL = """
+    SELECT coalesce(sum(c.cost_usd), 0) AS spent_usd
+    FROM usage_llm_calls c JOIN usage_requests r USING (request_id)
+    WHERE NOT r.is_demo
+      AND r.started_at >= (date_trunc('month', %(now)s AT TIME ZONE %(tz)s) AT TIME ZONE %(tz)s)
+      AND r.started_at < %(now)s
+"""
+
+_BUDGET_ALERT_SQL = """
+    SELECT attempted_at, delivered, error, recipients FROM usage_budget_alerts
+    WHERE month = %(month)s AND threshold_usd = %(threshold)s
+"""
+
+# Claim this month's alert: a new row, or a retry when the last attempt failed over ~an hour ago.
+# Returns a row only for the caller that should send the email, so several API workers never send twice.
+_CLAIM_BUDGET_ALERT_SQL = """
+    INSERT INTO usage_budget_alerts (month, threshold_usd, spent_usd, recipients)
+    VALUES (%(month)s, %(threshold)s, %(spent)s, %(recipients)s)
+    ON CONFLICT (month, threshold_usd) DO UPDATE
+        SET attempted_at = now(), spent_usd = EXCLUDED.spent_usd, recipients = EXCLUDED.recipients
+        WHERE NOT usage_budget_alerts.delivered
+          AND usage_budget_alerts.attempted_at < now() - interval '55 minutes'
+    RETURNING month
+"""
 
 # Per user totals; requests without a user id are grouped under NULL and reported separately.
 _PER_USER = """
@@ -299,15 +362,25 @@ class UsageStore:
 
         self._run(write)
 
-    def metrics(self, days: int, tz: str, now: datetime | None = None) -> dict[str, Any]:
-        """Return every metric the dashboard shows for the last `days` local calendar days."""
+    def metrics(
+        self,
+        days: int,
+        tz: str,
+        bucket: Bucket | None = None,
+        target_ms: int = 5000,
+        budget_usd: float = 50.0,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Return every metric the dashboard shows for the last `days` local calendar days.
+
+        `bucket` sets the time series granularity (default: day up to 90 days, otherwise week),
+        `target_ms` the response time target, and `budget_usd` the monthly spending threshold.
+        """
         start, now = _window(days, tz, now)
         previous_start = start - (now - start)
-        # months are always whole calendar months so monthly users are comparable
-        month_start = start.replace(day=1)
-        bucket: Bucket = "day" if days <= 90 else "week"
+        bucket = bucket or ("day" if days <= 90 else "week")
 
-        base = {"tz": tz, "failed": list(_FAILED), "answered": list(_ANSWERED)}
+        base = {"tz": tz, "failed": list(_FAILED), "answered": list(_ANSWERED), "target_ms": target_ms}
         window = {**base, "start": start, "end": now}
 
         def query(conn: psycopg.Connection) -> dict[str, Any]:
@@ -319,19 +392,22 @@ class UsageStore:
                 previous = cur.fetchone() or {}
                 cur.execute(_SERIES_SQL, {**window, "bucket": bucket})
                 series = cur.fetchall()
-                cur.execute(_SERIES_SQL, {**base, "start": month_start, "end": now, "bucket": "month"})
-                months = cur.fetchall()
                 cur.execute(_BY_MODEL_SQL, window)
                 by_model = cur.fetchall()
                 cur.execute(_BY_STATUS_SQL, window)
                 by_status = cur.fetchall()
+                cur.execute(_QUALITY_RUNS_SQL, window)
+                quality_runs = cur.fetchall()
+                cur.execute(_LATEST_QUALITY_RUN_SQL)
+                latest_quality = cur.fetchone()
             return {
                 "summary": summary,
                 "previous": previous,
                 "series": series,
-                "months": months,
                 "by_model": by_model,
                 "by_status": by_status,
+                "quality_runs": quality_runs,
+                "latest_quality": latest_quality,
             }
 
         # reads use their own short lived connection so a slow dashboard query never holds up chat requests
@@ -339,7 +415,7 @@ class UsageStore:
         with self._connect() as conn:
             conn.autocommit = True
             rows = query(conn)
-        current_month = date(now.year, now.month, 1)
+        latest = rows["latest_quality"]
         return {
             "range": {
                 "start": start.isoformat(),
@@ -348,16 +424,97 @@ class UsageStore:
                 "bucket": bucket,
                 "timezone": tz,
             },
-            "includes_demo_data": bool(rows["summary"].get("includes_demo_data")),
+            "includes_demo_data": bool(rows["summary"].get("includes_demo_data"))
+            or any(run["is_demo"] for run in rows["quality_runs"]),
+            "target_ms": target_ms,
             "summary": _summary(rows["summary"]),
             "previous": _summary(rows["previous"]),
             "series": [_series_point(row) for row in rows["series"]],
-            "months": [
-                {**_series_point(row), "partial": row["bucket"].date() >= current_month} for row in rows["months"]
-            ],
             "by_model": [_model_row(row) for row in rows["by_model"]],
             "by_status": [{"status": row["status"], "requests": row["requests"]} for row in rows["by_status"]],
+            "quality": {
+                "runs": [_quality_run(run) for run in rows["quality_runs"]],
+                "latest": {**_quality_run(latest), "details": latest["details"]} if latest else None,
+            },
+            "budget": self.budget_status(tz, budget_usd, now=now),
         }
+
+    def record_quality_run(self, samples: int, passed: int, details: list[dict], is_demo: bool = False) -> None:
+        """Save the result of one sampled retrieval quality check."""
+
+        def write(conn: psycopg.Connection) -> None:
+            with conn.transaction():
+                conn.execute(
+                    "INSERT INTO usage_quality_runs (samples, passed, details, is_demo) VALUES (%s, %s, %s, %s)",
+                    (samples, passed, Jsonb(details), is_demo),
+                )
+
+        self._run(write)
+
+    def latest_quality_run_at(self) -> datetime | None:
+        """When the retrieval quality check last ran (demo runs excluded), or None if it never has."""
+        self.ensure_schema()
+        with self._connect() as conn:
+            row = conn.execute("SELECT max(run_at) FROM usage_quality_runs WHERE NOT is_demo").fetchone()
+        return row[0] if row else None
+
+    def month_spend(self, tz: str, now: datetime | None = None) -> tuple[date, float]:
+        """Return (first day of the current month, real LLM spending so far this month), demo data excluded."""
+        zone = ZoneInfo(tz)
+        now = (now or datetime.now(zone)).astimezone(zone)
+        self.ensure_schema()
+        with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(_MONTH_SPEND_SQL, {"now": now, "tz": tz})
+            row = cur.fetchone() or {}
+        return date(now.year, now.month, 1), float(row.get("spent_usd") or 0)
+
+    def budget_status(self, tz: str, threshold_usd: float, now: datetime | None = None) -> dict[str, Any]:
+        """Return this month's real spending against the budget, and whether an alert went out."""
+        month, spent = self.month_spend(tz, now)
+        with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+            cur.execute(_BUDGET_ALERT_SQL, {"month": month, "threshold": threshold_usd})
+            alert = cur.fetchone()
+        return {
+            "month": month.isoformat(),
+            "threshold_usd": threshold_usd,
+            "spent_usd": spent,
+            "used": spent / threshold_usd if threshold_usd else None,
+            "alert": (
+                {
+                    "attempted_at": _timestamp(alert["attempted_at"]),
+                    "delivered": alert["delivered"],
+                    "error": alert["error"],
+                    "recipients": alert["recipients"],
+                }
+                if alert
+                else None
+            ),
+        }
+
+    def claim_budget_alert(self, month: date, threshold_usd: float, spent_usd: float, recipients: str) -> bool:
+        """Reserve this month's alert for the caller; False when it was already sent or is being retried elsewhere."""
+
+        def claim(conn: psycopg.Connection) -> bool:
+            with conn.transaction():
+                cur = conn.execute(
+                    _CLAIM_BUDGET_ALERT_SQL,
+                    {"month": month, "threshold": threshold_usd, "spent": spent_usd, "recipients": recipients},
+                )
+                return cur.fetchone() is not None
+
+        return self._run(claim)
+
+    def finish_budget_alert(self, month: date, threshold_usd: float, delivered: bool, error: str | None) -> None:
+        """Record whether the claimed alert email was delivered."""
+
+        def write(conn: psycopg.Connection) -> None:
+            with conn.transaction():
+                conn.execute(
+                    "UPDATE usage_budget_alerts SET delivered = %s, error = %s WHERE month = %s AND threshold_usd = %s",
+                    (delivered, error, month, threshold_usd),
+                )
+
+        self._run(write)
 
     def users(
         self,
@@ -469,32 +626,35 @@ def _num(value: Any) -> float | None:
 
 
 def _summary(row: dict[str, Any]) -> dict[str, Any]:
-    """Turn a summary row into the dashboard's KPIs, keeping undefined ratios as None."""
-    requests = row.get("requests") or 0
+    """Turn a summary row into the dashboard's KPIs, keeping undefined ratios as None.
+
+    A "call" is one end to end question and answer; "model requests" are the chat and embedding
+    requests made inside it.
+    """
+    calls = row.get("requests") or 0
     users = row.get("users") or 0
     sessions = row.get("sessions") or 0
-    chat_calls = row.get("chat_calls") or 0
-    embedding_calls = row.get("embedding_calls") or 0
-    llm_calls = chat_calls + embedding_calls
+    model_requests = (row.get("chat_calls") or 0) + (row.get("embedding_calls") or 0)
     cost = float(row.get("cost_usd") or 0)
     return {
-        "requests": requests,
-        "unidentified_requests": row.get("unidentified_requests") or 0,
-        "failed_requests": row.get("failed_requests") or 0,
-        "error_rate": _ratio(row.get("failed_requests") or 0, requests),
+        "calls": calls,
+        "unidentified_calls": row.get("unidentified_requests") or 0,
+        "failed_calls": row.get("failed_requests") or 0,
+        "error_rate": _ratio(row.get("failed_requests") or 0, calls),
         "users": users,
         "sessions": sessions,
+        "successful_sessions": row.get("successful_sessions") or 0,
+        "successful_session_rate": _ratio(row.get("successful_sessions") or 0, sessions),
         "avg_sessions_per_user": _ratio(row.get("user_sessions") or 0, users),
-        "avg_requests_per_session": _ratio(row.get("session_requests") or 0, sessions),
-        "chat_calls": chat_calls,
-        "embedding_calls": embedding_calls,
-        "llm_calls": llm_calls,
+        "avg_calls_per_session": _ratio(row.get("session_requests") or 0, sessions),
+        "model_requests": model_requests,
         "cost_usd": cost,
         "avg_cost_per_user": _ratio(float(row.get("identified_cost_usd") or 0), users),
-        "avg_cost_per_call": _ratio(cost, llm_calls),
-        "avg_cost_per_request": _ratio(cost, requests),
+        "avg_cost_per_call": _ratio(cost, calls),
+        "cost_per_1000_calls": _ratio(cost * 1000, calls),
         "latency_p50_ms": _num(row.get("latency_p50_ms")),
         "latency_p95_ms": _num(row.get("latency_p95_ms")),
+        "within_target_rate": _ratio(row.get("within_target") or 0, row.get("answered_requests") or 0),
     }
 
 
@@ -503,18 +663,32 @@ def _series_point(row: dict[str, Any]) -> dict[str, Any]:
     cost = float(row["cost_usd"])
     return {
         "bucket": row["bucket"].date().isoformat(),
-        "requests": row["requests"],
-        "failed_requests": row["failed_requests"],
+        "calls": row["requests"],
+        "unidentified_calls": row["unidentified_requests"],
+        "failed_calls": row["failed_requests"],
         "error_rate": _ratio(row["failed_requests"], row["requests"]),
         "users": users,
+        "sessions": row["sessions"],
+        "successful_sessions": row["successful_sessions"],
+        "successful_session_rate": _ratio(row["successful_sessions"], row["sessions"]),
         "avg_sessions_per_user": _ratio(row["user_sessions"], users),
-        "chat_calls": row["chat_calls"],
-        "embedding_calls": row["embedding_calls"],
-        "llm_calls": row["chat_calls"] + row["embedding_calls"],
+        "model_requests": row["chat_calls"] + row["embedding_calls"],
         "cost_usd": cost,
         "avg_cost_per_user": _ratio(float(row["identified_cost_usd"]), users),
+        "cost_per_1000_calls": _ratio(cost * 1000, row["requests"]),
         "latency_p50_ms": _num(row["latency_p50_ms"]),
         "latency_p95_ms": _num(row["latency_p95_ms"]),
+        "within_target_rate": _ratio(row["within_target"], row["answered_requests"]),
+    }
+
+
+def _quality_run(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "run_at": _timestamp(row["run_at"]),
+        "samples": row["samples"],
+        "passed": row["passed"],
+        "score": _ratio(row["passed"], row["samples"]),
+        "is_demo": bool(row["is_demo"]),
     }
 
 

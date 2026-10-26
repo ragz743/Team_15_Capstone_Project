@@ -302,7 +302,7 @@ def admin_store(monkeypatch: MonkeyPatch):
     """Configure an admin token and a fake usage store."""
     monkeypatch.setenv("AWN_ADMIN_TOKEN", "s3cret")
     store = MagicMock()
-    store.metrics.return_value = {"summary": {"requests": 3}}
+    store.metrics.return_value = {"summary": {"calls": 3}, "budget": {}}
     monkeypatch.setattr(admin_api, "_usage_store", store)
     return store
 
@@ -325,13 +325,40 @@ def test_admin_metrics_rejects_bad_tokens(admin_store: MagicMock, header: str | 
 
 
 def test_admin_metrics_returns_store_metrics_for_range(admin_store: MagicMock) -> None:
-    """A valid token returns the store's metrics for the requested range in local time."""
+    """A valid token returns the store's metrics for the range, granularity, 5 s target, and $50 budget."""
     response = TestClient(api.app).get(
-        "/api/admin/metrics", params={"range": "90d"}, headers={"Authorization": "Bearer s3cret"}
+        "/api/admin/metrics", params={"range": "90d", "bucket": "week"}, headers={"Authorization": "Bearer s3cret"}
     )
     assert response.status_code == 200
-    assert response.json() == {"summary": {"requests": 3}}
-    admin_store.metrics.assert_called_once_with(90, "America/Los_Angeles")
+    assert response.json()["summary"] == {"calls": 3}
+    assert response.json()["budget"]["recipients"] == "weather@wsu.edu"
+    admin_store.metrics.assert_called_once_with(
+        90, "America/Los_Angeles", bucket="week", target_ms=5000, budget_usd=50.0
+    )
+
+
+def test_admin_metrics_csv_exports_the_time_series(admin_store: MagicMock) -> None:
+    """The overview export has one row per day, week, or month."""
+    admin_store.metrics.return_value = {
+        "range": {"bucket": "day"},
+        "series": [{"bucket": "2026-10-14", "calls": 4, "users": 2}, {"bucket": "2026-10-15", "calls": 1, "users": 1}],
+        "budget": {},
+    }
+    response = TestClient(api.app).get("/api/admin/metrics.csv", headers={"Authorization": "Bearer s3cret"})
+
+    assert response.status_code == 200
+    assert "awn-llm-usage-30d-by-day.csv" in response.headers["content-disposition"]
+    lines = response.text.strip().splitlines()
+    assert lines[0].startswith("bucket,calls,unidentified_calls")
+    assert [line.split(",")[:2] for line in lines[1:]] == [["2026-10-14", "4"], ["2026-10-15", "1"]]
+
+
+def test_admin_metrics_rejects_unknown_granularity(admin_store: MagicMock) -> None:
+    """Only day, week, and month grouping is accepted."""
+    response = TestClient(api.app).get(
+        "/api/admin/metrics", params={"bucket": "year"}, headers={"Authorization": "Bearer s3cret"}
+    )
+    assert response.status_code == 422
 
 
 def test_admin_metrics_rejects_unknown_range(admin_store: MagicMock) -> None:

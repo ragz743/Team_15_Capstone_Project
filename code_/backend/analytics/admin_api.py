@@ -9,7 +9,8 @@ import logging
 import os
 from typing import Annotated, Any, Literal
 
-from backend.analytics.usage_store import UsageStore, UserSort
+from backend.analytics.budget import BudgetConfig
+from backend.analytics.usage_store import Bucket, UsageStore, UserSort
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import Response
 
@@ -38,6 +39,27 @@ _CSV_COLUMNS = (
 
 # Dashboard dates are bucketed in AgWeatherNet's local time unless overridden.
 _DEFAULT_TIMEZONE = "America/Los_Angeles"
+# the client's target: answers within 5 seconds
+_DEFAULT_RESPONSE_TARGET_MS = 5000
+
+_SERIES_CSV_COLUMNS = (
+    "bucket",
+    "calls",
+    "unidentified_calls",
+    "failed_calls",
+    "error_rate",
+    "users",
+    "sessions",
+    "successful_sessions",
+    "successful_session_rate",
+    "cost_usd",
+    "cost_per_1000_calls",
+    "avg_cost_per_user",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "within_target_rate",
+    "model_requests",
+)
 
 _usage_store: UsageStore | None = None
 
@@ -67,14 +89,52 @@ def require_admin(authorization: Annotated[str | None, Header()] = None) -> None
         raise HTTPException(status_code=401, detail="Invalid admin token.", headers={"WWW-Authenticate": "Bearer"})
 
 
+BucketParam = Annotated[Bucket | None, Query(description="Time series granularity: day, week, or month")]
+
+
 @router.get("/metrics", dependencies=[Depends(require_admin)])
 def metrics(
     store: Annotated[UsageStore, Depends(get_usage_store)],
     range: Annotated[RangeKey, Query()] = "30d",
+    bucket: BucketParam = None,
 ) -> dict[str, Any]:
-    """Return cost, user, and performance metrics for the selected range."""
+    """Return user, quality, cost, and performance metrics for the selected range."""
+    result = _load_metrics(store, range, bucket)
+    budget = BudgetConfig.from_env()
+    result["budget"]["email_configured"] = budget.email_configured
+    result["budget"]["recipients"] = budget.recipients
+    return result
+
+
+@router.get("/metrics.csv", dependencies=[Depends(require_admin)])
+def metrics_csv(
+    store: Annotated[UsageStore, Depends(get_usage_store)],
+    range: Annotated[RangeKey, Query()] = "30d",
+    bucket: BucketParam = None,
+) -> Response:
+    """Download the dashboard's time series (one row per day, week, or month) as CSV."""
+    result = _load_metrics(store, range, bucket)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=_SERIES_CSV_COLUMNS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(result["series"])
+    name = f"awn-llm-usage-{range}-by-{result['range']['bucket']}.csv"
+    return Response(
+        content=buffer.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+def _load_metrics(store: UsageStore, range: str, bucket: Bucket | None) -> dict[str, Any]:
     try:
-        return store.metrics(_RANGE_DAYS[range], _timezone())
+        return store.metrics(
+            _RANGE_DAYS[range],
+            dashboard_timezone(),
+            bucket=bucket,
+            target_ms=response_target_ms(),
+            budget_usd=BudgetConfig.from_env().threshold_usd,
+        )
     except Exception as exc:
         logger.exception("Failed to compute dashboard metrics")
         raise HTTPException(status_code=503, detail="Usage metrics could not be loaded.") from exc
@@ -100,7 +160,7 @@ def users(
     try:
         return store.users(
             _RANGE_DAYS[range],
-            _timezone(),
+            dashboard_timezone(),
             limit=limit,
             offset=offset,
             search=search,
@@ -124,7 +184,7 @@ def users_csv(
     try:
         result = store.users(
             _RANGE_DAYS[range],
-            _timezone(),
+            dashboard_timezone(),
             limit=_CSV_MAX_USERS,
             search=search,
             sort=sort,
@@ -147,5 +207,11 @@ def users_csv(
     )
 
 
-def _timezone() -> str:
+def dashboard_timezone() -> str:
+    """Timezone used for days and months on the dashboard and for the monthly budget."""
     return os.getenv("AWN_DASHBOARD_TIMEZONE", _DEFAULT_TIMEZONE)
+
+
+def response_target_ms() -> int:
+    """Response time target in milliseconds (AWN_RESPONSE_TARGET_MS, default 5 seconds)."""
+    return int(os.getenv("AWN_RESPONSE_TARGET_MS") or _DEFAULT_RESPONSE_TARGET_MS)

@@ -40,6 +40,17 @@ services:
       AWN_ADMIN_TOKEN: ${AWN_ADMIN_TOKEN:-}  # admin dashboard is disabled until this is set
       AWN_DASHBOARD_TIMEZONE: ${AWN_DASHBOARD_TIMEZONE:-America/Los_Angeles}
       AWN_USAGE_TRACKING: ${AWN_USAGE_TRACKING:-true}
+      AWN_RESPONSE_TARGET_MS: ${AWN_RESPONSE_TARGET_MS:-5000}
+      AWN_QUALITY_CHECK_HOURS: ${AWN_QUALITY_CHECK_HOURS:-24}
+      AWN_MONTHLY_BUDGET_USD: ${AWN_MONTHLY_BUDGET_USD:-50}
+      AWN_BUDGET_ALERT_EMAIL: ${AWN_BUDGET_ALERT_EMAIL:-weather@wsu.edu}
+      AWN_DASHBOARD_URL: ${AWN_DASHBOARD_URL:-}
+      AWN_SMTP_HOST: ${AWN_SMTP_HOST:-}  # budget alert email is not sent until SMTP is configured
+      AWN_SMTP_PORT: ${AWN_SMTP_PORT:-587}
+      AWN_SMTP_USERNAME: ${AWN_SMTP_USERNAME:-}
+      AWN_SMTP_PASSWORD: ${AWN_SMTP_PASSWORD:-}
+      AWN_SMTP_FROM: ${AWN_SMTP_FROM:-}
+      AWN_SMTP_STARTTLS: ${AWN_SMTP_STARTTLS:-true}
     ports:
       - "8000:8000" # exposed for debugging; nginx proxies internally
 

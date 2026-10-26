@@ -17,6 +17,8 @@ type LineChartProps = {
   series: Series[];
   formatValue: (value: number | null) => string;
   formatAxis?: (value: number) => string;
+  /** A horizontal reference line, e.g. a response time target. */
+  target?: { value: number; label: string };
 };
 
 const END_LABEL_SPACE = 36;
@@ -38,7 +40,7 @@ function segments(values: (number | null)[]) {
   return runs;
 }
 
-export default function LineChart({ label, categories, ticks, series, formatValue, formatAxis }: LineChartProps) {
+export default function LineChart({ label, categories, ticks, series, formatValue, formatAxis, target }: LineChartProps) {
   const [ref, width] = useElementWidth<HTMLDivElement>();
   const n = categories.length;
   const right = MARGIN.right + END_LABEL_SPACE;
@@ -47,7 +49,7 @@ export default function LineChart({ label, categories, ticks, series, formatValu
   const { active, handlers } = useActiveIndex(n, x);
 
   const values = series.flatMap((s) => s.values.filter((v): v is number => v != null));
-  const yTicks = niceTicks(Math.max(0, ...values));
+  const yTicks = niceTicks(Math.max(0, ...values, target?.value ?? 0));
   const yMax = yTicks[yTicks.length - 1];
   const y = (value: number) => MARGIN.top + PLOT_HEIGHT - (value / yMax) * PLOT_HEIGHT;
   const axis = formatAxis ?? ((v: number) => formatValue(v));
@@ -80,6 +82,15 @@ export default function LineChart({ label, categories, ticks, series, formatValu
               </text>
             </g>
           ))}
+
+          {target && (
+            <g>
+              <line className="target-line" x1={MARGIN.left} x2={width - right} y1={y(target.value)} y2={y(target.value)} />
+              <text className="target-label" x={MARGIN.left + 6} y={y(target.value) - 5}>
+                {target.label}
+              </text>
+            </g>
+          )}
 
           {active !== null && <line className="crosshair" x1={x(active)} x2={x(active)} y1={MARGIN.top} y2={baseline} />}
 

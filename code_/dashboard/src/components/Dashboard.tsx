@@ -1,19 +1,13 @@
-import {
-  formatBucket,
-  formatBucketTick,
-  formatCount,
-  formatDecimal,
-  formatMs,
-  formatPercent,
-  formatUsd,
-} from "../format";
-import { scaleBasis } from "../projection";
+import { Alert, Card, CardContent, Grid, Typography } from "@mui/material";
+import { Children, type ReactNode } from "react";
+import { formatBucket, formatBucketTick, formatCount, formatDecimal, formatMs, formatPercent, formatUsd } from "../format";
 import type { Metrics, RangeKey } from "../types";
+import BudgetCard from "./BudgetCard";
 import ChartCard from "./ChartCard";
 import ColumnChart from "./ColumnChart";
 import DataTable from "./DataTable";
 import LineChart from "./LineChart";
-import ScaleProjection from "./ScaleProjection";
+import QualityPanel from "./QualityPanel";
 import StatTile from "./StatTile";
 import UserCostTable from "./UserCostTable";
 import type { Series } from "./chartUtils";
@@ -39,158 +33,302 @@ const count = (v: number | null) => formatCount(v);
 const msAxis = (v: number) => (v === 0 ? "0" : formatMs(v));
 const percentAxis = (v: number) => `${Number((v * 100).toFixed(1))}%`;
 const usdAxis = (v: number) => (v === 0 ? "$0" : formatUsd(v));
+const runDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
+
+function SectionHeading({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <Typography id={id} variant="h2" sx={{ mt: 4, mb: 1.5 }}>
+      {children}
+    </Typography>
+  );
+}
+
+/** KPI tiles: four across on wide screens, two on tablets and phones. */
+function TileGrid({ children }: { children: ReactNode }) {
+  return (
+    <Grid container spacing={1.5}>
+      {Children.map(children, (child) => child && <Grid size={{ xs: 6, lg: 3 }}>{child}</Grid>)}
+    </Grid>
+  );
+}
+
+/** A row of equal width chart cards that stacks on narrow screens. */
+function ChartRow({ columns = 2, children }: { columns?: 2 | 3; children: ReactNode }) {
+  return (
+    <Grid container spacing={2}>
+      {Children.map(children, (child) => child && <Grid size={{ xs: 12, md: 6, lg: 12 / columns }}>{child}</Grid>)}
+    </Grid>
+  );
+}
+
+/** A full width card with a heading, used for tables. */
+function TableCard({ id, title, subtitle, children }: { id: string; title: string; subtitle?: string; children: ReactNode }) {
+  return (
+    <Card component="section" aria-labelledby={id} sx={{ mt: 2 }}>
+      <CardContent>
+        <Typography id={id} variant="h3">
+          {title}
+        </Typography>
+        {subtitle && (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+            {subtitle}
+          </Typography>
+        )}
+        {children}
+      </CardContent>
+    </Card>
+  );
+}
 
 type DashboardProps = { metrics: Metrics; range: RangeKey; token: string; refreshCount: number };
 
 export default function Dashboard({ metrics, range: rangeKey, token, refreshCount }: DashboardProps) {
-  const { summary, previous, series, months, range } = metrics;
+  const { summary, previous, series, range, quality } = metrics;
   const period = periodLabels[range.days] ?? `${range.days} days`;
-  const empty = summary.requests === 0;
+  const unit = range.bucket;
+  const empty = summary.calls === 0;
+  const target = formatMs(metrics.target_ms);
+  const latestQuality = quality.latest;
+  const previousRun = quality.runs.length > 1 ? quality.runs[quality.runs.length - 2] : null;
 
-  const categories = series.map((p) => formatBucket(p.bucket, range.bucket));
-  const ticks = series.map((p) => formatBucketTick(p.bucket, range.bucket));
-  const monthNames = months.map((m) => `${formatBucket(m.bucket, "month")}${m.partial ? " (to date)" : ""}`);
-  const monthTicks = months.map((m) => `${formatBucketTick(m.bucket, "month")}${m.partial ? "*" : ""}`);
+  const categories = series.map((p) => formatBucket(p.bucket, unit));
+  const ticks = series.map((p) => formatBucketTick(p.bucket, unit));
+  const one = (key: string, label: string, values: (number | null)[]): Series[] => [
+    { key, label, color: "var(--series-1)", values },
+  ];
 
-  const costSeries: Series[] = [{ key: "cost", label: "LLM cost", color: "var(--series-1)", values: series.map((p) => p.cost_usd) }];
-  const callSeries: Series[] = [
-    { key: "chat", label: "Chat model calls", color: "var(--series-1)", values: series.map((p) => p.chat_calls) },
-    { key: "embedding", label: "Embedding calls", color: "var(--series-2)", values: series.map((p) => p.embedding_calls) },
-  ];
-  const userSeries: Series[] = [{ key: "users", label: "Monthly active users", color: "var(--series-1)", values: months.map((m) => m.users) }];
-  const costPerUserSeries: Series[] = [
-    { key: "cpu", label: "Cost per user", color: "var(--series-1)", values: months.map((m) => m.avg_cost_per_user) },
-  ];
+  const usersSeries = one("users", "Active users", series.map((p) => p.users));
+  const sessionSeries = one("sessions", "Successful sessions", series.map((p) => p.successful_session_rate));
+  const callsSeries = one("calls", "Calls", series.map((p) => p.calls));
+  const costSeries = one("cost", "LLM spending", series.map((p) => p.cost_usd));
+  const withinTargetSeries = one("within", `Answered within ${target}`, series.map((p) => p.within_target_rate));
+  const errorSeries = one("errors", "Failed calls", series.map((p) => p.error_rate));
   const latencySeries: Series[] = [
     { key: "p50", label: "Median", endLabel: "p50", color: "var(--series-1)", values: series.map((p) => p.latency_p50_ms) },
     { key: "p95", label: "95th percentile", endLabel: "p95", color: "var(--series-2)", values: series.map((p) => p.latency_p95_ms) },
   ];
-  const errorSeries: Series[] = [
-    { key: "errors", label: "Failed requests", color: "var(--series-1)", values: series.map((p) => p.error_rate) },
-  ];
 
   const unpriced = metrics.by_model.filter((m) => !m.priced);
-  const currentMonth = months.find((m) => m.partial) ?? months[months.length - 1];
+  const dateColumn = { key: "date", label: unit === "day" ? "Date" : unit === "week" ? "Week" : "Month" };
 
   return (
     <>
       <section aria-labelledby="overview-heading">
-        <h2 id="overview-heading" className="section-heading">
-          Overview
-        </h2>
-        <div className="overview-grid">
+        <SectionHeading id="overview-heading">Overview</SectionHeading>
+        <TileGrid>
           <StatTile
-            hero
-            label={`LLM cost, last ${period}`}
+            label="Active users"
+            value={formatCount(summary.users)}
+            current={summary.users}
+            previous={previous.users}
+            upIsGood
+            periodLabel={period}
+            hint="Logged-in users who used the chatbot"
+          />
+          <StatTile
+            label="Successful sessions"
+            value={formatPercent(summary.successful_session_rate)}
+            current={summary.successful_session_rate}
+            previous={previous.successful_session_rate}
+            upIsGood
+            periodLabel={period}
+            hint={`${formatCount(summary.successful_sessions)} of ${formatCount(summary.sessions)} login sessions`}
+          />
+          <StatTile
+            label="Retrieval quality"
+            value={formatPercent(latestQuality?.score)}
+            current={latestQuality?.score ?? null}
+            previous={previousRun?.score ?? null}
+            upIsGood
+            periodLabel="check"
+            hint={
+              latestQuality
+                ? `${latestQuality.passed} of ${latestQuality.samples} sample questions · ${runDay.format(new Date(latestQuality.run_at))}`
+                : "No check has run yet"
+            }
+          />
+          <StatTile
+            label="Calls"
+            value={formatCount(summary.calls)}
+            current={summary.calls}
+            previous={previous.calls}
+            periodLabel={period}
+            hint={`${formatDecimal(summary.avg_calls_per_session)} calls per session`}
+          />
+          <StatTile
+            label={`Answered within ${target}`}
+            value={formatPercent(summary.within_target_rate)}
+            current={summary.within_target_rate}
+            previous={previous.within_target_rate}
+            upIsGood
+            periodLabel={period}
+            hint={`Median ${formatMs(summary.latency_p50_ms)} · 95th percentile ${formatMs(summary.latency_p95_ms)}`}
+          />
+          <StatTile
+            label="LLM spending"
             value={formatUsd(summary.cost_usd)}
             current={summary.cost_usd}
             previous={previous.cost_usd}
             periodLabel={period}
-            hint={`${formatUsd(summary.avg_cost_per_request)} per question answered`}
+            hint={`${formatUsd(summary.avg_cost_per_user)} per active user`}
           />
-          <div className="kpi-grid">
-            <StatTile label="LLM calls" value={formatCount(summary.llm_calls)} current={summary.llm_calls} previous={previous.llm_calls} periodLabel={period} hint={`${formatCount(summary.requests)} questions`} />
-            <StatTile label="Cost per call" value={formatUsd(summary.avg_cost_per_call)} current={summary.avg_cost_per_call} previous={previous.avg_cost_per_call} upIsGood={false} periodLabel={period} />
-            <StatTile label="Active users" value={formatCount(summary.users)} current={summary.users} previous={previous.users} upIsGood periodLabel={period} />
-            <StatTile label="Cost per user" value={formatUsd(summary.avg_cost_per_user)} current={summary.avg_cost_per_user} previous={previous.avg_cost_per_user} upIsGood={false} periodLabel={period} />
-            <StatTile
-              label="Sessions per user"
-              value={formatDecimal(summary.avg_sessions_per_user)}
-              current={summary.avg_sessions_per_user}
-              previous={previous.avg_sessions_per_user}
-              upIsGood
-              periodLabel={period}
-              hint={`${formatDecimal(summary.avg_requests_per_session)} questions per session`}
-            />
-            <StatTile label="Response time (p95)" value={formatMs(summary.latency_p95_ms)} current={summary.latency_p95_ms} previous={previous.latency_p95_ms} upIsGood={false} periodLabel={period} hint={`Median ${formatMs(summary.latency_p50_ms)}`} />
-            <StatTile label="Failed requests" value={formatPercent(summary.error_rate)} current={summary.error_rate} previous={previous.error_rate} upIsGood={false} periodLabel={period} hint={`${formatCount(summary.failed_requests)} of ${formatCount(summary.requests)}`} />
-          </div>
-        </div>
-        {summary.unidentified_requests > 0 && (
-          <p className="note">
-            {summary.unidentified_requests === 1
-              ? "1 question arrived without a user id. It counts"
-              : `${formatCount(summary.unidentified_requests)} questions arrived without a user id. They count`}{" "}
-            toward cost and calls but not toward users, sessions, or cost per user.
-          </p>
+          <StatTile
+            label="Cost per 1,000 calls"
+            value={formatUsd(summary.cost_per_1000_calls)}
+            current={summary.cost_per_1000_calls}
+            previous={previous.cost_per_1000_calls}
+            upIsGood={false}
+            periodLabel={period}
+            hint={`${formatUsd(summary.avg_cost_per_call)} per call`}
+          />
+          <StatTile
+            label="Failed calls"
+            value={formatPercent(summary.error_rate)}
+            current={summary.error_rate}
+            previous={previous.error_rate}
+            upIsGood={false}
+            periodLabel={period}
+            hint={`${formatCount(summary.failed_calls)} of ${formatCount(summary.calls)}`}
+          />
+        </TileGrid>
+        {summary.unidentified_calls > 0 && (
+          <Alert severity="warning" sx={{ mt: 1.5 }}>
+            <strong>
+              {formatCount(summary.unidentified_calls)} {summary.unidentified_calls === 1 ? "call" : "calls"} arrived without a
+              user ID.
+            </strong>{" "}
+            Signing in is required to use the chatbot, so this points to the chat app not sending the user ID{" "}
+            <code>X-AWN-User-Id</code>. These calls count toward spending but not toward users or sessions.
+          </Alert>
         )}
       </section>
 
+      <section aria-labelledby="users-heading-section">
+        <SectionHeading id="users-heading-section">Users and sessions</SectionHeading>
+        <ChartRow>
+          <ChartCard
+            title={`Active users per ${unit}`}
+            subtitle="Logged-in users who asked the chatbot at least one question"
+            empty={empty}
+            table={{
+              columns: [
+                dateColumn,
+                { key: "users", label: "Active users", numeric: true },
+                { key: "sessions", label: "Sessions", numeric: true },
+                { key: "spu", label: "Sessions per user", numeric: true },
+              ],
+              rows: series.map((p, i) => ({
+                date: categories[i],
+                users: formatCount(p.users),
+                sessions: formatCount(p.sessions),
+                spu: formatDecimal(p.avg_sessions_per_user),
+              })),
+            }}
+          >
+            <ColumnChart label={`Active users per ${unit}`} categories={categories} ticks={ticks} series={usersSeries} formatValue={count} />
+          </ChartCard>
+          <ChartCard
+            title={`Successful sessions per ${unit}`}
+            subtitle="Login sessions in which every call was answered, by the day the session started"
+            empty={series.every((p) => p.sessions === 0)}
+            table={{
+              columns: [
+                dateColumn,
+                { key: "rate", label: "Successful", numeric: true },
+                { key: "count", label: "Successful / sessions", numeric: true },
+              ],
+              rows: series.map((p, i) => ({
+                date: categories[i],
+                rate: formatPercent(p.successful_session_rate),
+                count: `${formatCount(p.successful_sessions)} / ${formatCount(p.sessions)}`,
+              })),
+            }}
+          >
+            <ColumnChart
+              label={`Successful sessions per ${unit}`}
+              categories={categories}
+              ticks={ticks}
+              series={sessionSeries}
+              formatValue={formatPercent}
+              formatAxis={percentAxis}
+            />
+          </ChartCard>
+        </ChartRow>
+      </section>
+
       <section aria-labelledby="users-cost-heading">
-        <h2 id="users-cost-heading" className="section-heading">
-          Cost per user
-        </h2>
+        <SectionHeading id="users-cost-heading">Cost per user</SectionHeading>
         {/* keyed by range so paging restarts at the first page when the range changes */}
         <UserCostTable key={rangeKey} range={rangeKey} token={token} refreshCount={refreshCount} periodLabel={period} />
       </section>
 
+      <section aria-labelledby="quality-heading">
+        <SectionHeading id="quality-heading">Retrieval quality</SectionHeading>
+        <QualityPanel quality={quality} />
+      </section>
+
       <section aria-labelledby="cost-heading">
-        <h2 id="cost-heading" className="section-heading">
-          Cost and calls
-        </h2>
-        <div className="chart-grid">
+        <SectionHeading id="cost-heading">Spending</SectionHeading>
+        <ChartRow columns={3}>
+          <BudgetCard budget={metrics.budget} />
           <ChartCard
-            title={`LLM cost per ${range.bucket}`}
-            subtitle="Tokens used × each model's price per token. Free models cost $0. Details below."
-            empty={empty}
-            table={{
-              columns: [{ key: "date", label: "Date" }, { key: "cost", label: "LLM cost", numeric: true }],
-              rows: series.map((p, i) => ({ date: categories[i], cost: formatUsd(p.cost_usd) })),
-            }}
-          >
-            <ColumnChart label={`LLM cost per ${range.bucket}`} categories={categories} ticks={ticks} series={costSeries} formatValue={formatUsd} formatAxis={usdAxis} />
-          </ChartCard>
-          <ChartCard
-            title={`LLM calls per ${range.bucket}`}
-            subtitle="Each question makes one chat call and one embedding call per data source"
-            legend={callSeries}
+            title={`LLM spending per ${unit}`}
+            subtitle="Real spending on model requests. OpenRouter's free models cost $0."
             empty={empty}
             table={{
               columns: [
-                { key: "date", label: "Date" },
-                { key: "chat", label: "Chat calls", numeric: true },
-                { key: "embedding", label: "Embedding calls", numeric: true },
-                { key: "total", label: "Total", numeric: true },
+                dateColumn,
+                { key: "cost", label: "LLM spending", numeric: true },
+                { key: "per1000", label: "Per 1,000 calls", numeric: true },
+              ],
+              rows: series.map((p, i) => ({ date: categories[i], cost: formatUsd(p.cost_usd), per1000: formatUsd(p.cost_per_1000_calls) })),
+            }}
+          >
+            <ColumnChart label={`LLM spending per ${unit}`} categories={categories} ticks={ticks} series={costSeries} formatValue={formatUsd} formatAxis={usdAxis} />
+          </ChartCard>
+          <ChartCard
+            title={`Calls per ${unit}`}
+            subtitle="One call is one question answered end to end"
+            empty={empty}
+            table={{
+              columns: [
+                dateColumn,
+                { key: "calls", label: "Calls", numeric: true },
+                { key: "models", label: "Model requests", numeric: true },
               ],
               rows: series.map((p, i) => ({
                 date: categories[i],
-                chat: formatCount(p.chat_calls),
-                embedding: formatCount(p.embedding_calls),
-                total: formatCount(p.llm_calls),
+                calls: formatCount(p.calls),
+                models: formatCount(p.model_requests),
               })),
             }}
           >
-            <ColumnChart label={`LLM calls per ${range.bucket}`} categories={categories} ticks={ticks} series={callSeries} formatValue={count} />
+            <ColumnChart label={`Calls per ${unit}`} categories={categories} ticks={ticks} series={callsSeries} formatValue={count} />
           </ChartCard>
-        </div>
+        </ChartRow>
 
-        <section className="card" aria-labelledby="models-heading">
-          <header className="card-header">
-            <div>
-              <h3 id="models-heading">Cost by model</h3>
-              <p className="card-subtitle">
-                Token counts as reported by each model. ~ marks an estimate where no count was reported.
-              </p>
-            </div>
-          </header>
+        <TableCard
+          id="models-heading"
+          title="Spending by model"
+          subtitle="Each call makes several model requests. Token counts as reported by each model; ~ marks an estimate."
+        >
           {unpriced.length > 0 && (
-            <p className="note note-warning" role="note">
-              <strong>Cost is understated.</strong> {unpriced.map((m) => m.model).join(", ")}{" "}
+            <Alert severity="warning" sx={{ mb: 1 }}>
+              <strong>Spending is understated.</strong> {unpriced.map((m) => m.model).join(", ")}{" "}
               {unpriced.length === 1 ? "has" : "have"} no price per token set in <code>pricing.yaml</code>, so{" "}
-              {unpriced.length === 1 ? "its calls are" : "their calls are"} counted as $0. Add the price to{" "}
+              {unpriced.length === 1 ? "its requests are" : "their requests are"} counted as $0. Add the price to{" "}
               <code>code_/backend/analytics/pricing.yaml</code>.
-            </p>
+            </Alert>
           )}
           <DataTable
-            caption="Cost by model"
+            caption="Spending by model"
             columns={[
               { key: "model", label: "Model" },
               { key: "kind", label: "Type" },
-              { key: "calls", label: "Calls", numeric: true },
+              { key: "calls", label: "Model requests", numeric: true },
               { key: "tokens", label: "Tokens in / out", numeric: true },
-              { key: "cost", label: "Cost", numeric: true },
+              { key: "cost", label: "Spending", numeric: true },
               { key: "source", label: "Cost source" },
-              { key: "per", label: "Cost per call", numeric: true },
               { key: "latency", label: "Median latency", numeric: true },
             ]}
             rows={metrics.by_model.map((m) => ({
@@ -200,117 +338,86 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
               tokens: `${m.tokens_estimated ? "~" : ""}${formatCount(m.input_tokens)} / ${formatCount(m.output_tokens)}`,
               cost: m.priced ? formatUsd(m.cost_usd) : "—",
               source: COST_SOURCE_LABELS[m.cost_source] ?? m.cost_source,
-              per: m.priced ? formatUsd(m.avg_cost_per_call) : "—",
               latency: formatMs(m.latency_p50_ms),
             }))}
           />
-        </section>
-      </section>
-
-      <section aria-labelledby="scale-heading">
-        <h2 id="scale-heading" className="section-heading">
-          Users and scale
-        </h2>
-        <div className="chart-grid chart-grid-3">
-          <ChartCard
-            title="Monthly active users"
-            subtitle={months.some((m) => m.partial) ? "* current month to date" : "Distinct users per calendar month"}
-            empty={months.every((m) => m.users === 0)}
-            table={{
-              columns: [
-                { key: "month", label: "Month" },
-                { key: "users", label: "Users", numeric: true },
-                { key: "sessions", label: "Sessions per user", numeric: true },
-                { key: "calls", label: "LLM calls", numeric: true },
-                { key: "cost", label: "LLM cost", numeric: true },
-              ],
-              rows: months.map((m, i) => ({
-                month: monthNames[i],
-                users: formatCount(m.users),
-                sessions: formatDecimal(m.avg_sessions_per_user),
-                calls: formatCount(m.llm_calls),
-                cost: formatUsd(m.cost_usd),
-              })),
-            }}
-          >
-            <ColumnChart label="Monthly active users" categories={monthNames} ticks={monthTicks} series={userSeries} formatValue={count} />
-          </ChartCard>
-          <ChartCard
-            title="Cost per user by month"
-            subtitle="LLM cost of identified users ÷ monthly active users"
-            empty={months.every((m) => m.avg_cost_per_user == null)}
-            table={{
-              columns: [{ key: "month", label: "Month" }, { key: "cpu", label: "Cost per user", numeric: true }],
-              rows: months.map((m, i) => ({ month: monthNames[i], cpu: formatUsd(m.avg_cost_per_user) })),
-            }}
-          >
-            <ColumnChart label="Cost per user by month" categories={monthNames} ticks={monthTicks} series={costPerUserSeries} formatValue={formatUsd} formatAxis={usdAxis} />
-          </ChartCard>
-          <ScaleProjection basis={scaleBasis(months)} currentUsers={currentMonth?.users ?? 0} />
-        </div>
+        </TableCard>
       </section>
 
       <section aria-labelledby="performance-heading">
-        <h2 id="performance-heading" className="section-heading">
-          Query performance
-        </h2>
-        <div className="chart-grid">
+        <SectionHeading id="performance-heading">Query performance</SectionHeading>
+        <ChartRow columns={3}>
           <ChartCard
             title="Response time"
-            subtitle="Time to answer a question, answered requests only"
+            subtitle={`End-to-end time to answer a call; the target is under ${target}`}
             legend={latencySeries}
             legendShape="line"
             empty={empty}
             table={{
-              columns: [
-                { key: "date", label: "Date" },
-                { key: "p50", label: "Median", numeric: true },
-                { key: "p95", label: "95th percentile", numeric: true },
-              ],
+              columns: [dateColumn, { key: "p50", label: "Median", numeric: true }, { key: "p95", label: "95th percentile", numeric: true }],
               rows: series.map((p, i) => ({ date: categories[i], p50: formatMs(p.latency_p50_ms), p95: formatMs(p.latency_p95_ms) })),
             }}
           >
-            <LineChart label="Response time" categories={categories} ticks={ticks} series={latencySeries} formatValue={formatMs} formatAxis={msAxis} />
+            <LineChart
+              label="Response time"
+              categories={categories}
+              ticks={ticks}
+              series={latencySeries}
+              formatValue={formatMs}
+              formatAxis={msAxis}
+              target={{ value: metrics.target_ms, label: `${target} target` }}
+            />
           </ChartCard>
           <ChartCard
-            title="Failed requests"
-            subtitle="Share of questions that errored, were rate limited, or hit an outage"
+            title={`Answered within ${target}`}
+            subtitle="Share of answered calls that met the response time target"
             empty={empty}
             table={{
-              columns: [
-                { key: "date", label: "Date" },
-                { key: "rate", label: "Failed", numeric: true },
-                { key: "count", label: "Failed / total", numeric: true },
-              ],
+              columns: [dateColumn, { key: "rate", label: `Within ${target}`, numeric: true }],
+              rows: series.map((p, i) => ({ date: categories[i], rate: formatPercent(p.within_target_rate) })),
+            }}
+          >
+            <ColumnChart
+              label={`Answered within ${target}`}
+              categories={categories}
+              ticks={ticks}
+              series={withinTargetSeries}
+              formatValue={formatPercent}
+              formatAxis={percentAxis}
+            />
+          </ChartCard>
+          <ChartCard
+            title="Failed calls"
+            subtitle="Calls that errored, were rate limited, or hit an outage"
+            empty={empty}
+            table={{
+              columns: [dateColumn, { key: "rate", label: "Failed", numeric: true }, { key: "count", label: "Failed / calls", numeric: true }],
               rows: series.map((p, i) => ({
                 date: categories[i],
                 rate: formatPercent(p.error_rate),
-                count: `${formatCount(p.failed_requests)} / ${formatCount(p.requests)}`,
+                count: `${formatCount(p.failed_calls)} / ${formatCount(p.calls)}`,
               })),
             }}
           >
-            <ColumnChart label="Failed requests" categories={categories} ticks={ticks} series={errorSeries} formatValue={formatPercent} formatAxis={percentAxis} />
+            <ColumnChart label="Failed calls" categories={categories} ticks={ticks} series={errorSeries} formatValue={formatPercent} formatAxis={percentAxis} />
           </ChartCard>
-        </div>
+        </ChartRow>
 
-        <section className="card" aria-labelledby="outcomes-heading">
-          <header className="card-header">
-            <h3 id="outcomes-heading">Requests by outcome</h3>
-          </header>
+        <TableCard id="outcomes-heading" title="Calls by outcome">
           <DataTable
-            caption="Requests by outcome"
+            caption="Calls by outcome"
             columns={[
               { key: "status", label: "Outcome" },
-              { key: "requests", label: "Requests", numeric: true },
+              { key: "requests", label: "Calls", numeric: true },
               { key: "share", label: "Share", numeric: true },
             ]}
             rows={metrics.by_status.map((s) => ({
               status: STATUS_LABELS[s.status] ?? s.status,
               requests: formatCount(s.requests),
-              share: formatPercent(summary.requests ? s.requests / summary.requests : null),
+              share: formatPercent(summary.calls ? s.requests / summary.calls : null),
             }))}
           />
-        </section>
+        </TableCard>
       </section>
     </>
   );

@@ -58,8 +58,13 @@ class PgVectorConnection:
         """Make a simple query to the connected database."""
         cursor = self.conn.cursor()
 
-        # make the query
-        cursor.execute(sql_query, query_vars)
+        # make the query; on failure roll back, otherwise the connection stays in a failed
+        # transaction and every later query on it fails with InFailedSqlTransaction
+        try:
+            cursor.execute(sql_query, query_vars)
+        except psycopg.Error:
+            self.conn.rollback()
+            raise
 
         # iter through result tuples, can be any number of rows so be careful!
         for query_fields in cursor:
