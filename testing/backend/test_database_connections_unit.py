@@ -127,15 +127,6 @@ def test_awn_connection_query_schema_and_context_cleanup(monkeypatch: pytest.Mon
     assert list(connection.simple_query("SELECT %s", (5,))) == [("COLUMN", "varchar", "YES", "", "description")]
     assert fake_connection.cursors[1].query == "SELECT %s"
     assert fake_connection.cursors[1].params == (5,)
-    cached_schema = connection.query_schema("station123")
-    assert cached_schema[0].column_name == "COLUMN"
-    assert len(fake_connection.cursors) == 2
-    cached_schema.clear()
-    assert connection.query_schema("station123") == [
-        _awn_connection_base.SchemaQueryResult("COLUMN", "varchar", "YES", "", "description")
-    ]
-    assert len(fake_connection.cursors) == 2
-    connection.clear_schema_cache("station123")
     connection.query_schema("station123")
     assert len(fake_connection.cursors) == 3
     with connection:

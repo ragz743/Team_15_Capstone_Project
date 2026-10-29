@@ -1,8 +1,9 @@
 """AgWeatherNet Chatbot Workflow."""
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
+from functools import lru_cache
 from typing import Annotated, Any, Literal, Sequence, TypedDict
 
 import sqlglot
@@ -44,6 +45,16 @@ _FORBIDDEN_NODES = (
     exp.SessionParameter,
 )
 _BLOCKED_FUNCTIONS = {"SLEEP", "BENCHMARK", "LOAD_FILE", "GET_LOCK", "RELEASE_LOCK", "SYS_EXEC", "SYS_EVAL"}
+
+
+def _make_cached_schema_fetcher(db: AWNDatabaseConnectionBase) -> Callable[[str], tuple]:
+    """Return a per-connection schema fetcher memoized by table name."""
+
+    @lru_cache(maxsize=128)
+    def fetch(table_name: str) -> tuple:
+        return tuple(db.query_schema(table_name))
+
+    return fetch
 
 
 class QueryClassification(BaseModel):
@@ -145,6 +156,7 @@ class ChatbotWorkflow:
         self.current_db = AWNDatabaseConnection()
         self.historical_daily_db = AWNDailyDatabaseConnection()
         self.forecast_db = AWNForecastDatabaseConnection()
+        self._schema_fetchers: dict[int, Callable[[str], tuple]] = {}
 
     def close(self) -> None:
         """Close all open connections."""
@@ -316,7 +328,10 @@ class ChatbotWorkflow:
         attempts = 0
         while not fetch_schema_done and attempts < 3:
             try:
-                schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
+                fetch = self._schema_fetchers.get(id(db))
+                if fetch is None:
+                    fetch = self._schema_fetchers[id(db)] = _make_cached_schema_fetcher(db)
+                schema = fetch(table_name)
                 schema_context = (
                     _common.to_markdown_table(schema, [""] * len(schema[0]))
                     if schema

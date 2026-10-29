@@ -75,6 +75,7 @@ def make_workflow(debug: bool = False) -> ChatbotWorkflow:
     """Construct a workflow without opening database or model connections."""
     chatbot = object.__new__(ChatbotWorkflow)
     chatbot._debug = debug
+    chatbot._schema_fetchers = {}
     chatbot._query_handlers = {
         "current_weather": "_query_current",
         "forecast_weather": "_query_forecast",
