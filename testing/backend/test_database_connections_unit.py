@@ -98,6 +98,7 @@ def test_awn_connection_configuration_and_table_names(
         "password": "awn-password",
         "host": "awn.example",
         "database": db_name,
+        "connection_timeout": connection_type.CONNECTION_TIMEOUT_SECONDS,
     }
     assert connection.format_table_name(123) == table_name
     assert created == [connection.conn]

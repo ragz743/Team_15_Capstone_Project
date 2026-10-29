@@ -40,6 +40,7 @@ class AWNDatabaseConnectionBase(ABC):
     """AgWeatherNet MySQL database connection base class."""
 
     _DB_NAME: ClassVar[str]
+    CONNECTION_TIMEOUT_SECONDS: ClassVar[int] = 30
 
     def __init__(self) -> None:
         """Create a new AWN Database Connection."""
@@ -48,6 +49,7 @@ class AWNDatabaseConnectionBase(ABC):
             password=os.getenv("AWN_DB_PASSWORD"),
             host=os.getenv("AWN_DB_HOST"),
             database=self._DB_NAME,
+            connection_timeout=self.CONNECTION_TIMEOUT_SECONDS,
         )
 
     def __enter__(self) -> Self:
