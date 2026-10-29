@@ -12,8 +12,15 @@ from backend.models import (
     chatbot_openrouter,
     embedding_openrouter,
 )
+from backend.models.chatbot_local import ChatbotLlamaCpp, ChatbotLocal, ChatbotOllama
 from copilot.session_events import AssistantMessageData
 from langchain_core.documents import Document
+
+
+@pytest.mark.parametrize("wrapper", [ChatbotLocal, ChatbotLlamaCpp, ChatbotOllama])
+def test_local_chatbot_wrappers_are_concrete(wrapper) -> None:
+    """All local LangChain wrappers implement the shared async chatbot interface."""
+    assert not wrapper.__abstractmethods__
 
 
 @pytest.mark.parametrize(

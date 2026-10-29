@@ -32,3 +32,13 @@ class _BaseChatbot(ABC):
 
         msg = "invoke() cannot run inside an event loop; use 'await ainvoke(...)' instead"
         raise RuntimeError(msg)
+        
+    @staticmethod
+    def _content_to_str(content: str | list) -> str:
+        """Flatten a langchain message content (str or list of parts) into a single string."""
+        match content:
+            case str(msg):
+                return msg
+            case [*parts]:
+                return "\n".join(p.get("text", str(p)) if isinstance(p, dict) else str(p) for p in parts)
+        return str(content)
