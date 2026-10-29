@@ -16,27 +16,6 @@ class _LangchainChatbot(_BaseChatbot):
     _model: BaseChatModel
 
     @override
-    def invoke(self, messages: list[str]) -> str:
-        """Pass a list of messages to the local model and return the response."""
-        return self._content_to_str(self._model.invoke(messages).content)
-
-
-class ChatbotLocal(_LangchainChatbot):
-    """Factory compatible wrapper for a llama.cpp server (OpenAI-compatible API)."""
-
-    def __init__(self, kwargs: dict) -> None:
-        """Create an instance of ChatbotLocal."""
-        config = dict(kwargs)
-        self.model_name: str = config.pop("model")
-        base_url: str = config.pop("base_url")
-        self._model = ChatOpenAI(
-            model=self.model_name,
-            base_url=base_url,
-            api_key=SecretStr("local"),  # llama.cpp server does not validate the key
-            **config,
-        )
-
-    @override
     async def astream(self, messages: list[str]) -> AsyncIterator[str]:
         """Asynchronously stream the local model response in text chunks."""
         async for chunk in self._model.astream(messages):
@@ -59,6 +38,28 @@ class ChatbotLocal(_LangchainChatbot):
             case [*parts]:
                 return "\n".join(str(p) for p in parts)
         return str(response.content)
+
+    @override
+    def invoke(self, messages: list[str]) -> str:
+        """Pass a list of messages to the local model and return the response."""
+        return self._content_to_str(self._model.invoke(messages).content)
+
+
+class ChatbotLocal(_LangchainChatbot):
+    """Factory compatible wrapper for a llama.cpp server (OpenAI-compatible API)."""
+
+    def __init__(self, kwargs: dict) -> None:
+        """Create an instance of ChatbotLocal."""
+        config = dict(kwargs)
+        self.model_name: str = config.pop("model")
+        base_url: str = config.pop("base_url")
+        self._model = ChatOpenAI(
+            model=self.model_name,
+            base_url=base_url,
+            api_key=SecretStr("local"),  # llama.cpp server does not validate the key
+            **config,
+        )
+
 
 class ChatbotLlamaCpp(_LangchainChatbot):
     """Factory compatible wrapper for running a GGUF model in-process with langchain-community ChatLlamaCpp."""
