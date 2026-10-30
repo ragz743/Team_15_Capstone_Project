@@ -66,15 +66,19 @@ class AWNDatabaseConnectionBase(ABC):
         self.conn.disconnect()
 
     def simple_query(self, sql_query: str, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
-        """Make a simple query to the connected database."""
+        """Execute a query in a read-only transaction and yield its results."""
         cursor = self.conn.cursor()
 
-        # make the query
-        cursor.execute(sql_query, query_vars)
+        try:
+            cursor.execute("START TRANSACTION READ ONLY", ())
+            cursor.execute(sql_query, query_vars)
+            results = list(cursor)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
-        # iter through result tuples, can be any number of rows so be careful!
-        for query_fields in cursor:
-            yield query_fields
+        yield from results
 
     def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
         """Return schema metadata for a table."""
