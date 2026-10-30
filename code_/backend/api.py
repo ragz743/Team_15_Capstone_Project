@@ -15,9 +15,10 @@ from typing import Annotated, Literal
 
 import dotenv
 from backend.analytics import admin_api, retrieval_quality
+from backend.analytics.awn_reporter import AwnUsageReporter
 from backend.analytics.budget import BudgetConfig, BudgetMonitor
 from backend.analytics.metering import MeteredEmbedding, RequestUsage
-from backend.analytics.usage_store import UsageStore, UsageTracker
+from backend.analytics.usage_store import UsageRecorder, UsageStore, UsageTracker
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
@@ -39,8 +40,9 @@ logging.basicConfig(level=logging.INFO)
 # another ":free" entry from https://openrouter.ai/api/v1/models.
 _DEFAULT_CHAT_MODEL = "openai/gpt-oss-20b:free"
 
-# Optional anonymous ids the chat frontend sends so the admin dashboard can count users and sessions.
-_CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+# Ids the chat frontend sends so the admin dashboard can count users and sessions: the signed-in AWN
+# username (letters, digits, and . _ @ -) and the login session id.
+_CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 
 
 class ChatMessage(BaseModel):
@@ -109,10 +111,16 @@ def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
     return retriever, chatbot, chat_model_name, embedding_model_name
 
 
-def _build_usage_store() -> UsageStore | None:
+def _build_usage_store() -> AwnUsageReporter | UsageStore | None:
+    """Where usage goes: the AgWeatherNet backend when AWN_BACKEND_URL is set, otherwise the local Postgres store."""
     if os.getenv("AWN_USAGE_TRACKING", "true").lower() == "false":
         logger.info("Usage tracking disabled by AWN_USAGE_TRACKING")
         return None
+
+    reporter = AwnUsageReporter.from_env()
+    if reporter is not None:
+        logger.info("Reporting usage to the AgWeatherNet backend at %s", reporter.base_url)
+        return reporter
 
     # short timeout so an unreachable database delays a chat request by seconds, not minutes
     store = UsageStore(lambda: PgVectorConnection(connect_timeout=3).conn)
@@ -124,7 +132,7 @@ def _build_usage_store() -> UsageStore | None:
     return store
 
 
-def _check_quality_if_due(store: UsageStore) -> None:
+def _check_quality_if_due(store: AwnUsageReporter | UsageStore) -> None:
     """Run the sampled retrieval quality check when the last run is older than AWN_QUALITY_CHECK_HOURS (24)."""
     every_hours = float(os.getenv("AWN_QUALITY_CHECK_HOURS") or 24)
     if _retriever is None or not retrieval_quality.is_due(store.latest_quality_run_at(), every_hours):
@@ -133,11 +141,14 @@ def _check_quality_if_due(store: UsageStore) -> None:
     logger.info("Retrieval quality check: %d of %d sample questions found the right data", run.passed, run.samples)
 
 
-async def _hourly_checks(monitor: BudgetMonitor, store: UsageStore) -> None:
-    """Check the monthly LLM budget and the retrieval quality schedule now and then every hour."""
+async def _hourly_checks(monitor: BudgetMonitor | None, store: AwnUsageReporter | UsageStore) -> None:
+    """Check the monthly LLM budget (local store only) and the retrieval quality schedule now and then every hour."""
     interval = int(os.getenv("AWN_BUDGET_CHECK_SECONDS") or 3600)
+    checks = [lambda: _check_quality_if_due(store)]
+    if monitor is not None:
+        checks.insert(0, monitor.check)
     while True:
-        for check in (monitor.check, lambda: _check_quality_if_due(store)):
+        for check in checks:
             try:
                 await asyncio.to_thread(check)
             except Exception:
@@ -162,11 +173,16 @@ async def lifespan(app: FastAPI):
     global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name, _usage_tracker
     dotenv.load_dotenv()
     usage_store = _build_usage_store()
-    admin_api.set_usage_store(usage_store)
-    _usage_tracker = UsageTracker(usage_store)
+    # with the AgWeatherNet backend, its admin dashboard and budget alert replace /api/admin/* and BudgetMonitor
+    local_store = usage_store if isinstance(usage_store, UsageStore) else None
+    admin_api.set_usage_store(local_store)
+    recorder: UsageRecorder | None = usage_store
+    _usage_tracker = UsageTracker(recorder)
     budget_task = None
     if usage_store is not None:
-        monitor = BudgetMonitor(usage_store, BudgetConfig.from_env(), admin_api.dashboard_timezone())
+        monitor = (
+            BudgetMonitor(local_store, BudgetConfig.from_env(), admin_api.dashboard_timezone()) if local_store else None
+        )
         budget_task = asyncio.create_task(_hourly_checks(monitor, usage_store))
     try:
         _retriever, _chatbot, _chatbot_model_name, _embedding_model_name = _build_retriever()

@@ -40,6 +40,9 @@ services:
       AWN_ADMIN_TOKEN: ${AWN_ADMIN_TOKEN:-}  # admin dashboard is disabled until this is set
       AWN_DASHBOARD_TIMEZONE: ${AWN_DASHBOARD_TIMEZONE:-America/Los_Angeles}
       AWN_USAGE_TRACKING: ${AWN_USAGE_TRACKING:-true}
+      # report usage to the AgWeatherNet backend (LLM Usage tab of its admin dashboard) instead of the local store
+      AWN_BACKEND_URL: ${AWN_BACKEND_URL:-}  # e.g. http://host.docker.internal:8080 locally, https://weather.wsu.edu in production
+      AWN_INTERNAL_KEY: ${AWN_INTERNAL_KEY:-}  # must match AWN_INTERNAL_KEY on the AgWeatherNet backend
       AWN_RESPONSE_TARGET_MS: ${AWN_RESPONSE_TARGET_MS:-5000}
       AWN_QUALITY_CHECK_HOURS: ${AWN_QUALITY_CHECK_HOURS:-24}
       AWN_MONTHLY_BUDGET_USD: ${AWN_MONTHLY_BUDGET_USD:-50}

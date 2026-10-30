@@ -95,6 +95,7 @@ only sent once SMTP is configured** (see below).
 | `AWN_SMTP_HOST`, `AWN_SMTP_PORT`, `AWN_SMTP_USERNAME`, `AWN_SMTP_PASSWORD`, `AWN_SMTP_FROM`, `AWN_SMTP_STARTTLS` | unset, `587`, unset, unset, unset, `true` | Mail server for the budget alert |
 | `AWN_DASHBOARD_URL` | unset | Link included in the alert email |
 | `AWN_USAGE_TRACKING` | `true` | Set to `false` to stop recording usage |
+| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | unset | When both are set, usage and quality checks are sent to the AgWeatherNet backend (awn_be_v2 `/api/v1/internal/llm-usage/*`) instead of Postgres. Its admin dashboard (LLM Usage tab) and monthly budget alert then replace this dashboard and the email settings above |
 | `AWN_PRICING_FILE` | bundled `pricing.yaml` | Alternative price table |
 
 ## Running locally

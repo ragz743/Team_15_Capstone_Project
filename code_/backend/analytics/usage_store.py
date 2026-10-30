@@ -9,7 +9,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 import psycopg
@@ -319,14 +319,7 @@ class UsageStore:
         )
         call_rows = []
         for call in usage.calls:
-            if call.cost_usd is not None:
-                # the provider told us what it billed; no estimate needed
-                cost, priced = call.cost_usd, True
-            else:
-                cost, priced = self._prices.cost(call.model, call.input_tokens, call.output_tokens)
-            if not priced and call.requested_model and call.requested_model != call.model:
-                # routers (e.g. openrouter/free) answer with another model's name; fall back to the configured one
-                cost, priced = self._prices.cost(call.requested_model, call.input_tokens, call.output_tokens)
+            cost, priced = self._prices.call_cost(call)
             call_rows.append(
                 (
                     usage.request_id,
@@ -757,10 +750,18 @@ def _model_row(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+class UsageRecorder(Protocol):
+    """Where tracked requests go: this Postgres store, or the AgWeatherNet backend (AwnUsageReporter)."""
+
+    def record(self, usage: RequestUsage) -> None:
+        """Save one request and its model calls."""
+        ...
+
+
 class UsageTracker:
     """Times a chat request, meters its model calls, and records it without ever failing the request."""
 
-    def __init__(self, store: UsageStore | None) -> None:
+    def __init__(self, store: UsageRecorder | None) -> None:
         """Create a tracker writing to `store`, or a no-op tracker when `store` is None."""
         self._store = store
 

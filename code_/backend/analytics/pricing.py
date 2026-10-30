@@ -5,8 +5,12 @@ from __future__ import annotations
 import os
 import pathlib
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import yaml
+
+if TYPE_CHECKING:
+    from backend.analytics.metering import LlmCall
 
 _DEFAULT_PRICING_FILE = pathlib.Path(__file__).with_name("pricing.yaml")
 
@@ -51,3 +55,14 @@ class PriceTable:
 
         cost = (input_tokens * price.input_per_million + output_tokens * price.output_per_million) / 1_000_000
         return cost, True
+
+    def call_cost(self, call: LlmCall) -> tuple[float, bool]:
+        """Return (cost in USD, priced) for a recorded call, preferring the cost the provider billed."""
+        if call.cost_usd is not None:
+            # the provider told us what it billed; no estimate needed
+            return call.cost_usd, True
+        cost, priced = self.cost(call.model, call.input_tokens, call.output_tokens)
+        if not priced and call.requested_model and call.requested_model != call.model:
+            # routers (e.g. openrouter/free) answer with another model's name; fall back to the configured one
+            cost, priced = self.cost(call.requested_model, call.input_tokens, call.output_tokens)
+        return cost, priced
