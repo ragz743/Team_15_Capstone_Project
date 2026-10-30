@@ -11,9 +11,9 @@ class ChatbotOpenRouter(_BaseChatbot):
 
     def __init__(self, kwargs) -> None:
         """Create an instance of the ChatbotOpenRouter."""
-        model: str = kwargs.pop("model")
+        self.model_name: str = kwargs.pop("model")
         self._model = ChatOpenRouter(
-            model=model,
+            model=self.model_name,
             api_key=os.getenv("OPENROUTER_API_KEY"),  # type: ignore (can't get SecretStr type)
             **kwargs,
         )
