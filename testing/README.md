@@ -94,3 +94,18 @@ python -m pytest ./testing/backend/workflow/test_workflow.py -s \
     --log-file-mode=w \
     --run-sample-questions
 ```
+
+> With a profiler:
+```Bash
+python -m cProfile -o /output/file/path \
+    -m pytest ./testing/backend/workflow/test_workflow.py::test_function_name -s \
+    --log-file=test_workflow.log \
+    --log-file-mode=w \
+    --run-sample-questions
+
+# View results
+python -m pstats /output/file/path
+# inside the pstats window
+# sort cumulative # sort by total time spent in this function
+# stats 100       # show top 100 stack trace snapshots
+```

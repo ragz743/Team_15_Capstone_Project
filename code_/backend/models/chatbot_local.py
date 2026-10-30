@@ -1,5 +1,6 @@
 """Chatbot wrappers for locally hosted models (llama.cpp server, in-process llama-cpp, Ollama)."""
 
+from collections.abc import AsyncIterator
 import pathlib
 from typing import override
 
@@ -13,6 +14,30 @@ class _LangchainChatbot(_BaseChatbot):
     """Shared invoke logic for chatbots backed by a langchain chat model."""
 
     _model: BaseChatModel
+
+    @override
+    async def astream(self, messages: list[str]) -> AsyncIterator[str]:
+        """Asynchronously stream the local model response in text chunks."""
+        async for chunk in self._model.astream(messages):
+            if isinstance(chunk.content, str):
+                if chunk.content:
+                    yield chunk.content
+            else:
+                for part in chunk.content:
+                    text = part if isinstance(part, str) else part.get("text", "")
+                    if text:
+                        yield text
+
+    @override
+    async def ainvoke(self, messages: list[str]) -> str:
+        """Asynchronously send messages to the local model and return the response."""
+        response = await self._model.ainvoke(messages)
+        match response.content:
+            case str(msg):
+                return msg
+            case [*parts]:
+                return "\n".join(str(p) for p in parts)
+        return str(response.content)
 
     @override
     def invoke(self, messages: list[str]) -> str:

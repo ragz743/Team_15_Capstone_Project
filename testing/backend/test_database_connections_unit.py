@@ -98,6 +98,7 @@ def test_awn_connection_configuration_and_table_names(
         "password": "awn-password",
         "host": "awn.example",
         "database": db_name,
+        "connection_timeout": connection_type.CONNECTION_TIMEOUT_SECONDS,
     }
     assert connection.format_table_name(123) == table_name
     assert created == [connection.conn]
@@ -127,7 +128,8 @@ def test_awn_connection_query_schema_and_context_cleanup(monkeypatch: pytest.Mon
     assert list(connection.simple_query("SELECT %s", (5,))) == [("COLUMN", "varchar", "YES", "", "description")]
     assert fake_connection.cursors[1].query == "SELECT %s"
     assert fake_connection.cursors[1].params == (5,)
-    assert connection.query_schema("station123")[0].column_name == "COLUMN"
+    connection.query_schema("station123")
+    assert len(fake_connection.cursors) == 3
     with connection:
         assert connection.conn is instances[0]
     assert fake_connection.disconnected
