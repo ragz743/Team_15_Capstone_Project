@@ -52,10 +52,14 @@ class AWNDatabaseConnectionBase(ABC):
             read_timeout=statement_timeout + 2 if statement_timeout is not None else 60,
             write_timeout=15,
         )
-        with self.conn.cursor() as cursor:
-            if statement_timeout is not None:
-                cursor.execute("SET SESSION max_statement_time = %s", (statement_timeout,))
-            cursor.execute("START TRANSACTION READ ONLY")
+        try:
+            with self.conn.cursor() as cursor:
+                if statement_timeout is not None:
+                    cursor.execute("SET SESSION max_statement_time = %s", (statement_timeout,))
+                cursor.execute("START TRANSACTION READ ONLY")
+        except Exception:
+            self.conn.disconnect()
+            raise
 
     def __enter__(self) -> Self:
         """Open the database connection using a context manager."""
