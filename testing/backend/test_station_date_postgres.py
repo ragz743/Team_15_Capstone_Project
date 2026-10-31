@@ -12,30 +12,22 @@ from backend.weather_query import WeatherQuery
 from psycopg.types.json import Jsonb
 
 pytestmark = pytest.mark.skipif(
-    os.getenv("RUN_PG_TESTS") != "1", reason="Set RUN_PG_TESTS=1 for local PostgreSQL checks"
+    os.getenv("RUN_PGVECTOR_TESTS") != "1", reason="Set RUN_PGVECTOR_TESTS=1 for local PostgreSQL checks"
 )
 
 
 @pytest.fixture
-def connection():
-    """Shadow application tables with disposable session local fixtures."""
-    with psycopg.connect(
-        host="127.0.0.1",
-        port=int(os.getenv("PG_PORT", "5432")),
-        dbname="vectorstore",
-        user=os.getenv("PG_USER"),
-        password=os.getenv("PG_PASSWORD"),
-        connect_timeout=3,
-    ) as conn:
+def connection(database):
+    """Create weather fixtures inside the disposable conversation test schema."""
+    with database() as conn:
         for table in ("daily_index", "live_index", "forecast_index"):
-            conn.execute(f"CREATE TEMP TABLE {table} (document text, metadata jsonb, embedding vector(3))")
+            conn.execute(f"CREATE TABLE {table} (document text, metadata jsonb, embedding vector(3))")
         conn.execute(
             "CREATE INDEX daily_index_station_date_idx ON daily_index ((metadata->>'id'), (metadata->>'date'))"
         )
         migration = Path(__file__).parents[2] / "deployment/migrations/001_station_search_indexes.sql"
         conn.execute(migration.read_bytes())
         yield conn
-        conn.rollback()
 
 
 @pytest.mark.parametrize("table", ["daily_index", "live_index", "forecast_index"])

@@ -80,38 +80,43 @@ The E2E report contains the test results and details for each test.             
 
 If you have any questions or run into issues, feel free to ask!
 
+## PR 90 checks
 
-## PR 89 local checks
-
-Run the deterministic backend suite without the credential dependent tests:
+Run backend checks with local PostgreSQL and disposable schemas:
 
 ```bash
-python -m pytest testing/backend \
-  --ignore=testing/backend/test_model_factory.py \
+RUN_PGVECTOR_TESTS=1 pytest testing/backend \
   --ignore=testing/backend/test_awn_connection.py \
-  --ignore=testing/backend/test_pgvector_connection.py \
-  --ignore=testing/backend/workflow/test_workflow.py
+  --ignore=testing/backend/test_model_factory.py \
+  -k 'not test_nearest_station_search'
 ```
 
-The interpretation tests use controlled model replies. They verify routing and validation,
-not live model language accuracy. The PostgreSQL tests opt in with `RUN_PG_TESTS=1`
-and use session local temporary tables on `127.0.0.1`. Export the local `PG_USER`,
-`PG_PASSWORD` and optional `PG_PORT` before running them.
+The excluded AWN connection and model factory checks require their configured external
+services. Run `npm test`, `npm run lint` and `npm run build` from `code_/frontend`.
+
+Controlled model outputs verify interpretation contracts and routing. They do not measure
+live language accuracy. Startup checks verify migration failure stops the API.
+
+For live interpretation and saved chat checks, select an available free model that supports
+structured output. For example:
 
 ```bash
-PYTHONPATH=code_ RUN_PG_TESTS=1 python -P -m pytest testing/backend/test_station_date_postgres.py
+OPENROUTER_CHAT_MODEL=dots-studio/dots-3-note-preview:free \
+OPENROUTER_HISTORY_MODEL=dots-studio/dots-3-note-preview:free \
+RUN_WEATHER_MODEL_TESTS=1 RUN_HISTORY_MODEL_TESTS=1 RUN_HISTORY_RUNTIME_TESTS=1 \
+pytest testing/e2e/test_weather_language.py \
+  testing/e2e/test_history_language.py testing/e2e/test_history_runtime.py
 ```
 
-A browser fixture avoids provider calls and application database writes:
+These checks send synthetic messages. The API checks use disposable PostgreSQL schemas
+and controlled weather records with live model interpretation and answer generation.
+They cover recall, saved location reuse, failed retrieval retries, reloads and ownership.
+They do not query the external AWN database. Provider failures remain failed checks.
 
-```bash
-PYTHONPATH=code_:testing python -P -m uvicorn pr89_browser_fixture:app --host 127.0.0.1 --port 8091
-```
-
-Start the frontend in another terminal with `VITE_API_TARGET=http://127.0.0.1:8091`.
-The fixture contains a source near Pullman and a fixed September 9, 2026 temperature.
-Use it to check map selection, keyboard controls, request gating and source rendering.
-
+For browser checks, build the frontend and run
+`PYTHONPATH=code_:testing python testing/pr90_browser_fixture.py --env-file .env`.
+With Playwright and Chrome available, run `node testing/pr90_browser.cjs` in another
+terminal. The fixture uses a disposable PostgreSQL schema and removes it on shutdown.
 ## Logging
 Certain tests such as those in `workflow/test_workflow.py` utilize logging to track events during the program. To enable logging with pytest, make sure to add the correct flags. The following pytest call will enable logging (and overwrite the contents of the file in 'w' mode) and also show test output in stdout.
 ```Bash

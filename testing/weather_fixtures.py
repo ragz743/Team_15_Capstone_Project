@@ -23,6 +23,7 @@ def intent_json(**changes) -> str:
             "end": "2026-09-09",
             "question": "Temperature here on 2026-09-09?",
             "message": "",
+            "subject": "temperature",
             **changes,
         }
     )

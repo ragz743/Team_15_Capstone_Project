@@ -32,7 +32,7 @@ Open:
 http://localhost:8080
 ```
 
-Choose a point on the map, then try a question like:
+Choose a point on the map, then try:
 
 ```text
 What was the temperature here yesterday?
@@ -72,6 +72,7 @@ From the repo root, with the virtual environment active:
 python -m pip install -e ".[dev]"
 docker compose up -d pgvector
 index
+python -m scripts.migrate_conversations
 uvicorn backend.api:app --reload --port 8000
 ```
 
@@ -157,6 +158,7 @@ retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
 | `OPENROUTER_API_KEY` | yes | none |
 | `OPENROUTER_EMBEDDING_MODEL` | yes | `openai/text-embedding-3-small` in `.env.example` |
 | `OPENROUTER_CHAT_MODEL` | no | `openrouter/free` |
+| `OPENROUTER_HISTORY_MODEL` | no | inherits `OPENROUTER_CHAT_MODEL` |
 | `OPENROUTER_CHAT_TEMPERATURE` | no | `0` |
 | `PG_USER` | yes | none |
 | `PG_PASSWORD` | yes | none |
@@ -165,12 +167,6 @@ retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
 | `AWN_DB_USER` | data loaders only | none |
 | `AWN_DB_PASSWORD` | data loaders only | none |
 | `AWN_DB_HOST` | data loaders only | none |
-
-Missing or blank chat settings use `openrouter/free`. An explicit setting takes
-precedence. If an existing `.env` still uses `openai/gpt-oss-20b:free`, replace that
-value with `openrouter/free`; the old free endpoint is unavailable. The
-[free router](https://openrouter.ai/docs/guides/routing/routers/free-router) selects
-an available free model, so response quality and latency can vary between requests.
 
 Outside Docker, Postgres still defaults to `localhost:5432`.
 
@@ -193,3 +189,27 @@ The count must be greater than `0` for retrieval-based answers. If it is `0`,
 the web stack can still run, but the chatbot will not have enough context to
 answer weather questions well. Loading that data is outside this containerization
 ticket.
+
+## Saved conversations and map selection
+
+Saved turns accept `conversation_id`, `request_id`, `message` and an optional `point`.
+The server owns conversation context. Each request freezes its chosen point and resolved
+query before answering. A retry uses the same message, point and request ID.
+Existing conversations remain readable. A conversation saved before map selection
+requires a point for a new weather question.
+
+`SavedChatService` coordinates acceptance, preparation, answering and persistence.
+`HistoryService` owns saved chat classification, lookup, context reuse and answers from
+saved excerpts. `WeatherInterpreter` supplies validated weather dates and intent.
+
+The API continues to use `Retriever`. LangGraph integration is a separate change that
+will own weather classification and question splitting. It must use a session per
+conversation and preserve frozen inputs on retries before replacing the current weather path.
+
+Conversation reloads read context and messages from one database snapshot. A reply
+completed during a reload cannot pair new messages with an old map point.
+
+`StationCatalog` refreshes station metadata after five minutes and searches a latitude
+band for the nearest source within 50 km. This distance is a product default to review.
+Weather queries filter the selected source and dates before ranking. Private station
+coordinates remain on the server. A missing match asks the user to choose another point.
