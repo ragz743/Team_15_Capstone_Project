@@ -236,7 +236,7 @@ class _Retriever:
         self._reply = reply
         self._error = error
 
-    def retrieve(self, question: str, filter: dict | None = None) -> str:
+    def retrieve(self, question: str, **kwargs) -> str:
         if self._error is not None:
             raise self._error
         return self._reply

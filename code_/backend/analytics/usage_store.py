@@ -34,8 +34,8 @@ class UsageStoreUnavailableError(RuntimeError):
 Bucket = Literal["day", "week", "month"]
 
 # Requests that produced an answer count toward response time; the rest count as failures.
-_ANSWERED = ("ok", "empty")
-_FAILED = ("error", "rate_limited", "unavailable")
+_ANSWERED = ("ok",)
+_FAILED = ("empty", "error", "rate_limited", "unavailable")
 
 # Shared CTEs:
 #   r: the calls (end to end questions, one usage_requests row each) in the window

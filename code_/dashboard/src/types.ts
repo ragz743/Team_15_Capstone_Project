@@ -4,9 +4,9 @@ export type RangeKey = "7d" | "30d" | "90d" | "12m";
 export type Bucket = "day" | "week" | "month";
 
 /**
- * A "call" is one end to end question and answer. "Model requests" are the chat and embedding
- * requests made inside a call. "Users" are logged-in users; sign-in is required to use the chatbot, so
- * unidentified calls (no user id) point to a problem in how the chat app sends the user id.
+ * A "call" is one attempt to answer a question. "Model requests" are requests made inside a call.
+ * "Users" are logged-in users identified by the host website. Calls without a host user ID remain
+ * unidentified and count toward model usage and spending, but not users or login sessions.
  * A session is one login session; it is successful when every call in it was answered.
  */
 export type Summary = {

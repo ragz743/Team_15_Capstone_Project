@@ -32,10 +32,10 @@ Open:
 http://localhost:8080
 ```
 
-Try a question like:
+Choose a point on the map, then try:
 
 ```text
-what was the average temperature in Whitman county recently?
+What was the temperature here yesterday?
 ```
 
 The Docker setup starts three services:
@@ -72,6 +72,7 @@ From the repo root, with the virtual environment active:
 python -m pip install -e ".[dev]"
 docker compose up -d pgvector
 index
+python -m scripts.migrate_conversations
 uvicorn backend.api:app --reload --port 8000
 ```
 
@@ -103,7 +104,7 @@ Example request:
 ```bash
 curl -X POST http://localhost:8000/api/chat \
   -H 'Content-Type: application/json' \
-  -d '{"messages":[{"role":"user","content":"hello"}]}'
+  -d '{"messages":[{"role":"user","content":"Temperature here yesterday?"}],"point":{"latitude":46.73,"longitude":-117.18}}'
 ```
 
 Example response:
@@ -111,12 +112,42 @@ Example response:
 ```json
 {
   "reply": "assistant response",
-  "model": "openai/gpt-oss-20b:free"
+  "model": "openrouter/free"
 }
 ```
 
-The API accepts a message list from the frontend, but today it only sends the
-latest user message to `Retriever.retrieve()`.
+The API passes the latest question and preceding user/assistant messages to the
+weather interpreter. The browser chooses a map point; station filters are no longer
+accepted. The server selects its nearby indexed source and validates the model's
+structured dates before retrieval. The model can also ask for clarification or decline
+an unrelated request.
+
+Station lookup queries `indexed_stations` using a geographic index and returns one
+source. It does not load a full catalog into the application. Sources must have
+consistent Washington coordinates and be within 50 km of the requested point.
+Set `radius_km` on `StationCatalog` to adjust that limit. Missing records do not
+cause a switch to another source.
+
+Weather inserts, metadata changes and deletes maintain the station directory in
+the same transaction through database triggers. Repeated readings with unchanged
+station information skip rebuilding that station. Conflicting identities remain
+excluded until their records are corrected. The lookup uses a bounding box before
+calculating spherical distance, then checks that the station has indexed records.
+
+The API continues to use `Retriever`. `ChatbotWorkflow` queries the AWN databases
+directly and requires county input and session handling. Connecting it to the API is
+a separate integration change.
+
+For an existing database, apply `deployment/migrations/001_station_search_indexes.sql`
+then `deployment/migrations/002_station_directory.sql` before deploying the backend.
+The second migration reads existing metadata once to populate the directory and locks
+the weather tables against writes while it runs. It requires PostgreSQL 16 or newer
+and no additional extensions. Fresh Docker databases run it after the seed script.
+The CLI uses the same selection flow:
+
+```bash
+retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
+```
 
 ## Configuration
 
@@ -126,7 +157,8 @@ latest user message to `Retriever.retrieve()`.
 | -------- | -------- | ------- |
 | `OPENROUTER_API_KEY` | yes | none |
 | `OPENROUTER_EMBEDDING_MODEL` | yes | `openai/text-embedding-3-small` in `.env.example` |
-| `OPENROUTER_CHAT_MODEL` | no | `openai/gpt-oss-20b:free` |
+| `OPENROUTER_CHAT_MODEL` | no | `openrouter/free` |
+| `OPENROUTER_HISTORY_MODEL` | no | inherits `OPENROUTER_CHAT_MODEL` |
 | `OPENROUTER_CHAT_TEMPERATURE` | no | `0` |
 | `PG_USER` | yes | none |
 | `PG_PASSWORD` | yes | none |
@@ -157,3 +189,27 @@ The count must be greater than `0` for retrieval-based answers. If it is `0`,
 the web stack can still run, but the chatbot will not have enough context to
 answer weather questions well. Loading that data is outside this containerization
 ticket.
+
+## Saved conversations and map selection
+
+Saved turns accept `conversation_id`, `request_id`, `message` and an optional `point`.
+The server owns conversation context. Each request freezes its chosen point and resolved
+query before answering. A retry uses the same message, point and request ID.
+Existing conversations remain readable. A conversation saved before map selection
+requires a point for a new weather question.
+
+`SavedChatService` coordinates acceptance, preparation, answering and persistence.
+`HistoryService` owns saved chat classification, lookup, context reuse and answers from
+saved excerpts. `WeatherInterpreter` supplies validated weather dates and intent.
+
+The API continues to use `Retriever`. LangGraph integration is a separate change that
+will own weather classification and question splitting. It must use a session per
+conversation and preserve frozen inputs on retries before replacing the current weather path.
+
+Conversation reloads read context and messages from one database snapshot. A reply
+completed during a reload cannot pair new messages with an old map point.
+
+`StationCatalog` refreshes station metadata after five minutes and searches a latitude
+band for the nearest source within 50 km. This distance is a product default to review.
+Weather queries filter the selected source and dates before ranking. Private station
+coordinates remain on the server. A missing match asks the user to choose another point.

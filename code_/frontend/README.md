@@ -33,3 +33,37 @@ npm run dev
 ```
 
 Open `http://localhost:5173` in the browser.
+
+## Station selection and saved chats
+
+Choose a station to ask about its weather. Search by station name or county, or use
+your location to find nearby stations. Reopening a saved chat restores its station.
+A new selection overrides the saved location for the next message. Retrying a failed
+message sends its original input, even if the station selection has changed.
+History recall can run without a selected station.
+
+The workspace composes the sidebar, transcript, station picker and composer. Conversation state
+uses a reducer. Separate hooks handle history navigation and message submission.
+Request ownership prevents responses from an earlier chat from updating the active chat.
+
+The client separates endpoint calls in `api.ts`, HTTP handling in `http.ts` and response
+types and validation in `apiContracts.ts`. Chat submission and history navigation share
+request handling while keeping their existing cancellation and retry behavior.
+
+## Response formatting
+
+Assistant replies render Markdown, including lists, links and scrollable tables.
+User messages keep their original whitespace. Raw HTML and images are disabled;
+links use the renderer's default URL protections. The final-answer prompt requests
+paragraphs for simple answers, bullets for measurements and tables for comparisons.
+Saved replies keep their original text.
+
+With Vite running and Playwright/Chrome available, run the browser check from the
+repository root:
+
+```bash
+AWN_UI_URL=http://127.0.0.1:5173 node testing/browser_markdown.cjs
+```
+
+The check mocks API responses and covers fresh/saved replies, unsafe HTML and links,
+source details, user whitespace and desktop/mobile layouts.

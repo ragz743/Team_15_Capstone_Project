@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Any, ClassVar, Generator, NamedTuple, Self, Sequence
+from typing import Any, ClassVar, Generator, NamedTuple, Self, Sequence, cast
 
 from mysql import connector
 
@@ -41,14 +41,21 @@ class AWNDatabaseConnectionBase(ABC):
 
     _DB_NAME: ClassVar[str]
 
-    def __init__(self) -> None:
+    def __init__(self, *, statement_timeout: int | None = None) -> None:
         """Create a new AWN Database Connection."""
         self.conn: connector.MySQLConnection = connector.MySQLConnection(
             user=os.getenv("AWN_DB_USER"),
             password=os.getenv("AWN_DB_PASSWORD"),
             host=os.getenv("AWN_DB_HOST"),
             database=self._DB_NAME,
+            connection_timeout=10,
+            read_timeout=statement_timeout + 2 if statement_timeout is not None else 60,
+            write_timeout=15,
         )
+        with self.conn.cursor() as cursor:
+            if statement_timeout is not None:
+                cursor.execute("SET SESSION max_statement_time = %s", (statement_timeout,))
+            cursor.execute("START TRANSACTION READ ONLY")
 
     def __enter__(self) -> Self:
         """Open the database connection using a context manager."""
@@ -65,14 +72,10 @@ class AWNDatabaseConnectionBase(ABC):
 
     def simple_query(self, sql_query: str, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
         """Make a simple query to the connected database."""
-        cursor = self.conn.cursor()
-
-        # make the query
-        cursor.execute(sql_query, query_vars)
-
-        # iter through result tuples, can be any number of rows so be careful!
-        for query_fields in cursor:
-            yield query_fields
+        with self.conn.cursor() as cursor:
+            cursor.execute(sql_query, query_vars)
+            while (row := cursor.fetchone()) is not None:
+                yield cast(Sequence[Any], row)
 
     def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
         """Query table schema given a table name."""

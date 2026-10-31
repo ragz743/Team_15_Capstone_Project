@@ -8,6 +8,7 @@ the AgWeatherNet backend when AWN_BACKEND_URL and AWN_INTERNAL_KEY are set, othe
 """
 
 import argparse
+from typing import cast
 
 import dotenv
 from backend.analytics import retrieval_quality
@@ -29,8 +30,11 @@ def main() -> None:
     )
 
     retriever, *_ = _build_retriever()
+    find_context = getattr(retriever, "find_context", None)
+    if not callable(find_context):
+        parser.error("The index retrieval sampler does not support the LangGraph SQL engine yet.")
     samples = retrieval_quality.load_samples(args.samples)
-    run = retrieval_quality.evaluate(retriever.find_context, samples)
+    run = retrieval_quality.evaluate(cast(retrieval_quality.FindContext, find_context), samples)
 
     for detail in run.details:
         mark = "PASS" if detail["passed"] else "FAIL"
