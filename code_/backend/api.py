@@ -47,7 +47,7 @@ logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
 
 # Keep the demo on the free router unless explicitly configured otherwise.
-_DEFAULT_CHAT_MODEL = "openrouter/free"
+_DEFAULT_CHAT_MODEL = "nvidia/nemotron-3.5-super-vl:free"
 _CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 
 

@@ -112,7 +112,7 @@ Example response:
 ```json
 {
   "reply": "assistant response",
-  "model": "openrouter/free"
+  "model": "nvidia/nemotron-3.5-super-vl:free"
 }
 ```
 
@@ -157,7 +157,7 @@ retrieve --latitude 46.73 --longitude -117.18 "Temperature here yesterday?"
 | -------- | -------- | ------- |
 | `OPENROUTER_API_KEY` | yes | none |
 | `OPENROUTER_EMBEDDING_MODEL` | yes | `openai/text-embedding-3-small` in `.env.example` |
-| `OPENROUTER_CHAT_MODEL` | no | `openrouter/free` |
+| `OPENROUTER_CHAT_MODEL` | no | `nvidia/nemotron-3.5-super-vl:free` |
 | `OPENROUTER_HISTORY_MODEL` | no | inherits `OPENROUTER_CHAT_MODEL` |
 | `OPENROUTER_CHAT_TEMPERATURE` | no | `0` |
 | `PG_USER` | yes | none |
