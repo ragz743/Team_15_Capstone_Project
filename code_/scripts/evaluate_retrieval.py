@@ -18,28 +18,27 @@ from backend.databases.pgvector import PgVectorConnection
 
 
 def main() -> None:
-    """Evaluate the sample questions against the live vector store."""
+    """Evaluate the sample questions through the LangGraph weather workflow."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--samples", help="alternative sample questions file (default: retrieval_samples.yaml)")
     parser.add_argument("--dry-run", action="store_true", help="print the results without saving them")
     args = parser.parse_args()
 
     dotenv.load_dotenv()
-    from backend.api import (
-        _build_retriever,  # builds the same retriever the chat endpoint uses
-    )
+    from backend.api import _build_retriever  # builds the same LangGraph engine the chat endpoint uses
 
-    retriever, *_ = _build_retriever()
-    find_context = getattr(retriever, "find_context", None)
-    if not callable(find_context):
-        parser.error("The index retrieval sampler does not support the LangGraph SQL engine yet.")
+    engine, *_ = _build_retriever()
     samples = retrieval_quality.load_samples(args.samples)
-    run = retrieval_quality.evaluate(cast(retrieval_quality.FindContext, find_context), samples)
+    run = retrieval_quality.evaluate(
+        cast(retrieval_quality.AskStation, engine.sample_executions),
+        samples,
+        pause_seconds=retrieval_quality.SCHEDULED_PAUSE_SECONDS,
+    )
 
     for detail in run.details:
         mark = "PASS" if detail["passed"] else "FAIL"
-        found = ", ".join(detail["found"]) or detail["error"] or "nothing"
-        print(f"{mark}  [{detail['source']:<10}] {detail['question']}  (expected {detail['expected']}, found {found})")
+        found = ", ".join(detail["found"]) or detail["error"] or "no database query"
+        print(f"{mark}  [{detail['source']:<10}] {detail['question']}  (at {detail['expected']}, read {found})")
     print(f"\n{run.passed} of {run.samples} sample questions found the right weather data ({run.score or 0:.0%}).")
 
     if not args.dry_run:

@@ -1,12 +1,14 @@
 # Sample questions for the retrieval quality check (python -m scripts.evaluate_retrieval).
 #
-# Each question passes when the retriever finds weather records for the expected station (or county)
-# in the expected kind of data. Keep the sample small: every question costs one embedding call per index.
+# Each question is asked at its station through the LangGraph weather workflow, and passes when the
+# workflow queries the expected kind of data and gets records back. Keep the sample small: every question
+# makes about three chat model requests (classifier, SQL, summary).
 #
-# source: current (live_index) | historical (daily_index) | forecast (forecast_index)
-# station / county: what the retrieved records must belong to (station wins when both are given)
+# source: current (current_weather) | historical (historical_weather) | forecast (forecast_weather)
+# station: an active AWN station name, as listed by Browse stations; the workflow answers one station
+# at a time, so there are no county-wide questions
 #
-# Update the list when stations are added or removed from the index.
+# Update the list when stations are added or retired.
 
 samples:
   - question: What is the temperature in Pullman right now?
@@ -30,9 +32,9 @@ samples:
   - question: What were the low temperatures at Mansfield this week?
     source: historical
     station: Mansfield
-  - question: What was the weather like in Douglas County over the past few days?
+  - question: What was the average temperature at Wenatchee over the past three days?
     source: historical
-    county: Douglas
+    station: Wenatchee
   - question: Will it rain in Pullman in the next 24 hours?
     source: forecast
     station: Pullman
@@ -42,6 +44,6 @@ samples:
   - question: Is frost expected at Sunrise tonight?
     source: forecast
     station: Sunrise
-  - question: What is the wind forecast for Spokane County?
+  - question: What is the wind forecast for Prosser tomorrow?
     source: forecast
-    county: Spokane
+    station: Prosser

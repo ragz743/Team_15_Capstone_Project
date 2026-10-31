@@ -177,12 +177,14 @@ def _build_usage_store() -> AwnUsageReporter | UsageStore | None:
 def _check_quality_if_due(store: AwnUsageReporter | UsageStore) -> None:
     """Run the sampled retrieval quality check when the last run is older than AWN_QUALITY_CHECK_HOURS (24)."""
     every_hours = float(os.getenv("AWN_QUALITY_CHECK_HOURS") or 24)
-    find_context = getattr(_retriever, "find_context", None)
-    if every_hours <= 0 or not callable(find_context):
+    ask = getattr(_retriever, "sample_executions", None)  # the LangGraph engine
+    if every_hours <= 0 or not callable(ask):
         return
     if not retrieval_quality.is_due(store.latest_quality_run_at(), every_hours):
         return
-    run = retrieval_quality.run_and_record(cast(retrieval_quality.FindContext, find_context), store)
+    run = retrieval_quality.run_and_record(
+        cast(retrieval_quality.AskStation, ask), store, pause_seconds=retrieval_quality.SCHEDULED_PAUSE_SECONDS
+    )
     logger.info("Retrieval quality check: %d of %d sample questions found the right data", run.passed, run.samples)
 
 

@@ -197,9 +197,9 @@ def test_quality_check_uses_the_reporter_schedule(monkeypatch: MonkeyPatch) -> N
     """The hourly quality check works the same with the reporter as with the local store."""
     reporter = MagicMock(spec=AwnUsageReporter)
     reporter.latest_quality_run_at.return_value = None
-    retriever = MagicMock()
-    retriever.find_context.return_value = []
-    monkeypatch.setattr(api, "_retriever", retriever)
+    engine = MagicMock()
+    engine.sample_executions.return_value = []
+    monkeypatch.setattr(api, "_retriever", engine)
     monkeypatch.setattr("backend.analytics.retrieval_quality.load_samples", lambda: [])
     api._check_quality_if_due(reporter)
     reporter.record_quality_run.assert_called_once_with(0, 0, [])

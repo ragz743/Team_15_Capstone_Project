@@ -10,7 +10,7 @@ import type { Series } from "./chartUtils";
 
 const runDate = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 const runDateTime = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-const SOURCE_LABELS = { current: "Current conditions", historical: "Past 7 days", forecast: "Forecast" } as const;
+const SOURCE_LABELS = { current: "Current conditions", historical: "Past days", forecast: "Forecast" } as const;
 
 const percentAxis = (v: number) => `${Math.round(v * 100)}%`;
 
@@ -67,8 +67,8 @@ export default function QualityPanel({ quality }: { quality: Metrics["quality"] 
               columns={[
                 { key: "result", label: "Result" },
                 { key: "question", label: "Question" },
-                { key: "data", label: "Data" },
-                { key: "found", label: "Found" },
+                { key: "data", label: "Expected" },
+                { key: "found", label: "Chatbot queried" },
               ]}
               rows={latest.details.map((d) => ({
                 result: (
@@ -82,7 +82,7 @@ export default function QualityPanel({ quality }: { quality: Metrics["quality"] 
                 ),
                 question: <span className="wrap-cell">{d.question}</span>,
                 data: `${SOURCE_LABELS[d.source]} · ${d.expected}`,
-                found: d.error ? `Error: ${d.error}` : d.found.join(", ") || "Nothing",
+                found: d.error ? `Error: ${d.error}` : d.found.join(", ") || "No weather data",
               }))}
             />
           )}

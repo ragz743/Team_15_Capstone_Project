@@ -102,6 +102,23 @@ def test_empty_records_return_no_data_without_answer_generation(weather):
     assert runtime.model.invoke.call_count == 1
 
 
+def test_quality_check_runs_the_real_graph_at_a_named_station(weather):
+    """The dashboard's sampled quality check asks through the same graph and gets its database reads."""
+    engine, runtime = weather
+    executions = engine.sample_executions("Temperature yesterday?", "pullman")  # station names match any case
+    assert executions and executions[0].rows
+    assert runtime.classifier.invoke_json.call_args.args[1]["question"] == "Temperature yesterday?"
+    assert runtime.classifier.invoke_json.call_args.args[1]["selected_station"] == "Pullman, Whitman County"
+
+
+def test_quality_check_rejects_an_unknown_station_without_running_the_graph(weather):
+    """A sample naming a retired station is reported as an error rather than answered somewhere else."""
+    engine, runtime = weather
+    with pytest.raises(LookupError, match="Nowhere"):
+        engine.sample_executions("Temperature?", "Nowhere")
+    runtime.classifier.invoke_json.assert_not_called()
+
+
 def test_failure_closes_graph_and_does_not_fall_back(weather):
     """A provider timeout remains an error with the request resources closed."""
     engine, runtime = weather

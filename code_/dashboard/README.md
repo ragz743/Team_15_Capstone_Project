@@ -9,7 +9,7 @@ reads from the `/api/admin/*` endpoints.
 | Overview | Active users, successful sessions, retrieval quality, calls, share answered within 5 s, LLM spending, cost per 1,000 calls, failed calls; each compared with the previous period |
 | Users and sessions | Active users and successful sessions per day, week, or month |
 | Cost per user | Every logged-in user's calls, sessions, tokens, and spending: searchable, sortable, CSV export |
-| Retrieval quality | Historical sample results; the SQL chatbot does not yet have a compatible quality check |
+| Retrieval quality | Score of each daily sample check through the LangGraph workflow, and the latest check question by question |
 | Spending | Month-to-date spending against the $50 budget, spending and calls over time, spending by model |
 | Query performance | Response time against the 5 s target, share answered within 5 s, failed calls, calls by outcome |
 
@@ -54,8 +54,9 @@ call. A failed attempt that invokes a model is recorded; generating a new answer
 and its model usage is recorded separately. Merely reopening a conversation does not add usage.
 Empty answers count as failed calls and are excluded from successful-answer response times.
 
-The current LangGraph SQL path does not use embeddings. Zero embedding requests are expected for those
-chats. Model tokens and billed cost come from provider metadata when available; estimates remain labelled.
+The chatbot answers only through the LangGraph SQL workflow, which does not use embeddings or the vector
+store, so every recorded model request is a chat request. Model tokens and billed cost come from provider
+metadata when available; estimates remain labelled.
 
 ### Users and sessions
 
@@ -120,14 +121,16 @@ is counted as $0 and the dashboard warns that spending is understated.
 
 ### Retrieval quality
 
-The bundled sampler targets vector-index retrieval. It is not yet a quality evaluation for the LangGraph
-SQL engine used by the connected chatbot. The API skips that incompatible sampler, and the command below
-reports the limitation instead of publishing a misleading score. Existing quality results remain historical.
+The API runs the check once a day (whenever the last run is over 24 hours old). It asks each question in
+[`backend/analytics/retrieval_samples.yaml`](../backend/analytics/retrieval_samples.yaml) at its station
+through the same LangGraph workflow as the chat endpoint, and passes it when the workflow queried the
+expected kind of data (current, historical, or forecast) and got records back. A model error, a question
+classified as the wrong kind, or a query that returns no records counts as a miss, and the dashboard shows
+what the chatbot queried for each question.
 
-For an engine exposing vector-index `find_context`, the API runs the check once a day. It asks each question in
-[`backend/analytics/retrieval_samples.yaml`](../backend/analytics/retrieval_samples.yaml) and passes it when the
-retriever returns records for the expected station or county from the expected data (current, past 7 days, or
-forecast). Keep the sample in step with the stations in the index. To run it now:
+Each question makes about three chat model requests, so the questions are 10 seconds apart to stay under
+OpenRouter's free-model rate limit. These requests are not recorded as chat usage. Keep the sample in step
+with the active stations. To run it now:
 
 ```sh
 python -m scripts.evaluate_retrieval            # evaluate and save

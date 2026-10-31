@@ -11,54 +11,83 @@ import pytest
 from backend.analytics import retrieval_quality
 from backend.analytics.budget import BudgetConfig, BudgetMonitor, alert_message
 from backend.analytics.retrieval_quality import Sample, evaluate, is_due, load_samples
-from langchain_core.documents import Document
+from backend.workflow.contracts import QueryExecution
 from pytest import MonkeyPatch
 
 # ---------- retrieval quality ----------
 
 
-def _doc(station: str, county: str = "Whitman") -> Document:
-    return Document(page_content="", metadata={"station": station, "county": county})
+def _read(query_type: str, rows: int) -> QueryExecution:
+    """One database read the LangGraph workflow made, with `rows` records returned."""
+    return QueryExecution(query_type, ("TSTAMP", "AIR_TEMP"), [("2026-10-30", 51.2)] * rows, [], [])
 
 
 def test_bundled_sample_questions_are_valid() -> None:
-    """The shipped sample file parses and every question names what it expects to find."""
+    """The shipped sample file parses and every question names a station, since the workflow answers one at a time."""
     samples = load_samples()
     assert len(samples) >= 10
     assert {sample.source for sample in samples} == {"current", "historical", "forecast"}
+    assert all(sample.station for sample in samples)
 
 
-def test_evaluate_passes_only_when_the_expected_data_is_in_the_right_table() -> None:
-    """A question passes when the expected table returned a record for the expected station or county."""
+def test_evaluate_passes_only_when_the_workflow_read_the_expected_data() -> None:
+    """A question passes when the workflow queried the expected kind of data and got records back."""
     results = {
-        "Pullman now?": [("live_index", [_doc("Pullman")]), ("daily_index", [])],
-        "Fairfield yesterday?": [("live_index", [_doc("Fairfield")]), ("daily_index", [_doc("Pullman")])],
-        "Douglas County this week?": [("daily_index", [_doc("Mansfield", "Douglas")])],
+        "Pullman now?": [_read("current_weather", 1)],
+        "Fairfield yesterday?": [_read("current_weather", 3)],  # classified as the wrong kind of data
+        "Mansfield this week?": [_read("historical_weather", 0)],  # right kind, but no records
+        "Rain and forecast?": [_read("historical_weather", 7), _read("forecast_weather", 2)],
+        "What is dew point?": [],  # answered without querying the database
     }
     samples = [
-        Sample("Pullman now?", "current", station="pullman"),  # case insensitive
-        Sample("Fairfield yesterday?", "historical", station="Fairfield"),  # right station, wrong table
-        Sample("Douglas County this week?", "historical", county="Douglas"),
+        Sample("Pullman now?", "current", station="Pullman"),
+        Sample("Fairfield yesterday?", "historical", station="Fairfield"),
+        Sample("Mansfield this week?", "historical", station="Mansfield"),
+        Sample("Rain and forecast?", "forecast", station="Waterville"),
+        Sample("What is dew point?", "current", station="Pullman"),
     ]
+    asked: list[tuple[str, str]] = []
 
-    run = evaluate(lambda question: results[question], samples)
+    run = evaluate(lambda question, station: asked.append((question, station)) or results[question], samples)
 
-    assert [d["passed"] for d in run.details] == [True, False, True]
-    assert (run.samples, run.passed, run.score) == (3, 2, pytest.approx(2 / 3))
-    assert run.details[1]["found"] == ["Pullman"]
+    assert [d["passed"] for d in run.details] == [True, False, False, True, False]
+    assert (run.samples, run.passed, run.score) == (5, 2, pytest.approx(2 / 5))
+    assert asked[0] == ("Pullman now?", "Pullman")  # each question is asked at its station
+    assert run.details[1]["found"] == ["current: 3 rows"]
+    assert run.details[3]["found"] == ["historical: 7 rows", "forecast: 2 rows"]
+    assert run.details[0]["expected"] == "Pullman"
 
 
 def test_evaluate_records_errors_without_stopping() -> None:
-    """A failing question counts as missed and the rest still run."""
+    """A failing question, such as a model error, counts as missed and the rest still run."""
 
-    def find(question: str):
+    def ask(question: str, station: str):
         if question == "boom":
             raise TimeoutError
-        return [("live_index", [_doc("Pullman")])]
+        return [_read("current_weather", 1)]
 
-    run = evaluate(find, [Sample("boom", "current", station="Pullman"), Sample("ok", "current", station="Pullman")])
+    run = evaluate(ask, [Sample("boom", "current", station="Pullman"), Sample("ok", "current", station="Pullman")])
 
     assert [(d["passed"], d["error"]) for d in run.details] == [(False, "TimeoutError"), (True, None)]
+
+
+def test_evaluate_spaces_questions_out(monkeypatch: MonkeyPatch) -> None:
+    """The pause goes between questions, so the check stays under the provider's rate limit."""
+    sleeps: list[float] = []
+    monkeypatch.setattr(retrieval_quality.time, "sleep", sleeps.append)
+    samples = [Sample(f"q{i}", "current", station="Pullman") for i in range(3)]
+
+    evaluate(lambda question, station: [_read("current_weather", 1)], samples, pause_seconds=10)
+
+    assert sleeps == [10, 10]
+
+
+def test_samples_must_name_a_station(tmp_path) -> None:
+    """County-wide questions are rejected: the workflow answers for one selected station."""
+    path = tmp_path / "samples.yaml"
+    path.write_text("samples:\n  - question: Douglas County?\n    source: historical\n    station: ' '\n")
+    with pytest.raises(ValueError, match="needs a station"):
+        load_samples(path)
 
 
 def test_quality_check_is_due_daily() -> None:
@@ -70,10 +99,11 @@ def test_quality_check_is_due_daily() -> None:
 
 
 def test_api_runs_the_quality_check_only_when_due(monkeypatch: MonkeyPatch) -> None:
-    """The hourly loop records a run when the last one is old, and skips it otherwise."""
-    retriever = MagicMock()
-    retriever.find_context.return_value = [("live_index", [_doc("Pullman")])]
-    monkeypatch.setattr(api, "_retriever", retriever)
+    """The hourly loop records a run through the LangGraph engine when the last one is old, and skips it otherwise."""
+    engine = MagicMock()
+    engine.sample_executions.return_value = [_read("current_weather", 1)]
+    monkeypatch.setattr(api, "_retriever", engine)
+    monkeypatch.setattr(retrieval_quality.time, "sleep", lambda _s: None)
     monkeypatch.setattr(retrieval_quality, "load_samples", lambda: [Sample("q", "current", station="Pullman")])
     store = MagicMock()
 
@@ -86,6 +116,7 @@ def test_api_runs_the_quality_check_only_when_due(monkeypatch: MonkeyPatch) -> N
     store.record_quality_run.assert_called_once()
     samples, passed, details = store.record_quality_run.call_args.args
     assert (samples, passed, details[0]["question"]) == (1, 1, "q")
+    engine.sample_executions.assert_called_once_with("q", "Pullman")
 
 
 # ---------- monthly budget alert ----------

@@ -1,7 +1,8 @@
 """Fill the usage tables with synthetic traffic so the admin dashboard can be previewed.
 
-Generates signed-in users (signing in is required to use the chatbot) with 2 day login sessions,
-and a daily retrieval quality check. Rows are flagged is_demo: the dashboard shows a "Demo data" badge while any
+Generates signed-in users (signing in is required to use the chatbot) with 2 day login sessions, the
+LangGraph workflow's chat requests for each question (classifier, SQL, summary), and a daily retrieval
+quality check. Rows are flagged is_demo: the dashboard shows a "Demo data" badge while any
 are in range, and demo spending never counts toward the monthly budget alert.
 
     python -m scripts.seed_dashboard_demo            # add ~120 days of demo traffic
@@ -22,8 +23,12 @@ from psycopg.types.json import Jsonb
 
 # made up prices for the demo chat model, USD per 1M tokens, so cost charts have something to show
 _DEMO_CHAT_MODEL = ("demo/chat-model", 0.10, 0.40)
-_EMBEDDING_MODEL = ("openai/text-embedding-3-small", 0.02, 0.0)
-_EMBEDDING_CALLS_PER_REQUEST = 3  # one per vector store table
+# the LangGraph workflow's chat requests for one question: (step, input tokens, output tokens, share of latency)
+_WORKFLOW_STEPS = (
+    ("classifier", (500, 900), (40, 120), 0.2),
+    ("sql", (900, 1_600), (40, 140), 0.3),
+    ("summary", (700, 1_800), (60, 320), 0.5),
+)
 _SESSION_LENGTH = timedelta(days=2)  # login sessions expire after 2 days
 
 
@@ -101,9 +106,10 @@ def _quality_run(run_at: datetime, incident: bool, rng: random.Random) -> tuple:
         {
             "question": sample.question,
             "source": sample.source,
-            "expected": sample.expected()[1],
+            "expected": sample.station,
             "passed": i not in missed,
-            "found": [] if i in missed else [sample.expected()[1]],
+            # like the real check: what the workflow read, or the right kind of data with no records
+            "found": [f"{sample.source}: {0 if i in missed else rng.randint(1, 7)} rows"],
             "error": None,
         }
         for i, sample in enumerate(samples)
@@ -122,33 +128,20 @@ def _add_request(requests: list, calls: list, user, session, started, incident: 
     else:
         status, error = "ok", None
 
-    model, embed_in, _ = _EMBEDDING_MODEL
-    for _ in range(_EMBEDDING_CALLS_PER_REQUEST):
-        tokens = rng.randint(8, 30)
-        calls.append((request_id, started, "embedding", model, tokens, 0, True, tokens * embed_in / 1e6, 40, True))
-
     chat_latency = int(rng.lognormvariate(math.log(4_200 if incident else 1_400), 0.45))
-    if status != "error":
-        model, price_in, price_out = _DEMO_CHAT_MODEL
-        tokens_in, tokens_out = rng.randint(1_800, 4_200), rng.randint(60, 320)
-        cost = (tokens_in * price_in + tokens_out * price_out) / 1e6
-        if status == "rate_limited":
+    model, price_in, price_out = _DEMO_CHAT_MODEL
+    # an errored call stops after the classifier; a rate-limited one is refused at the summary
+    steps = _WORKFLOW_STEPS[:1] if status == "error" else _WORKFLOW_STEPS
+    called_at = started
+    for step, (in_low, in_high), (out_low, out_high), share in steps:
+        tokens_in, tokens_out = rng.randint(in_low, in_high), rng.randint(out_low, out_high)
+        succeeded = not (status == "rate_limited" and step == "summary")
+        if not succeeded:
             tokens_in = tokens_out = 0
-            cost = 0
-        calls.append(
-            (
-                request_id,
-                started,
-                "chat",
-                model,
-                tokens_in,
-                tokens_out,
-                False,
-                cost,
-                chat_latency,
-                status != "rate_limited",
-            )
-        )
+        cost = (tokens_in * price_in + tokens_out * price_out) / 1e6
+        latency = int(chat_latency * share)
+        calls.append((request_id, called_at, "chat", model, tokens_in, tokens_out, False, cost, latency, succeeded))
+        called_at += timedelta(milliseconds=latency)
 
     latency = chat_latency + rng.randint(150, 600)
     requests.append((request_id, user, session, started, latency, status, error))

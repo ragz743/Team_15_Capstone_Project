@@ -81,7 +81,7 @@ function definitions(metrics: Metrics | null): [string, ReactNode][] {
     ["Calls", "One attempt to answer a question. A call can make several model requests. Reopening a saved answer adds no usage."],
     [
       "Retrieval quality",
-      "The share of sample questions where the right weather data was found. Quality checks are not yet available for the connected SQL chatbot; any existing results are historical.",
+      "The share of a fixed set of sample questions where the chatbot found the right weather data. Once a day each question is asked at its station through the chatbot's workflow, and it passes when the chatbot queried the expected kind of data (current conditions, past days, or forecast) and got records back. A model error during the check counts as a miss.",
     ],
     [
       "Tokens",

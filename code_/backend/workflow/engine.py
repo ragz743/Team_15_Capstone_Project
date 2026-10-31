@@ -13,7 +13,14 @@ from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.models._chatbot_base import _BaseChatbot
 from backend.station_catalog import AWNStationCatalog, StationList, browse_stations
 from backend.weather_query import QueryClarificationError, RequestedPoint, Station
-from backend.workflow.contracts import Source, WorkflowAnswer, WorkflowHistory, WorkflowRequest, WorkflowTimeoutError
+from backend.workflow.contracts import (
+    QueryExecution,
+    Source,
+    WorkflowAnswer,
+    WorkflowHistory,
+    WorkflowRequest,
+    WorkflowTimeoutError,
+)
 from backend.workflow.workflow import ChatbotWorkflow, ClassifierChatbot
 
 
@@ -132,6 +139,18 @@ class LangGraphEngine:
         result = self._run_workflow(turn, station)
         self._validate_answer(result.reply)
         return self._answer_with_sources(result, station)
+
+    def sample_executions(self, question: str, station_name: str) -> list[QueryExecution]:
+        """Ask one question at a named station and return the graph's database reads, for the quality check."""
+        station = next(
+            (item for item in self._directory.stations() if item.name.casefold() == station_name.casefold()), None
+        )
+        if station is None:
+            raise LookupError(f"No active station is named {station_name!r}")
+        turn = self.prepare_turn(question, station_id=station.id)
+        if turn.workflow is None:
+            raise LookupError(turn.reply or f"Station {station_name!r} could not be selected")
+        return self._run_workflow(turn, station).executions
 
     def _run_workflow(self, turn: PreparedChatTurn, station: Station):
         request = turn.workflow
