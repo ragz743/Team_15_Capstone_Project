@@ -24,6 +24,7 @@ dependencies = [
     "sqlglot",
     "fastapi",
     "uvicorn[standard]",
+    "sqlglot[c]",
 ]
 
 [project.optional-dependencies]

@@ -60,8 +60,9 @@ class _FakeWorkflowChatbot(_BaseChatbot):
             )
         )
 
-    def invoke(self, messages: list[str]) -> str:
-        return str(self._model.invoke(messages).content)
+    async def ainvoke(self, messages: list[str]) -> str:
+        # like ChatbotOpenRouter, sync invoke() comes from _BaseChatbot and runs this in its own event loop
+        return str((await self._model.ainvoke(messages)).content)
 
 
 def _workflow(sub_queries: list[QueryClassification]) -> ChatbotWorkflow:

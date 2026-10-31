@@ -40,6 +40,7 @@ class AWNDatabaseConnectionBase(ABC):
     """AgWeatherNet MySQL database connection base class."""
 
     _DB_NAME: ClassVar[str]
+    CONNECTION_TIMEOUT_SECONDS: ClassVar[int] = 30
 
     def __init__(self, *, statement_timeout: int | None = None) -> None:
         """Create a new AWN Database Connection."""
@@ -48,7 +49,7 @@ class AWNDatabaseConnectionBase(ABC):
             password=os.getenv("AWN_DB_PASSWORD"),
             host=os.getenv("AWN_DB_HOST"),
             database=self._DB_NAME,
-            connection_timeout=10,
+            connection_timeout=self.CONNECTION_TIMEOUT_SECONDS,
             read_timeout=statement_timeout + 2 if statement_timeout is not None else 60,
             write_timeout=15,
         )
@@ -78,7 +79,7 @@ class AWNDatabaseConnectionBase(ABC):
                 yield cast(Sequence[Any], row)
 
     def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
-        """Query table schema given a table name."""
+        """Return schema metadata for a table."""
         cols = ", ".join(map(lambda s: s.upper(), SchemaQueryResult._fields))
         # column list is built from fixed field names, not user input, so inlining it is safe
         query_schema = f"""

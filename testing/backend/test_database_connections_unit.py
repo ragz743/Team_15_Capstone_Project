@@ -110,7 +110,7 @@ def test_awn_connection_configuration_and_table_names(
         "password": "awn-password",
         "host": "awn.example",
         "database": db_name,
-        "connection_timeout": 10,
+        "connection_timeout": connection_type.CONNECTION_TIMEOUT_SECONDS,
         "read_timeout": 60,
         "write_timeout": 15,
     }
