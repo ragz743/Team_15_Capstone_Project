@@ -1,7 +1,5 @@
 """A Wrapper for the github copilot api to be instantiated by the model factory."""
 
-import asyncio
-
 from backend.models._chatbot_base import _BaseChatbot
 from copilot import CopilotClient
 from copilot.rpc import PermissionDecisionReject
@@ -38,8 +36,6 @@ class ChatbotCopilot(_BaseChatbot):
                         msg = f"unexpected event type returned, found {type(session_data).__name__}"
                         raise TypeError(msg)
 
-    def invoke(self, messages: list[str]) -> str:
-        """Pass a list of messages and gets responses from the model."""
-        # Copilot sdk calls must be async, Chatbot base is currently synchronous
-        # so solution for now is to force async calls to be sequential w/ wrapper
-        return asyncio.run(self._async_invoke("\n".join(messages)))
+    async def ainvoke(self, messages: list[str]) -> str:
+        """Asynchronously send messages to Copilot and return its response."""
+        return await self._async_invoke("\n".join(messages))

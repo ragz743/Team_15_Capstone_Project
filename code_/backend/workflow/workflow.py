@@ -1,10 +1,13 @@
 """AgWeatherNet Chatbot Workflow."""
 
 import logging
-import re
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
+from functools import lru_cache
 from typing import Annotated, Any, Literal, Sequence, TypedDict
 
+import sqlglot
+import sqlglot.errors
 from backend.databases._awn_connection_base import AWNDatabaseConnectionBase
 from backend.databases.awn_daily_connection import AWNDailyDatabaseConnection
 from backend.databases.awn_fc_connection import AWNForecastDatabaseConnection
@@ -13,11 +16,11 @@ from backend.loaders import _common
 from backend.model_factory import ModelFactory
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
-from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.config import get_stream_writer
 from langgraph.graph import END, START, StateGraph, message, state
 from mysql.connector.errors import ProgrammingError
 from pydantic import BaseModel, Field
+from sqlglot import exp
 
 QueryType = Literal[
     "current_weather",
@@ -27,6 +30,31 @@ QueryType = Literal[
 ]
 
 _LOGGER = logging.getLogger(__name__)
+
+_FORBIDDEN_NODES = (
+    exp.Insert,
+    exp.Update,
+    exp.Delete,
+    exp.Drop,
+    exp.Create,
+    exp.Alter,
+    exp.Command,
+    exp.Into,
+    exp.Lock,
+    exp.Parameter,
+    exp.SessionParameter,
+)
+_BLOCKED_FUNCTIONS = {"SLEEP", "BENCHMARK", "LOAD_FILE", "GET_LOCK", "RELEASE_LOCK", "SYS_EXEC", "SYS_EVAL"}
+
+
+def _make_cached_schema_fetcher(db: AWNDatabaseConnectionBase) -> Callable[[str], tuple]:
+    """Return a per-connection schema fetcher memoized by table name."""
+
+    @lru_cache(maxsize=128)
+    def fetch(table_name: str) -> tuple:
+        return tuple(db.query_schema(table_name))
+
+    return fetch
 
 
 class QueryClassification(BaseModel):
@@ -85,13 +113,13 @@ class ClassifierChatbot:
 
     def __init__(self) -> None:
         """ClassifierChatbot Constructor."""
-        self._model = ChatOpenRouter(model="openrouter/free", temperature=0).with_structured_output(
+        self._model = ChatOpenRouter(model="openai/gpt-6-luna", temperature=0).with_structured_output(
             QueryClassifications
         )
 
-    def classify(self, state: ChatState) -> dict:
-        """Make a call to the llm."""
-        result = self._model.invoke(
+    async def classify(self, state: ChatState) -> dict:
+        """Asynchronously classify the user's query with the LLM."""
+        result = await self._model.ainvoke(
             [
                 ("system", self._CLASSIFIER_SYSTEM_PROMPT),
                 *state["messages"],
@@ -111,11 +139,9 @@ class ChatbotWorkflow:
 
     def __init__(
         self,
-        checkpointer: BaseCheckpointSaver | None = None,
         debug: bool = False,
     ):
         """ChatbotWorflow constructor."""
-        self.checkpointer = checkpointer or InMemorySaver()
         self._debug = debug
         self._query_handlers = {
             "current_weather": "_query_current",
@@ -130,6 +156,7 @@ class ChatbotWorkflow:
         self.current_db = AWNDatabaseConnection()
         self.historical_daily_db = AWNDailyDatabaseConnection()
         self.forecast_db = AWNForecastDatabaseConnection()
+        self._schema_fetchers: dict[int, Callable[[str], tuple]] = {}
 
     def close(self) -> None:
         """Close all open connections."""
@@ -141,8 +168,8 @@ class ChatbotWorkflow:
             if db.conn.is_connected():
                 db.conn.disconnect()
 
-    def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> str:
-        """Process user input through the graph and return a response."""
+    async def run(self, user_input: str, location_coord: tuple[float, float], county: str) -> AsyncIterator[str]:
+        """Asynchronously process user input through the graph, yielding the response text as it streams."""
         nearest_station_id = self._nearest_station_search(
             location_coord,
             county,
@@ -160,20 +187,13 @@ class ChatbotWorkflow:
             "nearest_station_id": nearest_station_id,
         }
 
-        # TODO (Gavin): Figure out session key persist
-        # Should keep history of past convos if key same
-        # refer to docs. Worst case its random and no old convos are used.
-        result = self.graph.invoke(
+        # "custom" mode yields only what nodes emit via the stream writer (summarizer chunks)
+        async for chunk in self.graph.astream(
             initial_state,
-            config={
-                "configurable": {
-                    "thread_id": "TEMP_KEY_REPLACE_ME",
-                }
-            },
-        )
-
-        # return last message in the chain
-        return result["messages"][-1].content
+            config={"configurable": {}},
+            stream_mode="custom",
+        ):
+            yield str(chunk)
 
     def _build_graph(self) -> state.CompiledStateGraph:
         """Create the graph with nodes, edges, and state."""
@@ -194,7 +214,7 @@ class ChatbotWorkflow:
             graph.add_edge(node, "_chatbot_summarize")
         graph.add_edge("_chatbot_summarize", END)
 
-        return graph.compile(checkpointer=self.checkpointer)
+        return graph.compile()
 
     def _nearest_station_search(self, location_coord: tuple[float, float], county: str) -> int:
         """Given a coordinate, find the nearest AWN station id to query against."""
@@ -226,40 +246,40 @@ class ChatbotWorkflow:
         station_id, *_ = nearest_result
         return int(station_id)
 
-    def _query_classifier(self, state: ChatState) -> dict:
-        """Given user input classify it before taking action."""
-        update = self.classifier_chat_model.classify(state)
+    async def _query_classifier(self, state: ChatState) -> dict:
+        """Classify user input before taking action."""
+        update = await self.classifier_chat_model.classify(state)
         self._log_state_update("_query_classifier", state, update)
         return update
 
-    def _query_historical(self, state: ChatState) -> dict:
+    async def _query_historical(self, state: ChatState) -> dict:
         """Perform a historical weather data query."""
         sub_queries = self._sub_queries_for(state, "historical_weather")
         if not sub_queries:
             return {}
-        update = self._run_generated_query(sub_queries, state, self.historical_daily_db, "_query_historical")
+        update = await self._run_generated_query(sub_queries, state, self.historical_daily_db, "_query_historical")
         self._log_state_update("_query_historical", state, update)
         return update
 
-    def _query_current(self, state: ChatState) -> dict:
+    async def _query_current(self, state: ChatState) -> dict:
         """Perform a current weather data query."""
         sub_queries = self._sub_queries_for(state, "current_weather")
         if not sub_queries:
             return {}
-        update = self._run_generated_query(sub_queries, state, self.current_db, "_query_current")
+        update = await self._run_generated_query(sub_queries, state, self.current_db, "_query_current")
         self._log_state_update("_query_current", state, update)
         return update
 
-    def _query_forecast(self, state: ChatState) -> dict:
+    async def _query_forecast(self, state: ChatState) -> dict:
         """Perform a forecasted weather data query."""
         sub_queries = self._sub_queries_for(state, "forecast_weather")
         if not sub_queries:
             return {}
-        update = self._run_generated_query(sub_queries, state, self.forecast_db, "_query_forecast")
+        update = await self._run_generated_query(sub_queries, state, self.forecast_db, "_query_forecast")
         self._log_state_update("_query_forecast", state, update)
         return update
 
-    def _query_miscellaneous(self, state: ChatState) -> dict:
+    async def _query_miscellaneous(self, state: ChatState) -> dict:
         """Answer miscellaneous questions without querying a weather database."""
         sub_queries = self._sub_queries_for(state, "miscellaneous")
         if not sub_queries:
@@ -274,12 +294,12 @@ class ChatbotWorkflow:
         is unsupported, explain that briefly and suggest what the user can ask
         about AgWeatherNet weather data instead.
         """
-        answer = self.workflow_chat_model.invoke([prompt])
+        answer = await self.workflow_chat_model.ainvoke([prompt])
         update = {"messages": [("assistant", answer)]}
         self._log_state_update("_query_miscellaneous", state, update)
         return update
 
-    def _run_generated_query(
+    async def _run_generated_query(
         self,
         sub_queries: list[QueryClassification],
         state: ChatState,
@@ -308,7 +328,10 @@ class ChatbotWorkflow:
         attempts = 0
         while not fetch_schema_done and attempts < 3:
             try:
-                schema = db.query_schema(db.format_table_name(state["nearest_station_id"]))
+                fetch = self._schema_fetchers.get(id(db))
+                if fetch is None:
+                    fetch = self._schema_fetchers[id(db)] = _make_cached_schema_fetcher(db)
+                schema = fetch(table_name)
                 schema_context = (
                     _common.to_markdown_table(schema, [""] * len(schema[0]))
                     if schema
@@ -352,11 +375,11 @@ class ChatbotWorkflow:
             Do not use any table other than `{table_name}`. Use query parameters as %s
             when values come from the user, and return the SQL only.{retry_instructions}
             """
-            generated_query = self.workflow_chat_model.invoke([prompt]).strip().rstrip(";").strip()
+            generated_query = (await self.workflow_chat_model.ainvoke([prompt])).strip().rstrip(";").strip()
             self._log_event(node_name, "generated_sql", "\n" + generated_query)
             try:
-                self._validate_generated_query(generated_query, table_name)
-                results = list(database.simple_query(generated_query, ()))
+                safe_query = self._validate_generated_query(generated_query, table_name)
+                results = list(database.simple_query(safe_query, ()))
             except ProgrammingError as error:
                 retry_context = (generated_query, str(error))
                 self._log_event(
@@ -395,16 +418,27 @@ class ChatbotWorkflow:
             _LOGGER.info("time=%s node=%s event=%s details=%s", timestamp, node_name, event, details)
 
     @staticmethod
-    def _validate_generated_query(query: str, table_name: str) -> None:
-        """Reject generated SQL that is not a single read-only station query."""
-        normalized_query = query.strip()
-        if not re.match(r"^SELECT\b", normalized_query, re.IGNORECASE):
-            raise ProgrammingError("Generated query must be a SELECT statement.")
-        if ";" in normalized_query:
+    def _validate_generated_query(query: str, table_name: str) -> str:
+        """Reject generated SQL that is not a single read-only station query; return normalized SQL."""
+        try:
+            trees = sqlglot.parse(query, read="mysql")
+        except sqlglot.errors.SqlglotError as error:
+            raise ProgrammingError(f"Generated query could not be parsed: {error}") from error
+        if len(trees) != 1 or trees[0] is None:
             raise ProgrammingError("Generated query must contain only one statement.")
-        table_references = re.findall(r"\b(?:FROM|JOIN)\s+`?([A-Za-z0-9_]+)`?", normalized_query, re.IGNORECASE)
-        if not table_references or any(reference.lower() != table_name.lower() for reference in table_references):
+        tree = trees[0]
+        if not isinstance(tree, exp.Select):
+            raise ProgrammingError("Generated query must be a SELECT statement.")
+        if tree.find(*_FORBIDDEN_NODES):
+            raise ProgrammingError("Generated query contains a forbidden clause.")
+        for func in tree.find_all(exp.Func):
+            func_name = func.name if isinstance(func, exp.Anonymous) else func.sql_name()
+            if func_name.upper() in _BLOCKED_FUNCTIONS:
+                raise ProgrammingError(f"Generated query uses a blocked function: {func_name}.")
+        tables = list(tree.find_all(exp.Table))
+        if not tables or any(t.db or t.catalog or t.name.lower() != table_name.lower() for t in tables):
             raise ProgrammingError("Generated query references a table other than the selected station table.")
+        return tree.sql(dialect="mysql")
 
     @staticmethod
     def _sub_queries_for(state: ChatState, query_type: QueryType) -> list[QueryClassification]:
@@ -452,7 +486,7 @@ class ChatbotWorkflow:
         ]
         return answers
 
-    def _chatbot_summarize(self, state: ChatState) -> dict:
+    async def _chatbot_summarize(self, state: ChatState) -> dict:
         """Answer the original question using the returned query results."""
         context_messages = "\n\n".join(
             self._message_content(current_message)
@@ -478,8 +512,12 @@ class ChatbotWorkflow:
         the provided context. If the context does not contain enough information,
         say so clearly.
         """
-        answer = self.workflow_chat_model.invoke([prompt])
-        update = {"messages": [("assistant", answer)]}
+        writer = get_stream_writer()
+        chunks: list[str] = []
+        async for text in self.workflow_chat_model.astream([prompt]):
+            chunks.append(text)
+            writer(text)
+        update = {"messages": [("assistant", "".join(chunks))]}
         self._log_state_update("_chatbot_summarize", state, update)
         return update
 
