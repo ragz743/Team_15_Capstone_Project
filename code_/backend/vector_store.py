@@ -4,19 +4,14 @@ import json
 
 from backend.databases.pgvector import PgVectorConnection
 from backend.models._embedding_base import _BaseEmbedding
+from backend.station_catalog import StationCatalog
+from backend.weather_query import WeatherQuery
+from backend.weather_records import dated_document
+from backend.weather_search import FILTERABLE_KEYS, search_predicates
 from langchain_core.documents import Document
 from langchain_core.embeddings import Embeddings
 from langchain_core.vectorstores import VectorStore
 from psycopg import sql
-
-_TIMESTAMP_KEYS: dict[str, str] = {
-    "daily_index": "date",
-    "live_index": "timestamp",
-    "forecast_index": "timestamp",
-}
-
-# Allowlist for keys interpolated into SQL by distinct_metadata_values.
-_FILTERABLE_KEYS = frozenset({"station", "county", "state", "id"})
 
 
 class PgVectorStore(VectorStore):
@@ -61,7 +56,7 @@ class PgVectorStore(VectorStore):
 
     def distinct_metadata_values(self, key: str) -> list[str]:
         """Return every distinct value stored under a metadata key in this table."""
-        if key not in _FILTERABLE_KEYS:
+        if key not in FILTERABLE_KEYS:
             msg = f"unsupported metadata key: {key}"
             raise ValueError(msg)
 
@@ -100,43 +95,27 @@ class PgVectorStore(VectorStore):
         """Async add or update documents in the vector store."""
         raise NotImplementedError
 
-    # Embeds the query string, then runs pgvector's <-> L2 nearest-neighbour operation and returns top-k results
-    # as Document objects. Optional filter (JSONB containment) and staleness_days (date cutoff) are combined
-    # into a WHERE clause before ranking — both may be active simultaneously.
-    def similarity_search(self, query: str, k: int = 4, filter: dict | None = None, **kwargs) -> list[Document]:
-        """Return a list of documents found during semantic search.
+    def station_catalog(self, tables: tuple[str, ...] | None = None) -> StationCatalog:
+        """Share this connection with the station lookup repository."""
+        return StationCatalog(self._vector_db, tables=tables if tables is not None else (self._table,))
 
-        Args:
-            query: Natural-language query string to embed and search.
-            k: Maximum number of results to return.
-            filter: Optional dict of metadata key-value pairs; only rows whose
-                metadata contains all pairs (JSONB @> containment) are returned.
-            **kwargs: Ignored; present for LangChain VectorStore interface compatibility.
-
-        """
+    def similarity_search(
+        self, query: str, k: int = 4, filter: dict | None = None, *, selection: WeatherQuery | None = None, **kwargs
+    ) -> list[Document]:
+        """Filter by source and date before ranking weather documents."""
+        if not 1 <= k <= 100:
+            raise ValueError("Search limit must be between 1 and 100")
+        where_sql, values = search_predicates(self._table, selection, filter, self._staleness_days)
         query_vec, _ = self._embedding_model.embed_document(Document(page_content=query))
-        vec_str = "[" + ",".join(str(v) for v in query_vec) + "]"
-
-        where_clauses: list[str] = []
-        query_vars: list = []
-
-        if filter:
-            where_clauses.append("metadata @> %s::jsonb")
-            query_vars.append(json.dumps(filter))
-
-        if self._staleness_days is not None:
-            ts_key = _TIMESTAMP_KEYS[self._table]
-            where_clauses.append("(metadata->>%s)::date >= CURRENT_DATE - (%s * INTERVAL '1 day')")
-            query_vars.extend([ts_key, self._staleness_days])
-
-        where_sql = f"WHERE {' AND '.join(where_clauses)} " if where_clauses else ""
+        values.extend(["[" + ",".join(str(value) for value in query_vec) + "]", k])
         query_sql = (
             f"SELECT document, metadata FROM {self._table} {where_sql}ORDER BY embedding <-> %s LIMIT %s"
         ).encode()
-        query_vars.extend([vec_str, k])
-
-        rows = self._vector_db.simple_query(query_sql, tuple(query_vars))
-        return [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
+        rows = self._vector_db.simple_query(query_sql, tuple(values))
+        documents = [Document(page_content=row[0], metadata=row[1] or {}) for row in rows]
+        if selection is None:
+            return documents
+        return [filtered for doc in documents if (filtered := dated_document(doc, self._table, selection)) is not None]
 
     # @warnings.deprecated("not supported for this project.")
     def from_texts(

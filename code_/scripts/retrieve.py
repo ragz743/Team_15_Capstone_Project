@@ -1,12 +1,12 @@
 """Script for running a retrieval query manually."""
 
 import argparse
-from datetime import date
 
 import dotenv
 from backend.model_factory import ModelFactory
 from backend.retriever import Retriever
 from backend.vector_store import PgVectorStore
+from backend.weather_query import RequestedPoint, washington_today
 
 
 def _is_stale() -> bool:
@@ -14,15 +14,14 @@ def _is_stale() -> bool:
     try:
         from backend.databases.pgvector import PgVectorConnection
 
-        conn = PgVectorConnection()
-        rows = list(
-            conn.simple_query(
-                b"SELECT COUNT(*) FROM live_index WHERE metadata->>'timestamp' = %s",
-                (date.today().isoformat(),),
+        with PgVectorConnection() as conn:
+            rows = list(
+                conn.simple_query(
+                    b"SELECT EXISTS (SELECT 1 FROM live_index WHERE left(metadata->>'timestamp', 10) = %s)",
+                    (washington_today().isoformat(),),
+                )
             )
-        )
-        conn.conn.close()
-        return int(rows[0][0]) == 0
+        return not rows[0][0]
     except Exception:
         return False
 
@@ -42,7 +41,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run a RAG retrieval query.")
     parser.add_argument("question", nargs="*", help="Question to ask")
     parser.add_argument("--no-refresh", action="store_true", help="Skip the automatic freshness check")
+    parser.add_argument("--latitude", type=float, required=True, help="Latitude of the requested point")
+    parser.add_argument("--longitude", type=float, required=True, help="Longitude of the requested point")
     args = parser.parse_args()
+    try:
+        point = RequestedPoint(latitude=args.latitude, longitude=args.longitude)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     dotenv.load_dotenv()
     embedding_model, chatbot_model = ModelFactory.load_from_models_yaml()
@@ -61,7 +66,7 @@ def main() -> None:
     retriever = Retriever(stores, chatbot_model)
 
     question = " ".join(args.question) if args.question else input("Enter your question: ")
-    response = retriever.retrieve(question)
+    response = retriever.retrieve(question, point=point)
     print(response)
 
 

@@ -14,7 +14,7 @@ COPY code_/scripts ./code_/scripts
 RUN python -m pip install --no-cache-dir --upgrade pip \
     && python -m pip install --no-cache-dir .
 
-WORKDIR /app/code
+WORKDIR /app/code_
 
 EXPOSE 8000
 
