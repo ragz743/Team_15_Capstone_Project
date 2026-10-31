@@ -24,9 +24,9 @@ export default function QualityPanel({ quality }: { quality: Metrics["quality"] 
     <Stack spacing={2}>
       <ChartCard
         title="Retrieval quality"
-        subtitle="Share of sample questions where the right weather data was found, checked once a day"
+        subtitle="Share of sample questions where the right weather data was found"
         empty={runs.length === 0}
-        emptyText="No quality checks ran in this range. The API runs one daily; python -m scripts.evaluate_retrieval runs one now."
+        emptyText="No retrieval quality results are available for this range."
         table={{
           columns: [
             { key: "date", label: "Run" },

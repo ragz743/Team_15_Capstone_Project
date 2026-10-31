@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from threading import Lock
 from types import TracebackType
 from typing import Any, Generator, Self, Sequence
 
@@ -29,6 +30,7 @@ class PgVectorConnection:
             "port": port,
             "dbname": self._DB_NAME,
         }
+
         if connect_timeout is not None:
             conn_info["connect_timeout"] = connect_timeout
 
@@ -40,6 +42,7 @@ class PgVectorConnection:
             conn_info["password"] = password
 
         self.conn = psycopg.connect(**conn_info)
+        self._query_lock = Lock()
 
     def __enter__(self) -> Self:
         """Open the database connection using a context manager."""
@@ -56,19 +59,9 @@ class PgVectorConnection:
 
     def simple_query(self, sql_query: bytes, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
         """Make a simple query to the connected database."""
-        cursor = self.conn.cursor()
-
-        # make the query; on failure roll back, otherwise the connection stays in a failed
-        # transaction and every later query on it fails with InFailedSqlTransaction
-        try:
+        with self._query_lock, self.conn.transaction(), self.conn.cursor() as cursor:
             cursor.execute(sql_query, query_vars)
-        except psycopg.Error:
-            self.conn.rollback()
-            raise
-
-        # iter through result tuples, can be any number of rows so be careful!
-        for query_fields in cursor:
-            yield query_fields
+            yield from cursor
 
     def insert(self, sql_query: bytes, query_vars: Sequence[Any]) -> str:
         """Insert data into the database sing the sql_query and parameters."""

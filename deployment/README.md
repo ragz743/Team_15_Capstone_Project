@@ -35,3 +35,19 @@
 - usage tables are created automatically when the api starts, see `code_/dashboard/README.md` for details and configuration
 - the budget alert email (over $50 a month to weather@wsu.edu) is only sent once the `AWN_SMTP_*` settings are added to `.env`; this will be set up on EC2 (Amazon SES's SMTP interface is one option)
 - admin sign-in uses `AWN_ADMIN_TOKEN` until a proper admin login is set up on EC2
+## Conversation upgrades
+
+The API image runs `scripts.migrate_conversations` before starting the server.
+This upgrades existing database volumes as well as fresh installations. If a migration
+fails the API exits before accepting requests. The migration lock serializes concurrent
+starts. Scripts can be repeated and preserve existing records.
+
+For a local API outside Docker, run `python -m scripts.migrate_conversations` before
+starting Uvicorn. The script adds conversation tables, durable retry fields and search
+indexes. The seed file alone only runs when PostgreSQL initializes a new volume.
+
+The station directory is a separate, one-time upgrade. For a database created before
+station lookup was added, apply `migrations/001_station_search_indexes.sql` and then
+`migrations/002_station_directory.sql` once before starting the API. The directory
+migration backfills existing weather records and must not run on every API startup.
+Fresh PostgreSQL images apply it automatically after the seed script.

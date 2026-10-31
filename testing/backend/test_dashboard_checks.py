@@ -170,13 +170,18 @@ def test_alert_message_links_to_the_dashboard() -> None:
 
 def test_failed_vector_store_query_does_not_poison_the_connection() -> None:
     """A failed query rolls back so later chat and quality-check queries on the same connection still work."""
+    from threading import Lock
+
     import psycopg
     from backend.databases.pgvector import PgVectorConnection
 
     connection = object.__new__(PgVectorConnection)
     connection.conn = MagicMock()
-    connection.conn.cursor.return_value.execute.side_effect = psycopg.errors.UndefinedTable("no such table")
+    connection._query_lock = Lock()
+    cursor = connection.conn.cursor.return_value.__enter__.return_value
+    cursor.execute.side_effect = psycopg.errors.UndefinedTable("no such table")
 
     with pytest.raises(psycopg.errors.UndefinedTable):
         list(connection.simple_query(b"SELECT 1", ()))
-    connection.conn.rollback.assert_called_once()
+    transaction = connection.conn.transaction.return_value
+    assert transaction.__exit__.call_args.args[0] is psycopg.errors.UndefinedTable

@@ -4,8 +4,8 @@
 -- one row per /api/chat request
 CREATE TABLE IF NOT EXISTS usage_requests (
     request_id UUID PRIMARY KEY,
-    user_id TEXT,                   -- anonymous client id supplied by the chat frontend, NULL when unknown
-    session_id TEXT,                -- conversation id supplied by the chat frontend, NULL when unknown
+    user_id TEXT,                   -- signed-in AWN user id, NULL when unknown
+    session_id TEXT,                -- non-secret login session id, NULL when unknown
     started_at TIMESTAMPTZ NOT NULL,
     latency_ms INTEGER NOT NULL,    -- end to end time spent answering the request
     status TEXT NOT NULL CHECK (status IN ('ok', 'empty', 'error', 'rate_limited', 'unavailable')),

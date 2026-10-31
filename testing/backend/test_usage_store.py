@@ -9,15 +9,25 @@ from __future__ import annotations
 import os
 import threading
 import uuid
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
+import backend.api as api
 import dotenv
 import psycopg
 import pytest
+from backend.analytics import admin_api
 from backend.analytics.metering import LlmCall, RequestStatus, RequestUsage
 from backend.analytics.pricing import ModelPrice, PriceTable
-from backend.analytics.usage_store import UsageStore
+from backend.analytics.usage_store import UsageStore, UsageTracker
+from backend.chat_turn import AnsweredTurn, PreparedChatTurn
+from backend.conversation_store import ConversationStore
+from backend.workflow.contracts import WorkflowRequest
+from fastapi.testclient import TestClient
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
 from psycopg import sql
 
 _TZ = "America/Los_Angeles"
@@ -71,6 +81,75 @@ def _request(
     return usage
 
 
+def test_saved_chat_usage_reaches_dashboard_and_csv_without_counting_replays(store, monkeypatch):
+    """HTTP, saved turns, model callbacks and admin reads share real isolated Postgres storage."""
+    migrations = Path(__file__).resolve().parents[2] / "deployment/migrations"
+    with store._connect() as connection:
+        for name in ("001_conversations.sql", "002_turn_snapshots.sql", "003_search_indexes.sql"):
+            connection.execute((migrations / name).read_bytes())
+    monkeypatch.setattr(api, "_conversations", ConversationStore(store._connect))
+    monkeypatch.setattr(api, "_usage_tracker", UsageTracker(store))
+    monkeypatch.setattr(admin_api, "_usage_store", store)
+    monkeypatch.setenv("AWN_ADMIN_TOKEN", "local-test")
+    model = GenericFakeChatModel(
+        messages=iter(
+            [
+                AIMessage(
+                    content="72 F",
+                    usage_metadata={"input_tokens": 100, "output_tokens": 10, "total_tokens": 110},
+                    response_metadata={"model_name": "paid/chat", "cost": 0.002},
+                )
+                for _ in range(3)
+            ]
+        )
+    )
+    weather = MagicMock()
+    weather.prepare_turn.side_effect = lambda question, context, **_: PreparedChatTurn(
+        question=question,
+        context=context.model_copy(update={"station_ids": ["1"]}),
+        outcome="weather",
+        workflow=WorkflowRequest(station_id="1", reference_time=datetime.now(UTC)),
+    )
+    calls = 0
+
+    def answer(turn):
+        nonlocal calls
+        calls += 1
+        reply = str(model.invoke([turn.question]).content)
+        if calls == 2:
+            raise RuntimeError("failure after a billed model call")
+        return AnsweredTurn(reply=reply, outcome="success")
+
+    weather.answer_result.side_effect = answer
+    monkeypatch.setattr(api, "_retriever", weather)
+    client = TestClient(api.app)
+    conversation = client.post("/api/conversations").json()["id"]
+    headers = {"X-AWN-User-Id": "sai@wsu.edu", "X-AWN-Session-Id": "login-1"}
+    payload = {"conversation_id": conversation, "request_id": str(uuid.uuid4()), "message": "Temperature?"}
+    response = client.post("/api/chat", json=payload, headers=headers)
+    assert response.status_code == 200
+    assert client.post("/api/chat", json=payload, headers=headers).json() == response.json()
+    payload["request_id"] = str(uuid.uuid4())
+    assert client.post("/api/chat", json=payload, headers=headers).status_code == 502
+    assert client.post("/api/chat", json=payload, headers=headers).status_code == 200
+
+    admin = {"Authorization": "Bearer local-test"}
+    metrics = client.get("/api/admin/metrics", headers=admin)
+    assert metrics.status_code == 200
+    summary = metrics.json()["summary"]
+    assert (summary["calls"], summary["model_requests"], summary["failed_calls"]) == (3, 3, 1)
+    assert (summary["users"], summary["sessions"], summary["successful_sessions"]) == (1, 1, 0)
+    assert summary["cost_usd"] == pytest.approx(0.006)
+    assert metrics.json()["includes_demo_data"] is False
+    users = client.get("/api/admin/users", headers=admin).json()["users"]
+    assert len(users) == 1 and users[0]["user_id"] == "sai@wsu.edu"
+    assert users[0]["cost_usd"] == pytest.approx(0.006)
+    export = client.get("/api/admin/users.csv", headers=admin)
+    assert export.status_code == 200 and "sai@wsu.edu" in export.text
+    with store._connect() as connection:
+        assert connection.execute("SELECT count(*) FROM usage_llm_calls WHERE cost_reported").fetchone()[0] == 3
+
+
 def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -> None:
     """KPIs follow the client's definitions: calls, logged-in users, guests, login sessions, 5 second target."""
     for usage in [
@@ -87,8 +166,8 @@ def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -
     summary = metrics["summary"]
 
     call_cost = 1_000 * 0.02 / 1e6 + (1_000 * 1.0 + 250 * 4.0) / 1e6
-    assert (summary["calls"], summary["unidentified_calls"], summary["failed_calls"]) == (5, 1, 1)
-    assert summary["error_rate"] == pytest.approx(0.2)
+    assert (summary["calls"], summary["unidentified_calls"], summary["failed_calls"]) == (5, 1, 2)
+    assert summary["error_rate"] == pytest.approx(0.4)
     assert summary["model_requests"] == 10
     assert summary["cost_usd"] == pytest.approx(5 * call_cost)
     assert summary["avg_cost_per_call"] == pytest.approx(call_cost)  # one call = one end to end question
@@ -99,13 +178,14 @@ def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -
     assert (summary["sessions"], summary["successful_sessions"]) == (3, 2)
     assert summary["successful_session_rate"] == pytest.approx(2 / 3)
     assert summary["avg_sessions_per_user"] == pytest.approx(1.5)
-    # answered calls took 500, 1000, 2000, 3000 ms; three are within the 2.5 s target
-    assert summary["latency_p50_ms"] == pytest.approx(1_500)
-    assert summary["within_target_rate"] == pytest.approx(0.75)
+    # Empty replies are HTTP 502 failures, not fast answers. Two of three answers meet the target.
+    assert summary["latency_p50_ms"] == pytest.approx(2_000)
+    assert summary["within_target_rate"] == pytest.approx(2 / 3)
     assert metrics["previous"]["calls"] == 0
     assert metrics["target_ms"] == 2_500
 
     assert len(metrics["series"]) == 7
+    assert sum(point["failed_calls"] for point in metrics["series"]) == 2
     assert (metrics["series"][-1]["bucket"], metrics["series"][-1]["calls"]) == ("2026-10-15", 2)
     assert {row["status"]: row["requests"] for row in metrics["by_status"]} == {"ok": 3, "error": 1, "empty": 1}
     assert {(row["model"], row["priced"]) for row in metrics["by_model"]} == {("paid/chat", True), ("paid/embed", True)}

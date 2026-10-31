@@ -45,8 +45,8 @@ eggs/
 .eggs/
 lib/
 lib64/
-!code_frontend/**/lib/
-!code_frontend/**/lib/**
+!code_/frontend/**/lib/
+!code_/frontend/**/lib/**
 parts/
 sdist/
 var/
@@ -83,6 +83,7 @@ coverage.xml
 cover/
 e2e_report.html
 accuracy_report.html
+chatbot_conversations.md
 
 # Translations
 *.mo

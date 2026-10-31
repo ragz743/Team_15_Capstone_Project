@@ -7,10 +7,12 @@ chat models standing in for OpenRouter and mocked weather databases, so no netwo
 from __future__ import annotations
 
 import itertools
-from collections import namedtuple
+from datetime import UTC, datetime
+from time import monotonic
 from unittest.mock import MagicMock
 
 from backend.analytics.metering import RequestUsage, metered
+from backend.databases._awn_connection_base import SchemaQueryResult
 from backend.models._chatbot_base import _BaseChatbot
 from backend.workflow.workflow import (
     ChatbotWorkflow,
@@ -24,7 +26,6 @@ from langchain_core.runnables import RunnableLambda
 from langgraph.checkpoint.memory import InMemorySaver
 
 _TABLE = "station_100093"
-_Column = namedtuple("_Column", ["Field", "Type"])
 
 
 def _reply(content: str, model: str, tokens_in: int, tokens_out: int, cost: float | None = None) -> AIMessage:
@@ -44,7 +45,19 @@ class _FakeWorkflowChatbot(_BaseChatbot):
 
     def __init__(self) -> None:
         self._model = GenericFakeChatModel(
-            messages=itertools.cycle([_reply(f"SELECT * FROM `{_TABLE}`", "vendor/sql-model", 900, 40, cost=0.0003)])
+            messages=itertools.cycle(
+                [
+                    _reply(
+                        f"SELECT air_temp FROM `{_TABLE}` "
+                        "WHERE TSTAMP >= '2026-10-30' AND TSTAMP < '2026-10-31' "
+                        "AND Forecast_time >= '2026-10-30' AND Forecast_time < '2026-10-31'",
+                        "vendor/sql-model",
+                        900,
+                        40,
+                        cost=0.0003,
+                    )
+                ]
+            )
         )
 
     def invoke(self, messages: list[str]) -> str:
@@ -56,6 +69,7 @@ def _workflow(sub_queries: list[QueryClassification]) -> ChatbotWorkflow:
     workflow = object.__new__(ChatbotWorkflow)
     workflow.checkpointer = InMemorySaver()
     workflow._debug = False
+    workflow._deadline = monotonic() + 90
     workflow._query_handlers = {
         "current_weather": "_query_current",
         "forecast_weather": "_query_forecast",
@@ -66,6 +80,7 @@ def _workflow(sub_queries: list[QueryClassification]) -> ChatbotWorkflow:
 
     # classifier: a chat model followed by a parser, the same shape as with_structured_output()
     classifier = object.__new__(ClassifierChatbot)
+    classifier._injected_model = None
     fake_classifier_model = GenericFakeChatModel(messages=iter([_reply("{}", "openrouter/free", 300, 60)]))
     classifier._model = fake_classifier_model | RunnableLambda(lambda _: QueryClassifications(sub_queries=sub_queries))
     workflow.classifier_chat_model = classifier
@@ -74,7 +89,14 @@ def _workflow(sub_queries: list[QueryClassification]) -> ChatbotWorkflow:
     for name in ("current_db", "forecast_db", "historical_daily_db"):
         db = MagicMock()
         db.format_table_name.return_value = _TABLE
-        db.query_schema.return_value = [_Column("temperature", "float")]
+        db.query_schema.return_value = [
+            SchemaQueryResult("air_temp", "float", "YES", "", "Temperature"),
+            SchemaQueryResult("TSTAMP", "datetime", "YES", "", "Observation time"),
+            SchemaQueryResult("Forecast_time", "datetime", "YES", "", "Forecast time"),
+        ]
+        cursor = db.conn.cursor.return_value.__enter__.return_value
+        cursor.description = [("air_temp",)]
+        cursor.fetchall.return_value = [(54.2,)]
         db.simple_query.return_value = iter([(54.2,)])
         setattr(workflow, name, db)
     workflow._nearest_station_search = MagicMock(return_value=100093)
@@ -92,7 +114,11 @@ def test_metering_captures_every_llm_call_in_the_langgraph_workflow() -> None:
 
     usage = RequestUsage()
     with metered(usage):
-        workflow.run("What's it like now and will it rain tomorrow?", (46.73, -117.15), "whitman")
+        workflow.run_result(
+            "What's it like now and will it rain tomorrow?",
+            station_id=100093,
+            reference_time=datetime(2026, 10, 30, tzinfo=UTC),
+        )
 
     calls = sorted((c.model, c.input_tokens, c.output_tokens, c.cost_usd) for c in usage.calls)
     assert calls == [

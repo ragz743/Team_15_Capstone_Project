@@ -75,20 +75,17 @@ function definitions(metrics: Metrics | null): [string, ReactNode][] {
   return [
     [
       "Active users",
-      "Signed-in users who asked the chatbot at least one question (signing in is required to use the chatbot). Calls that arrive without a user ID are flagged as unidentified: they count toward spending but not users.",
+      "Signed-in users identified by the host website who asked the chatbot at least one question. Calls without a user ID are flagged as unidentified: they count toward spending but not users.",
     ],
-    ["Sessions", "One login session (sessions expire after 2 days). A session is successful when every call in it was answered."],
-    ["Calls", "One question answered end to end. Each call makes several model requests (chat and embedding)."],
+    ["Sessions", "One login session identified by the host website. A session is successful when every call in it was answered."],
+    ["Calls", "One attempt to answer a question. A call can make several model requests. Reopening a saved answer adds no usage."],
     [
       "Retrieval quality",
-      <>
-        Once a day a fixed sample of questions is run against the live data; the score is the share where the right weather
-        data was found. The sample is in <code>code_/backend/analytics/retrieval_samples.yaml</code>.
-      </>,
+      "The share of sample questions where the right weather data was found. Quality checks are not yet available for the connected SQL chatbot; any existing results are historical.",
     ],
     [
       "Tokens",
-      "The units of text a model reads and writes (roughly ¾ of a word each). Every model response reports how many tokens went in and came out, including each step of the LangGraph workflow.",
+      "The units of text a model reads and writes. Usage includes each model request in the workflow. Provider-reported counts are used when available; estimated counts are labelled.",
     ],
     [
       "LLM spending",
