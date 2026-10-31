@@ -24,6 +24,7 @@ dependencies = [
     "sqlglot",
     "fastapi",
     "uvicorn[standard]",
+    "sqlglot[c]",
 ]
 
 [project.optional-dependencies]
@@ -38,6 +39,11 @@ dev = [
     "pytest-html",
     "requests",
     "github-copilot-sdk",
+]
+local = [ # in-process / self hosted models, see backend/models/chatbot_local.py and embedding_local.py
+    "langchain-community",
+    "llama-cpp-python",
+    "langchain-ollama",
 ]
 
 [project.scripts]

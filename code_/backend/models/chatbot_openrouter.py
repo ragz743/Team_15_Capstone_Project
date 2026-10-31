@@ -2,6 +2,7 @@
 
 import json
 import os
+from collections.abc import AsyncIterator
 
 from backend.models._chatbot_base import _BaseChatbot
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -37,9 +38,21 @@ class ChatbotOpenRouter(_BaseChatbot):
             # The SDK interprets UNSET as its long default backoff, not disabled.
             self._model.client.sdk_configuration.retry_config = None
 
-    def invoke(self, messages: list[str]) -> str:
-        """Pass a list of messages and gets responses from the model."""
-        response = self._model.invoke(messages)
+    async def astream(self, messages: list[str]) -> AsyncIterator[str]:
+        """Asynchronously stream the response in text chunks."""
+        async for chunk in self._model.astream(messages):
+            if isinstance(chunk.content, str):
+                if chunk.content:
+                    yield chunk.content
+            else:
+                for part in chunk.content:
+                    text = part if isinstance(part, str) else part.get("text", "")
+                    if text:
+                        yield text
+
+    async def ainvoke(self, messages: list[str]) -> str:
+        """Asynchronously send messages to the model and return the response."""
+        response = await self._model.ainvoke(messages)
 
         all_responses: str = ""
         match response.content:
