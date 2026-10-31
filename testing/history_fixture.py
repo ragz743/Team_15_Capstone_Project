@@ -8,7 +8,7 @@ from backend.models._chatbot_base import _BaseChatbot
 class FixtureHistoryModel(_BaseChatbot):
     """Keep existing database/browser scenarios offline through the real history service."""
 
-    def invoke(self, messages):
+    async def ainvoke(self, messages):
         """Handle only the explicit fixture scenarios and return structured model replies."""
         payload = json.loads(messages[0].split("\nInput JSON:\n", 1)[1])
         if "excerpts" in payload:

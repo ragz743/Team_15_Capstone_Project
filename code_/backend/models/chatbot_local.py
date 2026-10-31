@@ -1,7 +1,7 @@
 """Chatbot wrappers for locally hosted models (llama.cpp server, in-process llama-cpp, Ollama)."""
 
-from collections.abc import AsyncIterator
 import pathlib
+from collections.abc import AsyncIterator
 from typing import override
 
 from backend.models._chatbot_base import _BaseChatbot

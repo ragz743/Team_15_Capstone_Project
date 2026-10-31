@@ -117,23 +117,19 @@ def test_chat_reports_retrieval_failure_without_internal_details(monkeypatch: Mo
     assert "private database" not in response.text
 
 
-def test_startup_configures_all_indexes(monkeypatch):
-    """The API applies the intended live and forecast staleness cutoffs."""
-    embedding, model, store_class = (
-        structured_mock(MagicMock()),
-        structured_mock(MagicMock()),
-        structured_mock(MagicMock()),
-    )
-    monkeypatch.setenv("OPENROUTER_EMBEDDING_MODEL", "test-embedding")
-    monkeypatch.setattr(api, "EmbeddingOpenRouter", lambda _: embedding)
-    monkeypatch.setattr(api, "ChatbotOpenRouter", lambda _: model)
-    monkeypatch.setattr(api, "PgVectorStore", store_class)
-    api._build_retriever()
-    assert [call.kwargs for call in store_class.call_args_list] == [
-        {"table": "daily_index"},
-        {"table": "live_index", "staleness_days": 30},
-        {"table": "forecast_index", "staleness_days": 2},
-    ]
+def test_startup_uses_configured_workflow_and_classifier_models(monkeypatch):
+    """Weather startup needs no embedding model or vector store."""
+    for name in ("OPENROUTER_API_KEY", "AWN_DB_HOST", "AWN_DB_USER", "AWN_DB_PASSWORD"):
+        monkeypatch.setenv(name, "test")
+    monkeypatch.delenv("OPENROUTER_EMBEDDING_MODEL", raising=False)
+    monkeypatch.setenv("OPENROUTER_WORKFLOW_MODEL", "test/weather")
+    monkeypatch.setenv("OPENROUTER_CLASSIFIER_MODEL", "test/classifier")
+    factory = MagicMock()
+    monkeypatch.setattr(api, "ChatbotOpenRouter", factory)
+    engine, _, model_name, embedding_name = api._build_retriever()
+    assert isinstance(engine, api.LangGraphEngine)
+    assert model_name == "test/weather" and not embedding_name
+    assert [call.args[0]["model"] for call in factory.call_args_list] == ["test/weather", "test/classifier"]
 
 
 @pytest.mark.parametrize("table", ["daily_index", "live_index", "forecast_index"])

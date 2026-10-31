@@ -24,10 +24,10 @@ from backend.conversation_store import (
 from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
-from backend.models.embedding_openrouter import EmbeddingOpenRouter
-from backend.retriever import Retriever
-from backend.vector_store import PgVectorStore
+from backend.station_catalog import StationList
 from backend.weather_query import RequestedPoint
+from backend.workflow.contracts import Source, WorkflowClassificationError, WorkflowTimeoutError
+from backend.workflow.engine import LangGraphEngine
 from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -49,12 +49,25 @@ class ChatMessage(BaseModel):
     content: str = Field(min_length=1, max_length=4000)
 
 
-class ChatRequest(BaseModel):
-    """Payload for POST /api/chat."""
+class WeatherLocation(BaseModel):
+    """Accept an explicit station or a point from an older saved request."""
 
     model_config = ConfigDict(extra="forbid")
-    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
     point: RequestedPoint | None = None
+    station_id: str | None = Field(default=None, strict=True, pattern=r"^[0-9]{1,20}$")
+
+    @model_validator(mode="after")
+    def one_location(self):
+        """Reject conflicting selection methods."""
+        if self.point is not None and self.station_id is not None:
+            raise ValueError("Choose either a station or a point")
+        return self
+
+
+class ChatRequest(WeatherLocation):
+    """Payload for POST /api/chat."""
+
+    messages: list[ChatMessage] = Field(min_length=1, max_length=40)
 
     @model_validator(mode="after")
     def bounded_request(self):
@@ -71,14 +84,13 @@ class ChatResponse(BaseModel):
     model: str
 
 
-class SavedChatRequest(BaseModel):
+class SavedChatRequest(WeatherLocation):
     """One accepted message, with stable IDs for retries."""
 
-    model_config = ConfigDict(extra="forbid")
     conversation_id: UUID
     request_id: UUID
     message: str = Field(min_length=1, max_length=4000)
-    point: RequestedPoint | None = None
+    mode: Literal["weather", "history"] | None = None
 
 
 class SavedChatResponse(ChatResponse):
@@ -88,6 +100,8 @@ class SavedChatResponse(ChatResponse):
     conversation_id: UUID
     request_id: UUID
     outcome: Literal["success", "history", "needs_clarification", "no_data"]
+    sources: list[Source] = Field(default_factory=list)
+    coverage: Literal["subset", "complete"] | None = None
 
 
 _conversations = ConversationStore()
@@ -102,7 +116,7 @@ _ALLOWED_ORIGINS = [
 
 # initialized at startup.
 _chatbot: _BaseChatbot | None = None
-_retriever: Retriever | None = None
+_retriever: LangGraphEngine | None = None
 _chatbot_model_name: str = ""
 _embedding_model_name: str = ""
 
@@ -111,31 +125,22 @@ def _chat_model() -> str:
     return os.getenv("OPENROUTER_CHAT_MODEL", "").strip() or _DEFAULT_CHAT_MODEL
 
 
-def _build_retriever() -> tuple[Retriever, _BaseChatbot, str, str]:
-    if not os.getenv("OPENROUTER_API_KEY"):
-        logger.warning("OPENROUTER_API_KEY not set - /api/chat will fail until configured")
-
-    chat_model_name = _chat_model()
-    embedding_model_name = os.getenv("OPENROUTER_EMBEDDING_MODEL")
-    if not embedding_model_name:
-        msg = "OPENROUTER_EMBEDDING_MODEL must be set to initialize retrieval"
-        raise ValueError(msg)
-
-    temperature = float(os.getenv("OPENROUTER_CHAT_TEMPERATURE", "0"))
-
-    # Builds embedding model and chatbot
-    embedding_model = EmbeddingOpenRouter(embedding_model_name)
-    chatbot = ChatbotOpenRouter({"model": chat_model_name, "temperature": temperature})
-
-    # Builds all three stores: daily_index, live_index, forecast_index
-    stores = [
-        PgVectorStore(embedding_model, table="daily_index"),
-        PgVectorStore(embedding_model, table="live_index", staleness_days=30),
-        PgVectorStore(embedding_model, table="forecast_index", staleness_days=2),
-    ]
-    retriever = Retriever(stores, chatbot)
-
-    return retriever, chatbot, chat_model_name, embedding_model_name
+def _build_retriever() -> tuple[LangGraphEngine, _BaseChatbot, str, str]:
+    required = ("OPENROUTER_API_KEY", "AWN_DB_USER", "AWN_DB_PASSWORD", "AWN_DB_HOST")
+    if any(not os.getenv(name) for name in required):
+        raise ValueError("The workflow requires model and AWN database configuration")
+    model_name = os.getenv("OPENROUTER_WORKFLOW_MODEL", "").strip() or _chat_model()
+    classifier_name = os.getenv("OPENROUTER_CLASSIFIER_MODEL", "").strip() or model_name
+    settings = {
+        "temperature": 0,
+        "max_tokens": 3000,
+        "request_timeout": 15000,
+        "max_retries": 0,
+        "reasoning": {"enabled": False, "effort": "none"},
+    }
+    chatbot = ChatbotOpenRouter({"model": model_name, **settings})
+    classifier = ChatbotOpenRouter({"model": classifier_name, **settings})
+    return LangGraphEngine(chatbot, classifier), chatbot, model_name, ""
 
 
 def _latest_user_message(messages: list[ChatMessage]) -> str | None:
@@ -154,7 +159,7 @@ def _preceding_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the retriever once at process start."""
+    """Initialize shared model clients and the weather graph adapter."""
     global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name
     global _history_service
     dotenv.load_dotenv()
@@ -169,13 +174,9 @@ async def lifespan(app: FastAPI):
         _history_service = None
     try:
         _retriever, _chatbot, _chatbot_model_name, _embedding_model_name = _build_retriever()
-        logger.info(
-            "Retriever initialized with chat_model=%s embedding_model=%s",
-            _chatbot_model_name,
-            _embedding_model_name,
-        )
+        logger.info("LangGraph initialized with chat_model=%s", _chatbot_model_name)
     except Exception:
-        logger.exception("Failed to initialize retriever at startup")
+        logger.error("Failed to initialize LangGraph at startup")
         _chatbot = None
         _retriever = None
         _chatbot_model_name = ""
@@ -201,6 +202,13 @@ app.add_middleware(
 
 
 def _retrieval_error(exc: BaseException) -> HTTPException:
+    if isinstance(exc, WorkflowClassificationError):
+        return HTTPException(
+            status_code=502,
+            detail="The weather service could not interpret your question. Please try again or rephrase it.",
+        )
+    if isinstance(exc, WorkflowTimeoutError):
+        return HTTPException(status_code=504, detail="The weather request took too long. Please try again.")
     if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)):
         return HTTPException(
             status_code=503,
@@ -221,7 +229,7 @@ async def chat_service_error(request: Request, exc: ChatServiceError):
         error = HTTPException(status_code=502, detail=f"{name} returned an empty answer. Please try again.")
     else:
         error = _retrieval_error(exc.__cause__ or exc)
-        if error.status_code == 502:
+        if error.status_code == 502 and exc.operation == "history":
             error.detail = f"{name} could not complete your request. Please try again."
     logger.error("%s request failed (%s)", exc.operation, type(exc.__cause__ or exc).__name__)
     return JSONResponse(status_code=error.status_code, content={"detail": error.detail})
@@ -296,13 +304,43 @@ def get_conversation(
     return _conversations.get(_owner(request, response), conversation_id, before=before)
 
 
+def _station_catalog(response: Response, point: RequestedPoint | None = None) -> StationList:
+    response.headers["Cache-Control"] = "no-store"
+    if _retriever is None:
+        raise HTTPException(status_code=503, detail="Stations are temporarily unavailable. Please try again.")
+    try:
+        return _retriever.station_catalog(point)
+    except Exception as exc:
+        raise _retrieval_error(exc) from exc
+
+
+@app.get("/api/stations", response_model=StationList)
+def list_stations(response: Response) -> StationList:
+    """List station names and counties from the cached AWN directory."""
+    return _station_catalog(response)
+
+
+@app.post("/api/stations/nearby", response_model=StationList)
+def nearby_stations(payload: RequestedPoint, response: Response) -> StationList:
+    """Use the browser point for sorting without persisting or echoing it."""
+    return _station_catalog(response, payload)
+
+
 def _saved_chat(payload: SavedChatRequest, request: Request, response: Response) -> SavedChatResponse:
     question = payload.message.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
     owner = _owner(request, response)
     service = SavedChatService(_conversations, _history_service, _retriever, _chatbot_model_name)
-    result = service.run(owner, payload.conversation_id, payload.request_id, question, point=payload.point)
+    result = service.run(
+        owner,
+        payload.conversation_id,
+        payload.request_id,
+        question,
+        point=payload.point,
+        station_id=payload.station_id,
+        mode=payload.mode or "weather",
+    )
     return SavedChatResponse(
         **result.response(), conversation_id=payload.conversation_id, request_id=payload.request_id
     )
@@ -316,6 +354,7 @@ def health() -> dict[str, object]:
         "chatbot_ready": _chatbot is not None,
         "retriever_ready": _retriever is not None,
         "history_ready": _history_service is not None,
+        "engine": "langgraph",
         "model": _chatbot_model_name or None,
         "embedding_model": _embedding_model_name or None,
         "has_api_key": bool(os.getenv("OPENROUTER_API_KEY")),
@@ -343,7 +382,13 @@ def chat(request: ChatRequest | SavedChatRequest, raw: Request, response: Respon
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
 
     try:
-        reply = _retriever.retrieve(question, point=request.point, history=_preceding_messages(request.messages))
+        selection = {"station_id": request.station_id} if request.station_id is not None else {}
+        reply = _retriever.retrieve(
+            question,
+            point=request.point,
+            history=_preceding_messages(request.messages),
+            **selection,
+        )
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
         raise _retrieval_error(exc) from exc

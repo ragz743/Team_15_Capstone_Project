@@ -249,14 +249,19 @@ class ConversationStore:
             if not cur.fetchone():
                 raise ConversationNotFoundError
             cur.execute(
-                "SELECT t.user_content, CASE WHEN t.completed_at <= %s THEN t.assistant_content END AS answer "
+                "SELECT t.user_content, t.requested_at, "
+                "CASE WHEN t.completed_at <= %s THEN t.assistant_content END AS answer "
                 "FROM conversation_turns t JOIN conversations c ON c.id = t.conversation_id "
                 "WHERE c.owner_id = %s AND c.id = %s AND t.requested_at < %s "
                 "ORDER BY t.ordinal DESC LIMIT 6",
                 (before, owner, conversation, before),
             )
             return [
-                {"user": row["user_content"][:1200], "assistant": (row["answer"] or "")[:2000]}
+                {
+                    "user": row["user_content"][:1200],
+                    "assistant": (row["answer"] or "")[:2000],
+                    "asked_at": row["requested_at"].isoformat(),
+                }
                 for row in reversed(cur.fetchall())
             ]
 
@@ -319,7 +324,7 @@ def _messages(row: dict) -> list[dict]:
 
 def _validate_retry(existing, latest, content, request_input, request):
     if existing["user_content"] != content or existing["request_input"] != request_input:
-        raise TurnConflictError("A retry must contain the original message and map point.")
+        raise TurnConflictError("A retry must contain the original message and location selection.")
     if existing["status"] != "completed" and latest["request_id"] != request:
         raise TurnConflictError("This failed turn has newer messages. Send a new question instead.")
 

@@ -4,7 +4,7 @@ import ChatTranscript from "./ChatTranscript";
 import ConversationSidebar from "./ConversationSidebar";
 import LocationPicker from "./LocationPicker";
 import Icon from "./Icon";
-import type { RequestedPoint } from "../lib/api";
+import type { ChatMode } from "../lib/api";
 import type { Message } from "../lib/conversationState";
 import type { ConversationHistory } from "./chatTypes";
 
@@ -13,8 +13,10 @@ export type { Message as ChatMessage } from "../lib/conversationState";
 type ChatWorkspaceProps = {
   messages: Message[];
   draft: string;
-  point: RequestedPoint | null;
-  onPointChange: (point: RequestedPoint) => void;
+  mode: ChatMode;
+  onModeChange: (mode: ChatMode) => void;
+  stationId: string | null;
+  onStationChange: (stationId: string) => void;
   isSending: boolean;
   ready?: boolean;
   notice?: string;
@@ -28,12 +30,14 @@ type ChatWorkspaceProps = {
 export default function ChatWorkspace({
   messages,
   draft,
+  mode,
+  onModeChange,
   isSending,
   ready = true,
   notice = "",
   history,
-  point,
-  onPointChange,
+  stationId,
+  onStationChange,
   onDraftChange,
   onSubmit,
   onNewConversation,
@@ -146,10 +150,7 @@ export default function ChatWorkspace({
               )}
             </div>
           )}
-          <details className="map-panel" open={!point && messages.length === 0}>
-            <summary>{point ? "Change map point" : "Choose a map point"}</summary>
-            <LocationPicker point={point} disabled={isSending || !ready} onChange={onPointChange} />
-          </details>
+          <LocationPicker stationId={stationId} disabled={isSending || !ready} onChange={onStationChange} />
           <ChatTranscript
             key={conversationId ?? "new"}
             messages={messages}
@@ -164,6 +165,8 @@ export default function ChatWorkspace({
           />
           <ChatComposer
             draft={draft}
+            mode={mode}
+            onModeChange={onModeChange}
             isSending={isSending}
             ready={ready}
             textareaRef={textareaRef}
