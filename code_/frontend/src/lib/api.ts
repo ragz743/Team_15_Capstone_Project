@@ -1,17 +1,21 @@
 import { API_BASE, ApiError, jsonPost, requestJson } from "./http.ts";
+import { chatIdentityHeaders } from "./chatIdentity.ts";
 import {
   isChatReply,
   isConversation,
   isConversationList,
   isSavedReply,
   isSummary,
+  isStationCatalog,
   type ChatMessage,
+  type ChatMode,
   type ChatResponse,
   type ConversationSummary,
   type HealthResponse,
   type RequestedPoint,
   type SavedChatResponse,
   type SavedConversation,
+  type StationCatalog,
 } from "./apiContracts.ts";
 
 export { ApiError } from "./http.ts";
@@ -48,6 +52,7 @@ export async function sendChat(
     "/api/chat",
     {
       ...jsonPost({ messages: recentChatMessages(messages), ...(point ? { point } : {}) }, signal),
+      headers: { "Content-Type": "application/json", ...chatIdentityHeaders() },
       credentials: "same-origin",
     },
     isChatReply,
@@ -69,15 +74,27 @@ export function sendSavedChat(
   message: string,
   signal?: AbortSignal,
   point?: RequestedPoint | null,
+  mode: ChatMode = "weather",
+  stationId?: string | null,
 ): Promise<SavedChatResponse> {
   return requestJson(
     "/api/chat",
-    jsonPost({ conversation_id: conversationId, request_id: requestId, message, ...(point ? { point } : {}) }, signal),
+    {
+      ...jsonPost({ conversation_id: conversationId, request_id: requestId, message, mode,
+        ...(point ? { point } : {}), ...(stationId ? { station_id: stationId } : {}) }, signal),
+      headers: { "Content-Type": "application/json", ...chatIdentityHeaders() },
+    },
     (value): value is SavedChatResponse =>
       isSavedReply(value) &&
       value.conversation_id === conversationId &&
       value.request_id === requestId,
   );
+}
+export function listStations(signal?: AbortSignal): Promise<StationCatalog> {
+  return requestJson("/api/stations", { signal }, isStationCatalog);
+}
+export function nearbyStations(point: RequestedPoint, signal?: AbortSignal): Promise<StationCatalog> {
+  return requestJson("/api/stations/nearby", jsonPost(point, signal), isStationCatalog);
 }
 export async function listConversations(
   signal?: AbortSignal,

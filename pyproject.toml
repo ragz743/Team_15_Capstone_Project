@@ -21,6 +21,7 @@ dependencies = [
     "langchain-openrouter",
     "langchain-openai",
     "langgraph",
+    "sqlglot",
     "fastapi",
     "uvicorn[standard]",
     "sqlglot[c]",
@@ -51,6 +52,9 @@ retrieve = "scripts.retrieve:main"
 
 [tool.setuptools.packages.find]
 where = ["code_"]
+
+[tool.setuptools.package-data]
+"backend.analytics" = ["*.sql", "*.yaml"]
 
 [tool.black]
 line-length = 120

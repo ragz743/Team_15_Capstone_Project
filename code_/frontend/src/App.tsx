@@ -15,11 +15,13 @@ export default function App() {
     <ChatWorkspace
       messages={state.messages}
       draft={state.draft}
+      mode={state.mode}
+      onModeChange={(value) => dispatch({ type: "mode", value })}
       isSending={state.busy}
       ready={state.ready}
       notice={state.notice}
-      point={state.point}
-      onPointChange={(value) => dispatch({ type: "point", value })}
+      stationId={state.stationId}
+      onStationChange={(value) => dispatch({ type: "station", value })}
       history={{
         conversations: state.conversations,
         selectedId: state.conversationId,

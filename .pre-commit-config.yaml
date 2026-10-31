@@ -22,6 +22,7 @@ repos:
   rev: v2.4.1 # Use the latest stable version of codespell
   hooks:
     - id: codespell
+      exclude: (^|/)package-lock\.json$
 - repo: https://github.com/RobertCraigie/pyright-python
   rev: v1.1.405
   hooks:

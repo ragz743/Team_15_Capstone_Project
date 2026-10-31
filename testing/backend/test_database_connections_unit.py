@@ -41,15 +41,27 @@ class FakeCursor:
         """Initialize cursor query state."""
         self.query: str | None = None
         self.params: tuple[Any, ...] | None = None
+        self.calls: list[tuple[str, tuple[Any, ...] | None]] = []
+        self.rows = iter([("COLUMN", "varchar", "YES", "", "description")])
+        self.closed = False
 
-    def execute(self, query: str, params: tuple[Any, ...]) -> None:
+    def execute(self, query: str, params: tuple[Any, ...] | None = None) -> None:
         """Record query text and parameters."""
         self.query = query
         self.params = params
+        self.calls.append((query, params))
 
-    def __iter__(self):
-        """Return fixed schema result rows."""
-        return iter([("COLUMN", "varchar", "YES", "", "description")])
+    def fetchone(self):
+        """Read one schema row at a time."""
+        return next(self.rows, None)
+
+    def __enter__(self):
+        """Open the cursor context."""
+        return self
+
+    def __exit__(self, *args):
+        """Record cursor cleanup."""
+        self.closed = True
 
 
 def test_schema_query_result_parses_columns_and_rejects_short_rows() -> None:
@@ -99,9 +111,13 @@ def test_awn_connection_configuration_and_table_names(
         "host": "awn.example",
         "database": db_name,
         "connection_timeout": connection_type.CONNECTION_TIMEOUT_SECONDS,
+        "read_timeout": 60,
+        "write_timeout": 15,
     }
     assert connection.format_table_name(123) == table_name
     assert created == [connection.conn]
+    assert created[0].cursors[0].calls == [("START TRANSACTION READ ONLY", None)]
+    assert created[0].cursors[0].closed
 
 
 def test_awn_connection_query_schema_and_context_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -114,22 +130,27 @@ def test_awn_connection_query_schema_and_context_cleanup(monkeypatch: pytest.Mon
         return connection
 
     monkeypatch.setattr(_awn_connection_base.connector, "MySQLConnection", connect)
-    connection = AWNDatabaseConnection()
+    connection = AWNDatabaseConnection(statement_timeout=8)
 
     schema = connection.query_schema("station123")
 
     assert schema == [_awn_connection_base.SchemaQueryResult("COLUMN", "varchar", "YES", "", "description")]
     fake_connection = cast(FakeMySQLConnection, connection.conn)
-    schema_query = fake_connection.cursors[0]
+    assert fake_connection.kwargs["read_timeout"] == 10
+    assert fake_connection.cursors[0].calls == [
+        ("SET SESSION max_statement_time = %s", (8,)),
+        ("START TRANSACTION READ ONLY", None),
+    ]
+    schema_query = fake_connection.cursors[1]
     assert schema_query.query is not None
     assert "INFORMATION_SCHEMA.COLUMNS" in schema_query.query
     assert schema_query.params == ("awn", "station123")
     assert fake_connection.kwargs["database"] == "awn"
     assert list(connection.simple_query("SELECT %s", (5,))) == [("COLUMN", "varchar", "YES", "", "description")]
-    assert fake_connection.cursors[1].query == "SELECT %s"
-    assert fake_connection.cursors[1].params == (5,)
-    connection.query_schema("station123")
-    assert len(fake_connection.cursors) == 3
+    assert fake_connection.cursors[2].query == "SELECT %s"
+    assert fake_connection.cursors[2].params == (5,)
+    assert connection.query_schema("station123")[0].column_name == "COLUMN"
     with connection:
         assert connection.conn is instances[0]
     assert fake_connection.disconnected
+    assert all(cursor.closed for cursor in fake_connection.cursors)

@@ -38,8 +38,30 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
       OPENROUTER_CHAT_MODEL: ${OPENROUTER_CHAT_MODEL}
       OPENROUTER_HISTORY_MODEL: ${OPENROUTER_HISTORY_MODEL:-}
+      OPENROUTER_WORKFLOW_MODEL: ${OPENROUTER_WORKFLOW_MODEL:-}
+      OPENROUTER_CLASSIFIER_MODEL: ${OPENROUTER_CLASSIFIER_MODEL:-}
+      AWN_DB_HOST: ${AWN_DB_HOST}
+      AWN_DB_USER: ${AWN_DB_USER}
+      AWN_DB_PASSWORD: ${AWN_DB_PASSWORD}
       OPENROUTER_CHAT_TEMPERATURE: ${OPENROUTER_CHAT_TEMPERATURE}
       OPENROUTER_EMBEDDING_MODEL: ${OPENROUTER_EMBEDDING_MODEL}
+      AWN_ADMIN_TOKEN: ${AWN_ADMIN_TOKEN:-}  # admin dashboard is disabled until this is set
+      AWN_DASHBOARD_TIMEZONE: ${AWN_DASHBOARD_TIMEZONE:-America/Los_Angeles}
+      AWN_USAGE_TRACKING: ${AWN_USAGE_TRACKING:-true}
+      # report usage to the AgWeatherNet backend (LLM Usage tab of its admin dashboard) instead of the local store
+      AWN_BACKEND_URL: ${AWN_BACKEND_URL:-}  # e.g. http://host.docker.internal:8080 locally, https://weather.wsu.edu in production
+      AWN_INTERNAL_KEY: ${AWN_INTERNAL_KEY:-}  # must match AWN_INTERNAL_KEY on the AgWeatherNet backend
+      AWN_RESPONSE_TARGET_MS: ${AWN_RESPONSE_TARGET_MS:-5000}
+      AWN_QUALITY_CHECK_HOURS: ${AWN_QUALITY_CHECK_HOURS:-24}
+      AWN_MONTHLY_BUDGET_USD: ${AWN_MONTHLY_BUDGET_USD:-50}
+      AWN_BUDGET_ALERT_EMAIL: ${AWN_BUDGET_ALERT_EMAIL:-weather@wsu.edu}
+      AWN_DASHBOARD_URL: ${AWN_DASHBOARD_URL:-}
+      AWN_SMTP_HOST: ${AWN_SMTP_HOST:-}  # budget alert email is not sent until SMTP is configured
+      AWN_SMTP_PORT: ${AWN_SMTP_PORT:-587}
+      AWN_SMTP_USERNAME: ${AWN_SMTP_USERNAME:-}
+      AWN_SMTP_PASSWORD: ${AWN_SMTP_PASSWORD:-}
+      AWN_SMTP_FROM: ${AWN_SMTP_FROM:-}
+      AWN_SMTP_STARTTLS: ${AWN_SMTP_STARTTLS:-true}
     ports:
       - "8000:8000" # exposed for debugging; nginx proxies internally
 
