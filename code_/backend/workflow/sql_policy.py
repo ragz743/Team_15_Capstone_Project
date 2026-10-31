@@ -71,6 +71,7 @@ def bounded_query(
         return UNAVAILABLE_QUERY
     _validate_read(statement, table_name, columns)
     validate_date_bounds(statement, date_column, max_days)
+    _validate_source_dates(statement, date_column)
     return _limit_result(statement)
 
 
@@ -129,3 +130,39 @@ def _limit_result(statement: exp.Select) -> str:
     else:
         statement = statement.limit(MAX_ROWS)
     return statement.sql(dialect="mysql")
+
+
+def _projection(expression: exp.Expr) -> exp.Expr:
+    return (expression.this if isinstance(expression, exp.Alias) else expression).unnest()
+
+
+def _date_value(expression: exp.Expr, column: str) -> bool:
+    expression = _projection(expression)
+    if isinstance(expression, (exp.Min, exp.Max, exp.Date, exp.TsOrDsToDate)):
+        return _date_value(expression.this, column)
+    if isinstance(expression, exp.Cast) and expression.args["to"].this == exp.DataType.Type.DATE:
+        return _date_value(expression.this, column)
+    return isinstance(expression, exp.Column) and expression.name.casefold() == column.casefold()
+
+
+def date_only_query(query: str, date_column: str) -> bool:
+    """Identify intentional date answers even when measurements appear in filters."""
+    return all(_date_value(expression, date_column) for expression in _parse_select(query).expressions)
+
+
+def _validate_source_dates(statement: exp.Select, column: str) -> None:
+    projections = [_projection(expression) for expression in statement.expressions]
+    if all(_date_value(expression, column) for expression in projections):
+        return
+    aggregates = [node for node in statement.find_all(exp.AggFunc) if node.find_ancestor(exp.Select) is statement]
+    if aggregates:
+        bounds = {
+            type(expression)
+            for expression in projections
+            if isinstance(expression, (exp.Min, exp.Max)) and _date_value(expression.this, column)
+        }
+        if {exp.Min, exp.Max} <= bounds:
+            return
+        raise ProgrammingError(f"Include MIN({column}) AS source_start and MAX({column}) AS source_end for aggregates.")
+    if not any(_date_value(expression, column) for expression in projections):
+        raise ProgrammingError(f"Include the source date {column} with each reading.")

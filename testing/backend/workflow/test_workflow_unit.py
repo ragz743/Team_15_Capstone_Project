@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import nullcontext
+from datetime import datetime
 from time import monotonic
 from types import SimpleNamespace
 from typing import Any, cast
@@ -40,12 +41,12 @@ class FakeDatabase:
             ]
         )
         self.conn = self
-        self.description = [("air_temp",)]
+        self.description = [("TSTAMP",), ("air_temp",)]
         self.queries: list[tuple[str, tuple[Any, ...]]] = []
-        self.results: list[tuple[Any, ...]] = [(72.0,)]
+        self.results: list[tuple[Any, ...]] = [(datetime(2026, 9, 29), 72.0)]
         self.failures = 0
 
-    def format_table_name(self, station_id: int) -> str:
+    def format_table_name(self, station_id: int, *, year: int | None = None) -> str:
         """Return a deterministic station table name."""
         return f"station_{station_id}"
 
@@ -92,7 +93,7 @@ def weather_sql(query_type: QueryType = "current_weather") -> str:
         "historical_weather": "JULDATE",
         "forecast_weather": "Forecast_time",
     }[query_type]
-    return f"SELECT air_temp FROM station_123 WHERE {date_column} = '2026-09-29'"
+    return f"SELECT {date_column}, air_temp FROM station_123 WHERE {date_column} = '2026-09-29'"
 
 
 def make_workflow(debug: bool = False) -> ChatbotWorkflow:
@@ -273,7 +274,7 @@ def test_weather_nodes_skip_unmatched_and_delegate_matching_queries(
 ) -> None:
     """Check each weather node skips unrelated queries and delegates matching ones."""
     chatbot = make_workflow()
-    database = object()
+    database = FakeDatabase()
     setattr(chatbot, db_attribute, cast(Any, database))
     query = QueryClassification(query_type=kind, reworded_query="Weather?")
     invoked: list[tuple[list[QueryClassification], ChatState, object, str]] = []
@@ -281,7 +282,9 @@ def test_weather_nodes_skip_unmatched_and_delegate_matching_queries(
         chatbot,
         "_run_generated_query",
         AsyncMock(
-            side_effect=lambda queries, state, db, name: invoked.append((queries, state, db, name)) or {"messages": []}
+            side_effect=lambda queries, state, db, name, **kwargs: (
+                invoked.append((queries, state, db, name)) or {"messages": []}
+            )
         ),
     )
     state = make_state()
@@ -337,10 +340,11 @@ def test_run_generated_query_formats_schema_and_results() -> None:
     assert "air_temp" in prompts[0]
     assert "2026-09-30T12:00:00+00:00" in prompts[0]
     execution = update["executions"][0]
-    assert execution.columns == ("air_temp",)
-    assert execution.rows == [(72.0,)]
+    assert execution.columns == ("TSTAMP", "air_temp")
+    assert execution.rows == [(datetime(2026, 9, 29), 72.0)]
+    assert execution.times == ["2026-09-29 00:00:00"]
     assert execution.measurements == ["air_temp (F)"]
-    assert "(72.0,)" in update["messages"][0][1]
+    assert "72.0" in update["messages"][0][1]
 
 
 def test_run_generated_query_retries_programming_error_with_error_context() -> None:
@@ -454,7 +458,7 @@ def test_validate_generated_query_rejects_unsafe_or_unscoped_sql(query: str, mes
 def test_validate_generated_query_accepts_case_and_backticks() -> None:
     """Allow case-insensitive SELECT and the selected table quoted with backticks."""
     sql = ChatbotWorkflow._validate_query(
-        " select air_temp from `STATION_123` where TSTAMP = '2026-09-29' ",
+        " select TSTAMP, air_temp from `STATION_123` where TSTAMP = '2026-09-29' ",
         "station_123",
         {"air_temp", "TSTAMP"},
         "current_weather",

@@ -87,7 +87,12 @@ class LangGraphEngine:
         request = WorkflowRequest(
             station_id=context.station_ids[0],
             reference_time=reference_time or datetime.now(TIMEZONE),
-            history=[WorkflowHistory.model_validate(item) for item in (history or [])[-6:]],
+            history=[
+                WorkflowHistory.model_validate(
+                    {**item, "user": item["user"][:1200], "assistant": item.get("assistant", "")[:2000]}
+                )
+                for item in (history or [])[-6:]
+            ],
         )
         return PreparedChatTurn(outcome="weather", question=question, context=context, workflow=request)
 

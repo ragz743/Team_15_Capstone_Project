@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any, cast
+from unittest.mock import MagicMock
 
 import pytest
 from backend.databases import _awn_connection_base
@@ -12,6 +13,7 @@ from backend.databases.awn_fc_connection import (
     AWNForecastFallbackDatabaseConnection,
 )
 from backend.databases.awn_main_connection import AWNDatabaseConnection
+from mysql.connector.errors import ProgrammingError
 
 
 class FakeMySQLConnection:
@@ -154,3 +156,20 @@ def test_awn_connection_query_schema_and_context_cleanup(monkeypatch: pytest.Mon
         assert connection.conn is instances[0]
     assert fake_connection.disconnected
     assert all(cursor.closed for cursor in fake_connection.cursors)
+
+
+@pytest.mark.parametrize("failure_index", [0, 1])
+def test_initialization_failure_disconnects_before_reraising(monkeypatch, failure_index):
+    """Neither failed session statement may leave an unowned connection open."""
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    error = ProgrammingError("Session setup failed")
+    cursor.execute.side_effect = [None] * failure_index + [error]
+    monkeypatch.setattr(_awn_connection_base.connector, "MySQLConnection", lambda **kwargs: connection)
+
+    with pytest.raises(ProgrammingError) as raised:
+        AWNDatabaseConnection(statement_timeout=8)
+
+    assert raised.value is error
+    connection.disconnect.assert_called_once()
+    connection.cursor.return_value.__exit__.assert_called_once()

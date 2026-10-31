@@ -1,6 +1,6 @@
 """Exercise the web adapter and Gavin's graph without external model or source calls."""
 
-from datetime import datetime
+from datetime import date, datetime
 from unittest.mock import MagicMock
 
 import backend.api as api
@@ -11,6 +11,7 @@ from backend.databases.awn_main_connection import AWNDatabaseConnection
 from backend.weather_query import RequestedPoint, Station
 from backend.workflow.contracts import WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.engine import LangGraphEngine
+from fastapi.testclient import TestClient
 from workflow_fixture import make_graph
 
 REFERENCE = datetime(2026, 9, 30, 9, tzinfo=TIMEZONE)
@@ -284,3 +285,149 @@ def test_retry_after_midnight_rejects_database_clock_and_keeps_original_referenc
     assert "'2026-09-29'" in runtime.cursor.execute.call_args.args[0]
     assert "CURRENT_DATE" not in runtime.cursor.execute.call_args.args[0]
     assert accepted.isoformat() in runtime.model.invoke.call_args_list[1].args[0][0]
+
+
+def test_oversized_transcript_history_reaches_classifier(weather, monkeypatch):
+    """A valid HTTP transcript must fit workflow bounds without shortening the new question."""
+    engine, runtime = weather
+    monkeypatch.setattr(api, "_retriever", engine)
+    prior = [{"role": "user", "content": str(index) * 4000} for index in range(7)]
+    question = "What about humidity? " * 100
+    response = TestClient(api.app).post(
+        "/api/chat", json={"messages": [*prior, {"role": "user", "content": question}], "station_id": "1"}
+    )
+
+    assert response.status_code == 200
+    supplied = runtime.classifier.invoke_json.call_args.args[1]
+    assert supplied["question"] == question.strip()
+    assert [item["user"] for item in supplied["history"]] == [str(index) * 1200 for index in range(1, 7)]
+
+
+def test_prepare_turn_bounds_both_sides_of_prior_turns(weather):
+    """Caller history is copied and bounded before strict snapshot validation."""
+    engine, _ = weather
+    history = [{"user": "u" * 4000, "assistant": "a" * 4000, "asked_at": REFERENCE.isoformat()}]
+    turn = engine.prepare_turn("Follow up", station_id="1", history=history, reference_time=REFERENCE)
+
+    assert turn.workflow.history[0].user == "u" * 1200
+    assert turn.workflow.history[0].assistant == "a" * 2000
+    assert turn.workflow.history[0].asked_at == REFERENCE.isoformat()
+    assert len(history[0]["user"]) == 4000 and len(history[0]["assistant"]) == 4000
+
+
+def test_forecast_retry_after_new_year_keeps_original_partition(weather, monkeypatch):
+    """A restored December request uses its Washington year even when UTC is already January."""
+    import backend.databases.awn_fc_connection as forecast_module
+    from backend.databases._awn_connection_base import SchemaQueryResult
+
+    engine, runtime = weather
+    accepted = datetime(2026, 12, 31, 23, 59, tzinfo=TIMEZONE)
+    prepared = engine.prepare_turn("Temperature tomorrow?", station_id="1", reference_time=accepted)
+    runtime.classifier.invoke_json.side_effect = RuntimeError("Provider unavailable")
+    with pytest.raises(RuntimeError):
+        engine.answer_result(prepared)
+
+    clock = MagicMock()
+    clock.now.return_value = datetime(2027, 1, 1, 1, tzinfo=TIMEZONE)
+    monkeypatch.setattr(forecast_module, "datetime", clock)
+    connection = object.__new__(forecast_module.AWNForecastDatabaseConnection)
+    runtime.database.format_table_name.side_effect = connection.format_table_name
+    runtime.database.query_schema.return_value = [
+        SchemaQueryResult("Forecast_time", "datetime", "YES", "", ""),
+        SchemaQueryResult("AIR_TEMP", "float", "YES", "", ""),
+    ]
+    runtime.classifier.invoke_json.side_effect = None
+    runtime.classifier.invoke_json.return_value = (
+        '{"sub_queries":[{"query_type":"forecast_weather","reworded_query":"Temperature on 2027-01-01"}]}'
+    )
+    runtime.model.invoke.side_effect = [
+        "SELECT Forecast_time, AIR_TEMP FROM fcst_1_2026 "
+        "WHERE Forecast_time >= '2027-01-01' AND Forecast_time < '2027-01-02'",
+        "The January 1 forecast is 40 F.",
+    ]
+    runtime.cursor.description = [("Forecast_time",), ("AIR_TEMP",)]
+    runtime.cursor.fetchall.return_value = [(datetime(2027, 1, 1, 12), 40)]
+
+    restored = PreparedChatTurn.model_validate_json(prepared.model_dump_json())
+    result = engine.answer_result(restored)
+
+    runtime.database.query_schema.assert_called_once_with("fcst_1_2026")
+    assert "FROM fcst_1_2026" in runtime.cursor.execute.call_args.args[0]
+    assert runtime.classifier.invoke_json.call_args.args[1]["reference_time"] == accepted.isoformat()
+    assert result.sources[0].times == ["2027-01-01 12:00:00"]
+    clock.now.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("projection", "corrected_projection", "columns", "row"),
+    [
+        ("AVG_AIR_TEMP", "JULDATE, AVG_AIR_TEMP", ("JULDATE", "AVG_AIR_TEMP"), (date(2026, 9, 29), 70.25)),
+        (
+            "AVG(AVG_AIR_TEMP)",
+            "MIN(JULDATE) AS source_start, MAX(JULDATE) AS source_end, AVG(AVG_AIR_TEMP)",
+            ("source_start", "source_end", "AVG(AVG_AIR_TEMP)"),
+            (date(2026, 9, 29), date(2026, 9, 29), 70.25),
+        ),
+    ],
+)
+def test_missing_source_dates_trigger_sql_repair(weather, projection, corrected_projection, columns, row):
+    """Only a query that returns real source dates reaches execution and summarization."""
+    engine, runtime = weather
+    suffix = " FROM station1daily WHERE JULDATE = '2026-09-29'"
+    runtime.model.invoke.side_effect = [
+        "SELECT " + projection + suffix,
+        "SELECT " + corrected_projection + suffix,
+        "70.25 F on September 29.",
+    ]
+    runtime.cursor.description = [(column,) for column in columns]
+    runtime.cursor.fetchall.return_value = [row]
+
+    result = engine.answer_result(engine.prepare_turn("Temperature yesterday?", station_id="1"))
+
+    runtime.cursor.execute.assert_called_once()
+    assert runtime.cursor.execute.call_args.args[0] == "SELECT " + corrected_projection + suffix + " LIMIT 200"
+    assert "previous SQL attempt failed" in runtime.model.invoke.call_args_list[1].args[0][0]
+    assert result.outcome == "success" and result.sources[0].times == ["2026-09-29"]
+
+
+@pytest.mark.parametrize(
+    ("projection", "rows", "outcome", "times"),
+    [
+        ("MAX(JULDATE) AS last_rain", [(date(2026, 9, 29),)], "success", ["2026-09-29"]),
+        ("JULDATE AS rainy_day", [(date(2026, 9, 29),)], "success", ["2026-09-29"]),
+        ("MAX(JULDATE)", [(datetime(2026, 9, 29, 12),)], "success", ["2026-09-29 12:00:00"]),
+        ("MAX(JULDATE)", [(None,)], "no_data", []),
+        ("JULDATE, SUM_PRECIP", [(date(2026, 9, 29), None)], "no_data", []),
+        ("MIN(JULDATE), MAX(JULDATE), SUM(SUM_PRECIP)", [(date(2026, 9, 1), date(2026, 9, 29), None)], "no_data", []),
+        ("JULDATE, SUM_PRECIP", [(date(2026, 9, 29), 0)], "success", ["2026-09-29"]),
+        (
+            "JULDATE, SUM_PRECIP",
+            [(date(2026, 9, 28), None), (date(2026, 9, 29), 0.5)],
+            "success",
+            ["2026-09-29"],
+        ),
+    ],
+)
+def test_date_answers_and_missing_measurements_remain_distinct(weather, projection, rows, outcome, times):
+    """A precipitation filter does not turn a valid date answer into a missing measurement."""
+    from backend.databases._awn_connection_base import SchemaQueryResult
+
+    engine, runtime = weather
+    runtime.database.query_schema.return_value.append(SchemaQueryResult("SUM_PRECIP", "float", "YES", "", ""))
+    rain_filter = " AND SUM_PRECIP > 0" if "SUM_PRECIP" not in projection else ""
+    runtime.model.invoke.side_effect = [
+        f"SELECT {projection} FROM station1daily WHERE JULDATE >= '2026-09-01' AND JULDATE < '2026-10-01'{rain_filter}",
+        "The last matching date was September 29.",
+    ]
+    runtime.cursor.description = [(column,) for column in projection.split(", ")]
+    runtime.cursor.fetchall.return_value = rows
+
+    result = engine.answer_result(engine.prepare_turn("When did it last rain last month?", station_id="1"))
+
+    assert result.outcome == outcome
+    if times:
+        assert result.sources[0].times == times
+        assert "No matching weather data" not in runtime.model.invoke.call_args.args[0][0]
+    else:
+        assert not result.sources
+        assert runtime.model.invoke.call_count == 1

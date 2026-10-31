@@ -22,7 +22,7 @@ from backend.model_output import parse_model_output
 from backend.models._chatbot_base import _BaseChatbot
 from backend.workflow.contracts import QueryExecution, WorkflowAnswer, WorkflowClassificationError, WorkflowTimeoutError
 from backend.workflow.prompts import SQL_QUERY_PROMPT
-from backend.workflow.sql_policy import MAX_ROWS, UNAVAILABLE_QUERY, bounded_query, measurement_unit
+from backend.workflow.sql_policy import MAX_ROWS, UNAVAILABLE_QUERY, bounded_query, date_only_query, measurement_unit
 from langchain_openrouter import ChatOpenRouter
 from langgraph import types
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -39,6 +39,11 @@ QueryType = Literal[
 ]
 
 _LOGGER = logging.getLogger(__name__)
+_DATE_COLUMNS = {
+    "historical_weather": "JULDATE",
+    "current_weather": "TSTAMP",
+    "forecast_weather": "Forecast_time",
+}
 
 
 def _make_cached_schema_fetcher(db: AWNDatabaseConnectionBase) -> Callable[[str], tuple]:
@@ -367,7 +372,11 @@ class ChatbotWorkflow:
         sub_queries = self._sub_queries_for(state, "forecast_weather")
         if not sub_queries:
             return {}
-        update = await self._run_generated_query(sub_queries, state, self.forecast_db, "_query_forecast")
+        year = datetime.fromisoformat(state["reference_time"]).astimezone(TIMEZONE).year
+        table_name = self.forecast_db.format_table_name(state["nearest_station_id"], year=year)
+        update = await self._run_generated_query(
+            sub_queries, state, self.forecast_db, "_query_forecast", table_name=table_name
+        )
         self._log_state_update("_query_forecast", state, update)
         return update
 
@@ -399,10 +408,12 @@ class ChatbotWorkflow:
         state: ChatState,
         database: AWNDatabaseConnectionBase,
         node_name: str,
+        *,
+        table_name: str | None = None,
     ) -> dict:
         """Generate a station query and return its evidence to the summarizer."""
         self._check_deadline()
-        table_name = database.format_table_name(state["nearest_station_id"])
+        table_name = table_name or database.format_table_name(state["nearest_station_id"])
         schema = self._weather_schema(database, table_name)
         if not schema:
             return self._query_result_message(sub_queries, [])
@@ -419,7 +430,13 @@ class ChatbotWorkflow:
             prompt, database, table_name, schema, node_name, sub_queries[0].query_type
         )
         measurements = self._query_measurements(query, schema)
-        return self._query_result_message(sub_queries, rows, columns, measurements)
+        return self._query_result_message(
+            sub_queries,
+            rows,
+            columns,
+            measurements,
+            date_only=date_only_query(query, _DATE_COLUMNS[sub_queries[0].query_type]),
+        )
 
     def _weather_schema(self, database: AWNDatabaseConnectionBase, table_name: str) -> list[SchemaQueryResult]:
         fetch = self._schema_fetchers.get(id(database))
@@ -467,16 +484,11 @@ class ChatbotWorkflow:
 
     @staticmethod
     def _validate_query(query: str, table_name: str, columns: set[str], query_type: QueryType) -> str:
-        date_column = {
-            "historical_weather": "JULDATE",
-            "current_weather": "TSTAMP",
-            "forecast_weather": "Forecast_time",
-        }[query_type]
         return bounded_query(
             query,
             table_name,
             columns,
-            date_column=date_column,
+            date_column=_DATE_COLUMNS[query_type],
             max_days=366 if query_type == "historical_weather" else None,
         )
 
@@ -526,19 +538,24 @@ class ChatbotWorkflow:
         results: Sequence[Sequence[Any]],
         columns: tuple[str, ...] = (),
         measurements: list[str] | None = None,
+        *,
+        date_only: bool = False,
     ) -> dict:
         """Format database results for the summarizer."""
         requested = "\n".join(f"- {sub_query.reworded_query}" for sub_query in sub_queries)
+        rows = [
+            tuple(row)
+            for row in results
+            if any(value is not None and (date_only or not isinstance(value, date)) for value in row)
+        ]
         dates = list(
             dict.fromkeys(
                 value.isoformat(sep=" ") if isinstance(value, datetime) else value.isoformat()
-                for row in results
+                for row in rows
                 for value in row
                 if isinstance(value, date)
             )
         )
-        values = [value for row in results for value in row if value is not None and not isinstance(value, date)]
-        rows = [tuple(row) for row in results] if values else []
         result_text = "\n".join(str(result) for result in rows) or "No matching weather data was found."
         return {
             "executions": [QueryExecution(sub_queries[0].query_type, columns, rows, dates, measurements or [])],

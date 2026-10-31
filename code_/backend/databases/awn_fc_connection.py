@@ -17,8 +17,8 @@ class AWNForecastDatabaseConnection(AWNDatabaseConnectionBase):
         super().__init__(**kwargs)
 
     @override
-    def format_table_name(self, station_id: int) -> str:
-        year = datetime.now(ZoneInfo("America/Los_Angeles")).year
+    def format_table_name(self, station_id: int, *, year: int | None = None) -> str:
+        year = year if year is not None else datetime.now(ZoneInfo("America/Los_Angeles")).year
         return f"fcst_{int(station_id)}_{year}"
 
 
