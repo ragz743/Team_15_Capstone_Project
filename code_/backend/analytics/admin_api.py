@@ -197,7 +197,7 @@ def users_csv(
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=_CSV_COLUMNS, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(result["users"])
+    writer.writerows({**user, "user_id": _csv_text(user["user_id"])} for user in result["users"])
     if result["unidentified"] and not search:
         writer.writerow({**result["unidentified"], "user_id": "(unidentified)"})
     return Response(
@@ -205,6 +205,13 @@ def users_csv(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="awn-llm-cost-by-user-{range}.csv"'},
     )
+
+
+def _csv_text(value: Any) -> Any:
+    """Prefix text that a spreadsheet would run as a formula (e.g. a user id of -1-2) with a quote."""
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + value
+    return value
 
 
 def dashboard_timezone() -> str:

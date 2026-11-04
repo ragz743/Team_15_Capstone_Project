@@ -26,10 +26,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Sequence
 from datetime import datetime
 from typing import Any
 
-from backend.analytics.metering import RequestUsage
+from backend.analytics.metering import LlmCall, RequestUsage
 from backend.analytics.pricing import PriceTable
 
 logger = logging.getLogger("awn.analytics")
@@ -116,8 +117,18 @@ class AwnUsageReporter:
         except queue.Full:
             logger.warning("Usage report queue is full, dropping request %s", usage.request_id)
 
-    def record_quality_run(self, samples: int, passed: int, details: list[dict], is_demo: bool = False) -> None:
-        """Send the result of one sampled retrieval quality check (raises if it could not be saved)."""
+    def record_quality_run(
+        self,
+        samples: int,
+        passed: int,
+        details: list[dict],
+        is_demo: bool = False,
+        calls: Sequence[LlmCall] = (),
+    ) -> None:
+        """Send the result of one sampled retrieval quality check (raises if it could not be saved).
+
+        The backend's quality-runs endpoint has no cost field yet, so `calls` is not sent.
+        """
         body = {"samples": samples, "passed": passed, "details": details, "is_demo": is_demo}
         self._with_retries(lambda: self._request("POST", "/quality-runs", body))
 

@@ -6,14 +6,14 @@ import logging
 import pathlib
 import threading
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 import psycopg
-from backend.analytics.metering import RequestUsage, metered
+from backend.analytics.metering import LlmCall, RequestUsage, metered
 from backend.analytics.pricing import PriceTable
 from psycopg import sql
 from psycopg.rows import dict_row
@@ -190,13 +190,19 @@ _LATEST_QUALITY_RUN_SQL = """
     SELECT run_at, samples, passed, details, is_demo FROM usage_quality_runs ORDER BY run_at DESC LIMIT 1
 """
 
-# real (non demo) LLM spending in the calendar month containing %(now)s, in the dashboard timezone
+# real (non demo) LLM spending in the calendar month containing %(now)s, in the dashboard timezone:
+# chat requests plus the scheduled quality check's sample questions
 _MONTH_SPEND_SQL = """
-    SELECT coalesce(sum(c.cost_usd), 0) AS spent_usd
-    FROM usage_llm_calls c JOIN usage_requests r USING (request_id)
-    WHERE NOT r.is_demo
-      AND r.started_at >= (date_trunc('month', %(now)s AT TIME ZONE %(tz)s) AT TIME ZONE %(tz)s)
-      AND r.started_at < %(now)s
+    WITH month AS (
+        SELECT (date_trunc('month', %(now)s AT TIME ZONE %(tz)s) AT TIME ZONE %(tz)s) AS start
+    )
+    SELECT
+        (SELECT coalesce(sum(c.cost_usd), 0)
+         FROM usage_llm_calls c JOIN usage_requests r USING (request_id), month
+         WHERE NOT r.is_demo AND r.started_at >= month.start AND r.started_at < %(now)s)
+        + (SELECT coalesce(sum(q.cost_usd), 0)
+           FROM usage_quality_runs q, month
+           WHERE NOT q.is_demo AND q.run_at >= month.start AND q.run_at < %(now)s) AS spent_usd
 """
 
 _BUDGET_ALERT_SQL = """
@@ -432,14 +438,23 @@ class UsageStore:
             "budget": self.budget_status(tz, budget_usd, now=now),
         }
 
-    def record_quality_run(self, samples: int, passed: int, details: list[dict], is_demo: bool = False) -> None:
-        """Save the result of one sampled retrieval quality check."""
+    def record_quality_run(
+        self,
+        samples: int,
+        passed: int,
+        details: list[dict],
+        is_demo: bool = False,
+        calls: Sequence[LlmCall] = (),
+    ) -> None:
+        """Save the result of one sampled retrieval quality check, with the cost of its model `calls`."""
+        cost = sum(self._prices.call_cost(call)[0] for call in calls)
 
         def write(conn: psycopg.Connection) -> None:
             with conn.transaction():
                 conn.execute(
-                    "INSERT INTO usage_quality_runs (samples, passed, details, is_demo) VALUES (%s, %s, %s, %s)",
-                    (samples, passed, Jsonb(details), is_demo),
+                    "INSERT INTO usage_quality_runs (samples, passed, details, is_demo, cost_usd)"
+                    " VALUES (%s, %s, %s, %s, %s)",
+                    (samples, passed, Jsonb(details), is_demo, cost),
                 )
 
         self._run(write)

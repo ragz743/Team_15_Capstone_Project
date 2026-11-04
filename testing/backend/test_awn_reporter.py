@@ -202,4 +202,4 @@ def test_quality_check_uses_the_reporter_schedule(monkeypatch: MonkeyPatch) -> N
     monkeypatch.setattr(api, "_retriever", engine)
     monkeypatch.setattr("backend.analytics.retrieval_quality.load_samples", lambda: [])
     api._check_quality_if_due(reporter)
-    reporter.record_quality_run.assert_called_once_with(0, 0, [])
+    reporter.record_quality_run.assert_called_once_with(0, 0, [], calls=[])

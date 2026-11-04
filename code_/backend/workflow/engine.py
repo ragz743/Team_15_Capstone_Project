@@ -123,7 +123,7 @@ class LangGraphEngine:
         history: list[dict] | None = None,
     ) -> str:
         """Support the unsaved chat endpoint through the same graph adapter."""
-        recent = [{"user": item["content"]} for item in history or [] if item.get("role") == "user"]
+        recent = [{"user": item["content"][:1200]} for item in history or [] if item.get("role") == "user"]
         return self.answer_result(self.prepare_turn(question, point=point, station_id=station_id, history=recent)).reply
 
     def answer_result(self, turn: PreparedChatTurn) -> AnsweredTurn:

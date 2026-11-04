@@ -44,7 +44,7 @@ def main() -> None:
     if not args.dry_run:
         reporter = AwnUsageReporter.from_env()
         store = reporter or UsageStore(lambda: PgVectorConnection().conn)
-        store.record_quality_run(run.samples, run.passed, run.details)
+        store.record_quality_run(run.samples, run.passed, run.details, calls=run.calls)
         print(f"Saved to the dashboard{' at ' + reporter.base_url if reporter else ''}.")
 
 

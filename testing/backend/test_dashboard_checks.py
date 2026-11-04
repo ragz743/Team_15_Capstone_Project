@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ssl
 from datetime import UTC, date, datetime, timedelta
 from email.message import EmailMessage
 from unittest.mock import MagicMock
@@ -9,9 +10,11 @@ from unittest.mock import MagicMock
 import backend.api as api
 import pytest
 from backend.analytics import retrieval_quality
-from backend.analytics.budget import BudgetConfig, BudgetMonitor, alert_message
+from backend.analytics.budget import BudgetConfig, BudgetMonitor, alert_message, send_with_smtp
 from backend.analytics.retrieval_quality import Sample, evaluate, is_due, load_samples
 from backend.workflow.contracts import QueryExecution
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+from langchain_core.messages import AIMessage
 from pytest import MonkeyPatch
 
 # ---------- retrieval quality ----------
@@ -19,7 +22,8 @@ from pytest import MonkeyPatch
 
 def _read(query_type: str, rows: int) -> QueryExecution:
     """One database read the LangGraph workflow made, with `rows` records returned."""
-    return QueryExecution(query_type, ("TSTAMP", "AIR_TEMP"), [("2026-10-30", 51.2)] * rows, [], [])
+    times = ["2026-10-30"] if rows else []
+    return QueryExecution(query_type, ("TSTAMP", "AIR_TEMP"), [("2026-10-30", 51.2)] * rows, times, [])
 
 
 def test_bundled_sample_questions_are_valid() -> None:
@@ -56,6 +60,25 @@ def test_evaluate_passes_only_when_the_workflow_read_the_expected_data() -> None
     assert run.details[1]["found"] == ["current: 3 rows"]
     assert run.details[3]["found"] == ["historical: 7 rows", "forecast: 2 rows"]
     assert run.details[0]["expected"] == "Pullman"
+
+
+def test_aggregate_over_an_empty_period_does_not_pass() -> None:
+    """A SUM over no records still returns a row of zeros, but with no source dates it found nothing."""
+    empty_sum = QueryExecution("historical_weather", ("source_start", "source_end", "rain"), [(None, None, 0)], [], [])
+    run = evaluate(lambda question, station: [empty_sum], [Sample("Rain last week?", "historical", station="Pullman")])
+    assert not run.details[0]["passed"]
+
+
+def test_evaluate_keeps_the_model_calls_for_the_budget(monkeypatch: MonkeyPatch) -> None:
+    """Model calls made while answering the samples are kept so the run's cost counts toward the budget."""
+    model = GenericFakeChatModel(messages=iter([AIMessage(content="a"), AIMessage(content="b")]))
+
+    def ask(question: str, station: str):
+        model.invoke(question)
+        return [_read("current_weather", 1)]
+
+    run = evaluate(ask, [Sample(f"q{i}", "current", station="Pullman") for i in range(2)])
+    assert [call.kind for call in run.calls] == ["chat", "chat"]
 
 
 def test_evaluate_records_errors_without_stopping() -> None:
@@ -216,3 +239,14 @@ def test_failed_vector_store_query_does_not_poison_the_connection() -> None:
         list(connection.simple_query(b"SELECT 1", ()))
     transaction = connection.conn.transaction.return_value
     assert transaction.__exit__.call_args.args[0] is psycopg.errors.UndefinedTable
+
+
+def test_smtp_starttls_verifies_the_server_certificate(monkeypatch: MonkeyPatch) -> None:
+    """STARTTLS uses a verifying context, so a fake server cannot capture the SMTP login."""
+    smtp = MagicMock()
+    monkeypatch.setattr("backend.analytics.budget.smtplib.SMTP", MagicMock(return_value=smtp))
+    config = BudgetConfig(smtp_host="smtp.example", smtp_sender="a@b.c", smtp_username="u", smtp_password="p")
+    send_with_smtp(config, EmailMessage())
+
+    context = smtp.__enter__.return_value.starttls.call_args.kwargs["context"]
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname

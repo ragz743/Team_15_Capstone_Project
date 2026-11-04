@@ -246,6 +246,18 @@ def test_month_spend_ignores_demo_data(store: UsageStore) -> None:
     assert store.month_spend(_TZ, now=_NOW)[1] == 0.0
 
 
+def test_month_spend_includes_quality_check_costs(store: UsageStore) -> None:
+    """The quality check's model calls are not user requests, but their cost counts toward the budget."""
+    store.record(_request("u1", "s1", 1, "ok", 100))
+    before = store.month_spend(_TZ, now=_NOW)[1]
+    call = LlmCall(kind="chat", model="paid/chat", called_at=_NOW, input_tokens=1_000, output_tokens=250)
+    store.record_quality_run(samples=1, passed=1, details=[], calls=[call])
+    with store._connect() as conn:
+        conn.execute("UPDATE usage_quality_runs SET run_at = %s", (_NOW - timedelta(hours=1),))
+    assert store.month_spend(_TZ, now=_NOW)[1] == pytest.approx(before + store._prices.call_cost(call)[0])
+    assert store.metrics(7, _TZ, now=_NOW)["summary"]["calls"] == 1  # still one user request
+
+
 def test_unpriced_models_are_recorded_at_zero_and_flagged(store: UsageStore) -> None:
     """Models missing from the price table cost nothing and report priced=False."""
     usage = _request("u1", "s1", 0, "ok", 100)

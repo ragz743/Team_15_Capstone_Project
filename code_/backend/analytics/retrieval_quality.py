@@ -3,7 +3,8 @@
 Running every user question through a quality check would double the model calls, so instead a fixed
 sample of questions with known answers (retrieval_samples.yaml) is run through the weather workflow on a
 schedule. A question passes when the workflow queried the expected kind of data (current, historical, or
-forecast) at the expected station and got records back.
+forecast) at the expected station and got records back. The model calls each run makes are kept so their
+cost can count toward the monthly budget.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
 import yaml
+from backend.analytics.metering import LlmCall, RequestUsage, metered
 
 _DEFAULT_SAMPLES_FILE = pathlib.Path(__file__).with_name("retrieval_samples.yaml")
 
@@ -42,6 +44,9 @@ class Execution(Protocol):
     @property
     def rows(self) -> Sequence[Any]: ...  # noqa: D102
 
+    @property
+    def times(self) -> Sequence[str]: ...  # noqa: D102
+
 
 # (question, station name) -> the workflow's database reads, e.g. LangGraphEngine.sample_executions
 AskStation = Callable[[str, str], Sequence[Execution]]
@@ -61,6 +66,7 @@ class QualityRun:
     """The outcome of evaluating every sample once."""
 
     details: list[dict[str, Any]] = field(default_factory=list)
+    calls: list[LlmCall] = field(default_factory=list)  # model calls made answering the samples
 
     @property
     def samples(self) -> int:
@@ -99,6 +105,8 @@ def evaluate(ask: AskStation, samples: list[Sample], pause_seconds: float = 0.0)
     `pause_seconds` spaces the questions out so the check does not hit the model provider's rate limit.
     """
     run = QualityRun()
+    usage = RequestUsage()
+    usage.calls = run.calls
     for i, sample in enumerate(samples):
         if i and pause_seconds > 0:
             time.sleep(pause_seconds)
@@ -111,7 +119,8 @@ def evaluate(ask: AskStation, samples: list[Sample], pause_seconds: float = 0.0)
             "error": None,
         }
         try:
-            executions = ask(sample.question, sample.station)
+            with metered(usage):
+                executions = ask(sample.question, sample.station)
         except Exception as exc:  # one broken question should not stop the run
             detail["error"] = type(exc).__name__
             run.details.append(detail)
@@ -119,8 +128,10 @@ def evaluate(ask: AskStation, samples: list[Sample], pause_seconds: float = 0.0)
 
         # what the workflow read, for the dashboard table, e.g. "historical: 7 rows"
         detail["found"] = [_describe(execution) for execution in executions]
+        # source dates show real records were read; an aggregate over an empty period still returns a row of zeros
         detail["passed"] = any(
-            execution.query_type == SOURCE_QUERY_TYPES[sample.source] and execution.rows for execution in executions
+            execution.query_type == SOURCE_QUERY_TYPES[sample.source] and execution.rows and execution.times
+            for execution in executions
         )
         run.details.append(detail)
     return run
@@ -131,7 +142,7 @@ def run_and_record(
 ) -> QualityRun:
     """Evaluate the samples and save the run so the dashboard can show it."""
     run = evaluate(ask, samples if samples is not None else load_samples(), pause_seconds)
-    store.record_quality_run(run.samples, run.passed, run.details)
+    store.record_quality_run(run.samples, run.passed, run.details, calls=run.calls)
     return run
 
 

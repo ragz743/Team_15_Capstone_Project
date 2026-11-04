@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import smtplib
+import ssl
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -61,7 +62,8 @@ def send_with_smtp(config: BudgetConfig, message: EmailMessage) -> None:
     assert config.smtp_host is not None
     with smtplib.SMTP(config.smtp_host, config.smtp_port, timeout=15) as smtp:
         if config.smtp_starttls:
-            smtp.starttls()
+            # verify the server's certificate and hostname before sending the login
+            smtp.starttls(context=ssl.create_default_context())
         if config.smtp_username:
             smtp.login(config.smtp_username, config.smtp_password or "")
         smtp.send_message(message)

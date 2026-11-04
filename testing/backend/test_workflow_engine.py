@@ -64,6 +64,14 @@ def test_followup_preserves_selected_station_and_dated_history(weather):
     assert supplied["history"] == history and supplied["question"] == "What about humidity?"
 
 
+def test_unsaved_chat_truncates_long_previous_messages(weather):
+    """A previous message up to the chat limit (4,000 characters) fits the workflow's 1,200 character history."""
+    engine, runtime = weather
+    history = [{"role": "user", "content": "x" * 4000}, {"role": "assistant", "content": "ok"}]
+    assert "70.25" in engine.retrieve("And humidity?", station_id="1", history=history)
+    assert runtime.classifier.invoke_json.call_args.args[1]["history"][0]["user"] == "x" * 1200
+
+
 def test_picker_selection_reaches_graph_without_a_coordinate_lookup(weather):
     """A chosen station takes precedence over a previously saved map location."""
     engine, runtime = weather

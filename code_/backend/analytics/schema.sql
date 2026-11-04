@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS usage_quality_runs (
     is_demo BOOLEAN NOT NULL DEFAULT false
 );
 CREATE INDEX IF NOT EXISTS usage_quality_runs_run_at_idx ON usage_quality_runs (run_at);
+-- model cost of the run's sample questions; not a user request, but it counts toward the monthly budget
+ALTER TABLE usage_quality_runs ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(16, 10) NOT NULL DEFAULT 0;
 
 -- monthly budget alerts; one row per month and threshold so an alert is emailed at most once
 CREATE TABLE IF NOT EXISTS usage_budget_alerts (

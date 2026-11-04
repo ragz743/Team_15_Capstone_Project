@@ -428,6 +428,21 @@ def test_admin_users_csv_lists_every_user_and_the_unidentified_total(admin_store
     assert [line.split(",")[0] for line in lines[1:]] == ["browser-1", "(unidentified)"]
 
 
+def test_admin_users_csv_neutralizes_formula_user_ids(admin_store: MagicMock) -> None:
+    """A user id such as -1-2 is written as text so spreadsheets do not run it as a formula."""
+    row = {"requests": 1, "sessions": 1, "llm_calls": 1, "input_tokens": 1, "output_tokens": 1, "cost_usd": 0.1}
+    admin_store.users.return_value = {
+        "users": [{**row, "user_id": "-1-2"}, {**row, "user_id": "=cmd"}, {**row, "user_id": "j.doe@wsu.edu"}],
+        "unidentified": None,
+    }
+    response = TestClient(api.app).get("/api/admin/users.csv", headers={"Authorization": "Bearer s3cret"})
+    assert [line.split(",")[0] for line in response.text.strip().splitlines()[1:]] == [
+        "'-1-2",
+        "'=cmd",
+        "j.doe@wsu.edu",
+    ]
+
+
 def test_admin_users_csv_follows_the_table_search(admin_store: MagicMock) -> None:
     """A searched export lists only the matches and leaves out the unidentified row."""
     row = {"requests": 1, "sessions": 1, "llm_calls": 4, "input_tokens": 9, "output_tokens": 4, "cost_usd": 0.1}
