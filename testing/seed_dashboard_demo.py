@@ -5,8 +5,10 @@ LangGraph workflow's chat requests for each question (classifier, SQL, summary),
 quality check. Rows are flagged is_demo: the dashboard shows a "Demo data" badge while any
 are in range, and demo spending never counts toward the monthly budget alert.
 
-    python -m scripts.seed_dashboard_demo            # add ~120 days of demo traffic
-    python -m scripts.seed_dashboard_demo --clear    # remove all demo rows
+It is a development tool, not part of the running chatbot. From the repository root:
+
+    PYTHONPATH=code_ python testing/seed_dashboard_demo.py            # add ~120 days of demo traffic
+    PYTHONPATH=code_ python testing/seed_dashboard_demo.py --clear    # remove all demo rows
 """
 
 import argparse
@@ -22,6 +24,7 @@ from backend.databases.pgvector import PgVectorConnection
 from psycopg.types.json import Jsonb
 
 # made up prices for the demo chat model, USD per 1M tokens, so cost charts have something to show
+# (real calls use the cost OpenRouter reports)
 _DEMO_CHAT_MODEL = ("demo/chat-model", 0.10, 0.40)
 # the LangGraph workflow's chat requests for one question: (step, input tokens, output tokens, share of latency)
 _WORKFLOW_STEPS = (
@@ -85,9 +88,9 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
             requests,
         )
         cur.executemany(
-            "INSERT INTO usage_llm_calls (request_id, called_at, kind, model, input_tokens, output_tokens,"
-            " tokens_estimated, cost_usd, priced, latency_ms, succeeded)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, true, %s, %s)",
+            "INSERT INTO usage_llm_calls (request_id, called_at, model, input_tokens, output_tokens,"
+            " tokens_estimated, cost_usd, cost_reported, latency_ms, succeeded)"
+            " VALUES (%s, %s, %s, %s, %s, %s, %s, true, %s, %s)",
             calls,
         )
         cur.executemany(
@@ -140,7 +143,7 @@ def _add_request(requests: list, calls: list, user, session, started, incident: 
             tokens_in = tokens_out = 0
         cost = (tokens_in * price_in + tokens_out * price_out) / 1e6
         latency = int(chat_latency * share)
-        calls.append((request_id, called_at, "chat", model, tokens_in, tokens_out, False, cost, latency, succeeded))
+        calls.append((request_id, called_at, model, tokens_in, tokens_out, False, cost, latency, succeeded))
         called_at += timedelta(milliseconds=latency)
 
     latency = chat_latency + rng.randint(150, 600)

@@ -90,8 +90,7 @@ function definitions(metrics: Metrics | null): [string, ReactNode][] {
     [
       "LLM spending",
       <>
-        Real spending on model requests only, not hosting: tokens used × each model&rsquo;s price per token from{" "}
-        <code>code_/backend/analytics/pricing.yaml</code>, or the exact amount when the provider reports one. OpenRouter&rsquo;s
+        Real spending on model requests only, not hosting: the cost OpenRouter reports for each request. OpenRouter&rsquo;s
         free models cost $0. Demo data never counts toward the monthly budget.
       </>,
     ],
@@ -277,7 +276,7 @@ export default function App() {
             </Typography>
           )}
           {metrics?.includes_demo_data && (
-            <Chip size="small" color="warning" variant="outlined" label="Includes demo data" title="Rows created by scripts/seed_dashboard_demo.py" />
+            <Chip size="small" color="warning" variant="outlined" label="Includes demo data" title="Rows created by testing/seed_dashboard_demo.py" />
           )}
         </Stack>
 

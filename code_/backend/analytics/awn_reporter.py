@@ -1,7 +1,7 @@
 """Report chatbot usage to the AgWeatherNet backend, which stores it and serves the admin dashboard.
 
 When AWN_BACKEND_URL and AWN_INTERNAL_KEY are set, every chat call (one question answered end to end, with
-its chat and embedding model requests) is sent to the AgWeatherNet Go backend (awn_be_v2):
+its model requests) is sent to the AgWeatherNet Go backend (awn_be_v2):
 
     POST {AWN_BACKEND_URL}/api/v1/internal/llm-usage/requests        one call
     POST {AWN_BACKEND_URL}/api/v1/internal/llm-usage/quality-runs    one retrieval quality check
@@ -11,7 +11,7 @@ authenticated with the X-Internal-Key header. The backend answers {"status": 1, 
 {"status": 0, "error": ...} otherwise. The dashboard is the "LLM Usage" tab of the AgWeatherNet admin
 dashboard, and the backend sends the monthly budget alert.
 
-Calls are priced here (pricing.yaml or the cost the provider billed) and sent from a background thread
+Each model request carries the cost OpenRouter reported for it. Calls are sent from a background thread
 with retries, so a slow or unreachable backend never delays or fails a chat request. Re-sending a call is
 harmless: the backend ignores a request_id it already has. No question or answer text is sent.
 """
@@ -31,7 +31,6 @@ from datetime import datetime
 from typing import Any
 
 from backend.analytics.metering import LlmCall, RequestUsage
-from backend.analytics.pricing import PriceTable
 
 logger = logging.getLogger("awn.analytics")
 
@@ -49,7 +48,6 @@ class AwnUsageReporter:
         self,
         base_url: str,
         internal_key: str,
-        prices: PriceTable | None = None,
         timeout: float = 5.0,
         retries: int = 3,
         max_queue: int = 1000,
@@ -57,7 +55,6 @@ class AwnUsageReporter:
         """Create a reporter and start its background sender thread."""
         self._base_url = base_url.rstrip("/")
         self._key = internal_key
-        self._prices = prices or PriceTable.load()
         self._timeout = timeout
         self._retries = retries
         self._queue: queue.Queue[dict[str, Any] | None] = queue.Queue(maxsize=max_queue)
@@ -79,21 +76,23 @@ class AwnUsageReporter:
         return self._base_url
 
     def request_body(self, usage: RequestUsage, is_demo: bool = False) -> dict[str, Any]:
-        """Build the JSON body for one call, pricing each model request."""
+        """Build the JSON body for one call, with the cost OpenRouter reported for each model request."""
         model_calls = []
         for call in usage.calls:
-            cost, priced = self._prices.call_cost(call)
+            reported = call.cost_usd is not None
             model_calls.append(
                 {
                     "called_at": call.called_at.isoformat(),
-                    "kind": call.kind,
+                    # the backend's llm-usage API still has kind and priced fields; every request is a chat
+                    # request, and its cost is known only when OpenRouter reported it
+                    "kind": "chat",
                     "model": call.model,
                     "input_tokens": call.input_tokens,
                     "output_tokens": call.output_tokens,
                     "tokens_estimated": call.tokens_estimated,
-                    "cost_usd": cost,
-                    "priced": priced,
-                    "cost_reported": call.cost_usd is not None,
+                    "cost_usd": call.cost_usd or 0.0,
+                    "priced": reported,
+                    "cost_reported": reported,
                     "latency_ms": call.latency_ms,
                     "succeeded": call.succeeded,
                 }

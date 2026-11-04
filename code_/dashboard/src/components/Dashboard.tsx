@@ -21,10 +21,9 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const COST_SOURCE_LABELS: Record<string, string> = {
-  billed: "Actual (reported by provider)",
-  estimated: "Estimated from tokens",
-  mixed: "Partly actual, partly estimated",
-  unpriced: "No price set",
+  billed: "Reported by OpenRouter",
+  mixed: "Partly reported",
+  unreported: "Not reported",
 };
 
 const periodLabels: Record<number, string> = { 7: "7 days", 30: "30 days", 90: "90 days", 365: "12 months" };
@@ -108,7 +107,7 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
     { key: "p95", label: "95th percentile", endLabel: "p95", color: "var(--series-2)", values: series.map((p) => p.latency_p95_ms) },
   ];
 
-  const unpriced = metrics.by_model.filter((m) => !m.priced);
+  const unreported = metrics.by_model.filter((m) => m.cost_source !== "billed");
   const dateColumn = { key: "date", label: unit === "day" ? "Date" : unit === "week" ? "Week" : "Month" };
 
   return (
@@ -312,19 +311,16 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
           title="Spending by model"
           subtitle="Each call makes several model requests. Token counts as reported by each model; ~ marks an estimate."
         >
-          {unpriced.length > 0 && (
+          {unreported.length > 0 && (
             <Alert severity="warning" sx={{ mb: 1 }}>
-              <strong>Spending is understated.</strong> {unpriced.map((m) => m.model).join(", ")}{" "}
-              {unpriced.length === 1 ? "has" : "have"} no price per token set in <code>pricing.yaml</code>, so{" "}
-              {unpriced.length === 1 ? "its requests are" : "their requests are"} counted as $0. Add the price to{" "}
-              <code>code_/backend/analytics/pricing.yaml</code>.
+              <strong>Spending may be understated.</strong> The provider did not report the cost of some requests to{" "}
+              {unreported.map((m) => m.model).join(", ")}, so those requests are counted as $0.
             </Alert>
           )}
           <DataTable
             caption="Spending by model"
             columns={[
               { key: "model", label: "Model" },
-              { key: "kind", label: "Type" },
               { key: "calls", label: "Model requests", numeric: true },
               { key: "tokens", label: "Tokens in / out", numeric: true },
               { key: "cost", label: "Spending", numeric: true },
@@ -333,10 +329,9 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
             ]}
             rows={metrics.by_model.map((m) => ({
               model: m.model,
-              kind: m.kind === "chat" ? "Chat" : "Embedding",
               calls: `${formatCount(m.calls)}${m.failed_calls ? ` (${formatCount(m.failed_calls)} failed)` : ""}`,
               tokens: `${m.tokens_estimated ? "~" : ""}${formatCount(m.input_tokens)} / ${formatCount(m.output_tokens)}`,
-              cost: m.priced ? formatUsd(m.cost_usd) : "—",
+              cost: formatUsd(m.cost_usd),
               source: COST_SOURCE_LABELS[m.cost_source] ?? m.cost_source,
               latency: formatMs(m.latency_p50_ms),
             }))}

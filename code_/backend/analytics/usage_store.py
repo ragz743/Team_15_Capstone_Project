@@ -14,7 +14,6 @@ from zoneinfo import ZoneInfo
 
 import psycopg
 from backend.analytics.metering import LlmCall, RequestUsage, metered
-from backend.analytics.pricing import PriceTable
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -39,7 +38,7 @@ _FAILED = ("empty", "error", "rate_limited", "unavailable")
 
 # Shared CTEs:
 #   r: the calls (end to end questions, one usage_requests row each) in the window
-#   c: the model requests (chat and embedding) made while answering those calls; attributed to their
+#   c: the model requests made while answering those calls; attributed to their
 #      call's start time so cost and call counts always agree
 #   s: the login sessions with calls in the window; a session is successful when every call was answered
 _WINDOW = """
@@ -71,8 +70,7 @@ _SUMMARY_SQL = (
         (SELECT count(DISTINCT (user_id, session_id)) FROM r
             WHERE user_id IS NOT NULL AND session_id IS NOT NULL) AS user_sessions,
         (SELECT count(*) FROM r WHERE session_id IS NOT NULL) AS session_requests,
-        (SELECT count(*) FROM c WHERE kind = 'chat') AS chat_calls,
-        (SELECT count(*) FROM c WHERE kind = 'embedding') AS embedding_calls,
+        (SELECT count(*) FROM c) AS model_requests,
         (SELECT coalesce(sum(cost_usd), 0) FROM c) AS cost_usd,
         (SELECT coalesce(sum(cost_usd), 0) FROM c WHERE user_id IS NOT NULL) AS identified_cost_usd,
         (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) FROM r
@@ -121,8 +119,7 @@ _SERIES_SQL = (
     cs AS (
         SELECT
             date_trunc(%(bucket)s, request_started_at AT TIME ZONE %(tz)s) AS bucket,
-            count(*) FILTER (WHERE kind = 'chat') AS chat_calls,
-            count(*) FILTER (WHERE kind = 'embedding') AS embedding_calls,
+            count(*) AS model_requests,
             sum(cost_usd) AS cost_usd,
             coalesce(sum(cost_usd) FILTER (WHERE user_id IS NOT NULL), 0) AS identified_cost_usd
         FROM c GROUP BY 1
@@ -140,8 +137,7 @@ _SERIES_SQL = (
         coalesce(rs.within_target, 0) AS within_target,
         coalesce(ss.sessions, 0) AS sessions,
         coalesce(ss.successful_sessions, 0) AS successful_sessions,
-        coalesce(cs.chat_calls, 0) AS chat_calls,
-        coalesce(cs.embedding_calls, 0) AS embedding_calls,
+        coalesce(cs.model_requests, 0) AS model_requests,
         coalesce(cs.cost_usd, 0) AS cost_usd,
         coalesce(cs.identified_cost_usd, 0) AS identified_cost_usd
     FROM buckets
@@ -156,20 +152,18 @@ _BY_MODEL_SQL = (
     _WINDOW
     + """
     SELECT
-        kind,
         model,
         count(*) AS calls,
         count(*) FILTER (WHERE NOT succeeded) AS failed_calls,
         sum(input_tokens) AS input_tokens,
         sum(output_tokens) AS output_tokens,
         sum(cost_usd) AS cost_usd,
-        bool_and(priced) AS priced,
         bool_and(cost_reported) AS all_cost_reported,
         bool_or(cost_reported) AS any_cost_reported,
         bool_or(tokens_estimated) AS tokens_estimated,
         percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS latency_p50_ms
     FROM c
-    GROUP BY kind, model
+    GROUP BY model
     ORDER BY cost_usd DESC, calls DESC, model
 """
 )
@@ -291,14 +285,9 @@ _USERS_TOTALS_SQL = (
 class UsageStore:
     """Writes request usage rows and runs the metric queries behind the admin dashboard."""
 
-    def __init__(
-        self,
-        connect: Callable[[], psycopg.Connection],
-        prices: PriceTable | None = None,
-    ) -> None:
+    def __init__(self, connect: Callable[[], psycopg.Connection]) -> None:
         """Create a store that opens its database connection with `connect` on first use."""
         self._connect = connect
-        self._prices = prices or PriceTable.load()
         self._conn: psycopg.Connection | None = None
         self._schema_ready = False
         self._unavailable_until = 0.0
@@ -313,7 +302,7 @@ class UsageStore:
             self._ensure_schema_locked()
 
     def record(self, usage: RequestUsage) -> None:
-        """Insert one request and its model calls, pricing each call."""
+        """Insert one request and its model calls, at the cost OpenRouter reported for each call."""
         request_row = (
             usage.request_id,
             usage.user_id,
@@ -325,18 +314,15 @@ class UsageStore:
         )
         call_rows = []
         for call in usage.calls:
-            cost, priced = self._prices.call_cost(call)
             call_rows.append(
                 (
                     usage.request_id,
                     call.called_at,
-                    call.kind,
                     call.model,
                     call.input_tokens,
                     call.output_tokens,
                     call.tokens_estimated,
-                    cost,
-                    priced,
+                    call.cost_usd or 0.0,
                     call.cost_usd is not None,
                     call.latency_ms,
                     call.succeeded,
@@ -353,9 +339,9 @@ class UsageStore:
                 )
                 if call_rows:
                     cur.executemany(
-                        "INSERT INTO usage_llm_calls (request_id, called_at, kind, model, input_tokens,"
-                        " output_tokens, tokens_estimated, cost_usd, priced, cost_reported, latency_ms, succeeded)"
-                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        "INSERT INTO usage_llm_calls (request_id, called_at, model, input_tokens,"
+                        " output_tokens, tokens_estimated, cost_usd, cost_reported, latency_ms, succeeded)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                         call_rows,
                     )
 
@@ -447,7 +433,7 @@ class UsageStore:
         calls: Sequence[LlmCall] = (),
     ) -> None:
         """Save the result of one sampled retrieval quality check, with the cost of its model `calls`."""
-        cost = sum(self._prices.call_cost(call)[0] for call in calls)
+        cost = sum(call.cost_usd or 0.0 for call in calls)
 
         def write(conn: psycopg.Connection) -> None:
             with conn.transaction():
@@ -636,13 +622,13 @@ def _num(value: Any) -> float | None:
 def _summary(row: dict[str, Any]) -> dict[str, Any]:
     """Turn a summary row into the dashboard's KPIs, keeping undefined ratios as None.
 
-    A "call" is one end to end question and answer; "model requests" are the chat and embedding
-    requests made inside it.
+    A "call" is one end to end question and answer; "model requests" are the model requests made
+    inside it.
     """
     calls = row.get("requests") or 0
     users = row.get("users") or 0
     sessions = row.get("sessions") or 0
-    model_requests = (row.get("chat_calls") or 0) + (row.get("embedding_calls") or 0)
+    model_requests = row.get("model_requests") or 0
     cost = float(row.get("cost_usd") or 0)
     return {
         "calls": calls,
@@ -680,7 +666,7 @@ def _series_point(row: dict[str, Any]) -> dict[str, Any]:
         "successful_sessions": row["successful_sessions"],
         "successful_session_rate": _ratio(row["successful_sessions"], row["sessions"]),
         "avg_sessions_per_user": _ratio(row["user_sessions"], users),
-        "model_requests": row["chat_calls"] + row["embedding_calls"],
+        "model_requests": row["model_requests"],
         "cost_usd": cost,
         "avg_cost_per_user": _ratio(float(row["identified_cost_usd"]), users),
         "cost_per_1000_calls": _ratio(cost * 1000, row["requests"]),
@@ -740,17 +726,14 @@ def _user_row(row: dict[str, Any], total_cost: float) -> dict[str, Any]:
 
 
 def _cost_source(row: dict[str, Any]) -> str:
-    """Whether a model's cost is what the provider billed, a pricing.yaml estimate, a mix, or unknown."""
+    """Whether OpenRouter reported the cost of all, some, or none of a model's requests."""
     if row["all_cost_reported"]:
         return "billed"
-    if not row["priced"]:
-        return "unpriced"
-    return "mixed" if row["any_cost_reported"] else "estimated"
+    return "mixed" if row["any_cost_reported"] else "unreported"
 
 
 def _model_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        "kind": row["kind"],
         "model": row["model"],
         "calls": row["calls"],
         "failed_calls": row["failed_calls"],
@@ -758,7 +741,6 @@ def _model_row(row: dict[str, Any]) -> dict[str, Any]:
         "output_tokens": int(row["output_tokens"] or 0),
         "cost_usd": float(row["cost_usd"] or 0),
         "avg_cost_per_call": _ratio(float(row["cost_usd"] or 0), row["calls"]),
-        "priced": bool(row["priced"]),
         "cost_source": _cost_source(row),
         "tokens_estimated": bool(row["tokens_estimated"]),
         "latency_p50_ms": _num(row["latency_p50_ms"]),

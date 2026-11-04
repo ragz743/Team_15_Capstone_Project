@@ -1,4 +1,9 @@
-"""Sampled retrieval quality: check the LangGraph chatbot finds the right weather data for known questions.
+"""Production monitoring of the chatbot: check it still finds the right weather data for known questions.
+
+This is not a test suite. The API runs this check once a day against the live chatbot and the live weather
+databases (api._check_quality_if_due), and the admin dashboard shows the result as "Retrieval quality", so
+the team can see when a model or data change makes answers worse. Unit tests for it are in
+testing/backend/test_dashboard_checks.py.
 
 Running every user question through a quality check would double the model calls, so instead a fixed
 sample of questions with known answers (retrieval_samples.yaml) is run through the weather workflow on a
@@ -14,7 +19,7 @@ import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 import yaml
 from backend.analytics.metering import LlmCall, RequestUsage, metered
@@ -24,15 +29,8 @@ _DEFAULT_SAMPLES_FILE = pathlib.Path(__file__).with_name("retrieval_samples.yaml
 # about three model requests per question; OpenRouter's free models allow 20 requests a minute
 SCHEDULED_PAUSE_SECONDS = 10.0
 
+# the kind of weather data a question needs; the workflow's query type for it is "<source>_weather"
 Source = Literal["current", "historical", "forecast"]
-
-# which workflow query node reads each kind of weather data
-SOURCE_QUERY_TYPES: dict[str, str] = {
-    "current": "current_weather",
-    "historical": "historical_weather",
-    "forecast": "forecast_weather",
-}
-_QUERY_TYPE_SOURCES = {query_type: source for source, query_type in SOURCE_QUERY_TYPES.items()}
 
 
 class Execution(Protocol):
@@ -90,7 +88,7 @@ def load_samples(path: str | pathlib.Path | None = None) -> list[Sample]:
         config = yaml.safe_load(f) or {}
     samples = [Sample(**entry) for entry in config.get("samples") or []]
     for sample in samples:
-        if sample.source not in SOURCE_QUERY_TYPES:
+        if sample.source not in get_args(Source):
             msg = f"unknown source {sample.source!r} for {sample.question!r}"
             raise ValueError(msg)
         if not sample.station.strip():
@@ -130,7 +128,7 @@ def evaluate(ask: AskStation, samples: list[Sample], pause_seconds: float = 0.0)
         detail["found"] = [_describe(execution) for execution in executions]
         # source dates show real records were read; an aggregate over an empty period still returns a row of zeros
         detail["passed"] = any(
-            execution.query_type == SOURCE_QUERY_TYPES[sample.source] and execution.rows and execution.times
+            execution.query_type == f"{sample.source}_weather" and execution.rows and execution.times
             for execution in executions
         )
         run.details.append(detail)
@@ -155,6 +153,6 @@ def is_due(last_run_at: datetime | None, every_hours: float, now: datetime | Non
 
 
 def _describe(execution: Execution) -> str:
-    source = _QUERY_TYPE_SOURCES.get(execution.query_type, execution.query_type)
+    source = execution.query_type.removesuffix("_weather")
     rows = len(execution.rows)
     return f"{source}: {rows} row{'' if rows == 1 else 's'}"

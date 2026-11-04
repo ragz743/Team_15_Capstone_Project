@@ -21,21 +21,48 @@ _DEFAULT_RECIPIENTS = "weather@wsu.edu"
 
 @dataclass(frozen=True)
 class BudgetConfig:
-    """Budget threshold, who to alert, and how to send email (all from environment variables)."""
+    """Budget threshold, who to alert, and how to send email (all from environment variables).
 
-    threshold_usd: float = _DEFAULT_THRESHOLD_USD
-    recipients: str = _DEFAULT_RECIPIENTS  # comma separated
-    smtp_host: str | None = None
-    smtp_port: int = 587
-    smtp_username: str | None = None
-    smtp_password: str | None = None
-    smtp_sender: str | None = None
-    smtp_starttls: bool = True
-    dashboard_url: str | None = None
+    Nothing here is required to start the API. The fields typed `str | None` are optional: without
+    AWN_SMTP_HOST and AWN_SMTP_FROM the alert is not emailed and the dashboard shows that email is not
+    set up. A partial or invalid setup (for example a username without a password) is rejected when the
+    API starts, rather than failing later when the first alert is due.
+    """
+
+    # always set; the defaults apply when the variable is unset
+    threshold_usd: float = _DEFAULT_THRESHOLD_USD  # AWN_MONTHLY_BUDGET_USD, must be above 0
+    recipients: str = _DEFAULT_RECIPIENTS  # AWN_BUDGET_ALERT_EMAIL, comma separated
+    smtp_port: int = 587  # AWN_SMTP_PORT
+    smtp_starttls: bool = True  # AWN_SMTP_STARTTLS
+    # optional: email is sent only when host and sender are both set
+    smtp_host: str | None = None  # AWN_SMTP_HOST
+    smtp_sender: str | None = None  # AWN_SMTP_FROM
+    # optional: only for mail servers that require a login; set both or neither
+    smtp_username: str | None = None  # AWN_SMTP_USERNAME
+    smtp_password: str | None = None  # AWN_SMTP_PASSWORD
+    # optional: link added to the alert email
+    dashboard_url: str | None = None  # AWN_DASHBOARD_URL
+
+    def __post_init__(self) -> None:
+        """Reject settings that could never send an alert, so a wrong setup shows up at startup."""
+        problems = []
+        if self.threshold_usd <= 0:
+            problems.append("AWN_MONTHLY_BUDGET_USD must be greater than 0")
+        if not self.recipients.strip():
+            problems.append("AWN_BUDGET_ALERT_EMAIL must list at least one address")
+        if not 0 < self.smtp_port < 65536:
+            problems.append("AWN_SMTP_PORT must be a port number")
+        email_settings = (self.smtp_host, self.smtp_sender, self.smtp_username, self.smtp_password)
+        if any(email_settings) and not (self.smtp_host and self.smtp_sender):
+            problems.append("set both AWN_SMTP_HOST and AWN_SMTP_FROM to email the budget alert, or neither")
+        if bool(self.smtp_username) != bool(self.smtp_password):
+            problems.append("set both AWN_SMTP_USERNAME and AWN_SMTP_PASSWORD, or neither")
+        if problems:
+            raise ValueError("Invalid budget alert settings: " + "; ".join(problems))
 
     @classmethod
     def from_env(cls) -> BudgetConfig:
-        """Read AWN_BUDGET_* and AWN_SMTP_* settings."""
+        """Read AWN_MONTHLY_BUDGET_USD, AWN_BUDGET_ALERT_EMAIL, AWN_SMTP_* and AWN_DASHBOARD_URL (raises ValueError)."""
         return cls(
             threshold_usd=float(os.getenv("AWN_MONTHLY_BUDGET_USD") or _DEFAULT_THRESHOLD_USD),
             recipients=os.getenv("AWN_BUDGET_ALERT_EMAIL") or _DEFAULT_RECIPIENTS,

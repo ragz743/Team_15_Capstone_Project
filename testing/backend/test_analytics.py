@@ -1,4 +1,4 @@
-"""Unit tests for usage metering, pricing, request tracking, and the admin metrics endpoint."""
+"""Unit tests for usage metering, cost recording, request tracking, and the admin metrics endpoint."""
 
 from __future__ import annotations
 
@@ -7,16 +7,13 @@ from unittest.mock import MagicMock
 import backend.api as api
 import pytest
 from backend.analytics import admin_api
-from backend.analytics.metering import LlmCall, MeteredEmbedding, RequestUsage, metered
-from backend.analytics.pricing import ModelPrice, PriceTable
+from backend.analytics.metering import LlmCall, RequestUsage, metered
 from backend.analytics.usage_store import (
     UsageStore,
     UsageStoreUnavailableError,
     UsageTracker,
 )
-from backend.models._embedding_base import _BaseEmbedding
 from fastapi.testclient import TestClient
-from langchain_core.documents import Document
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 from psycopg import OperationalError
@@ -25,38 +22,6 @@ from pytest import MonkeyPatch
 
 def _fake_chat(message: AIMessage) -> GenericFakeChatModel:
     return GenericFakeChatModel(messages=iter([message]))
-
-
-class _FakeEmbedding(_BaseEmbedding):
-    def embed_document(self, document: Document) -> tuple[list[float], Document]:
-        return [0.0], document
-
-    def embed_documents(self, documents: list[Document]) -> list[tuple[list[float], Document]]:
-        return [([0.0], d) for d in documents]
-
-
-# ---------- pricing ----------
-
-
-def test_price_table_costs_listed_models_per_million_tokens() -> None:
-    """Listed models are priced from their input and output rates."""
-    prices = PriceTable({"paid/model": ModelPrice(2.0, 8.0)})
-    cost, priced = prices.cost("paid/model", input_tokens=1_000, output_tokens=500)
-    assert priced
-    assert cost == pytest.approx((1_000 * 2.0 + 500 * 8.0) / 1_000_000)
-
-
-def test_price_table_free_suffix_and_unknown_models() -> None:
-    """Free tier models cost nothing; unknown models cost nothing but are flagged unpriced."""
-    prices = PriceTable({}, free_suffixes=(":free",))
-    assert prices.cost("openai/gpt-oss-20b:free", 10_000, 10_000) == (0.0, True)
-    assert prices.cost("someone/new-model", 10_000, 10_000) == (0.0, False)
-
-
-def test_bundled_pricing_file_loads() -> None:
-    """The bundled pricing.yaml parses and treats free tier models as priced."""
-    prices = PriceTable.load()
-    assert prices.cost("any/model:free", 1, 1) == (0.0, True)
 
 
 # ---------- metering ----------
@@ -76,10 +41,19 @@ def test_metered_records_reported_chat_tokens() -> None:
         model.invoke(["What is the temperature in Pullman?"])
 
     [call] = usage.calls
-    assert (call.kind, call.model, call.input_tokens, call.output_tokens) == ("chat", "openai/gpt-oss-20b:free", 120, 8)
-    assert call.requested_model == "unknown"  # the fake model reports no requested name
+    assert (call.model, call.input_tokens, call.output_tokens) == ("openai/gpt-oss-20b:free", 120, 8)
     assert not call.tokens_estimated
     assert call.succeeded
+
+
+def test_metered_records_the_cost_openrouter_reports() -> None:
+    """The cost OpenRouter includes in each response is recorded as the call's cost."""
+    usage = RequestUsage()
+    with metered(usage):
+        _fake_chat(AIMessage(content="hi", response_metadata={"model_name": "m", "cost": 0.0042})).invoke(["hi"])
+
+    [call] = usage.calls
+    assert call.cost_usd == 0.0042
 
 
 def test_metered_estimates_tokens_when_not_reported() -> None:
@@ -102,76 +76,31 @@ def test_calls_outside_metered_block_are_not_recorded() -> None:
     assert usage.calls == []
 
 
-def test_metered_embedding_records_each_call() -> None:
-    """Embedding calls are recorded with estimated tokens and the configured model name."""
-    usage = RequestUsage()
-    embedding = MeteredEmbedding(_FakeEmbedding(), "openai/text-embedding-3-small")
-    with metered(usage):
-        embedding.embed_document(Document(page_content="x" * 40))
-        embedding.embed_documents([Document(page_content="abcd"), Document(page_content="efgh")])
-
-    assert [(c.kind, c.model, c.input_tokens, c.tokens_estimated) for c in usage.calls] == [
-        ("embedding", "openai/text-embedding-3-small", 10, True),
-        ("embedding", "openai/text-embedding-3-small", 2, True),
-    ]
-
-
-def test_metered_embedding_records_failed_calls() -> None:
-    """A failing embedding call is still recorded, marked unsuccessful, and the error propagates."""
-    inner = MagicMock(spec=_BaseEmbedding)
-    inner.embed_document.side_effect = RuntimeError("provider down")
-    usage = RequestUsage()
-    with metered(usage), pytest.raises(RuntimeError):
-        MeteredEmbedding(inner, "m").embed_document(Document(page_content="q"))
-
-    [call] = usage.calls
-    assert not call.succeeded
-
-
 # ---------- usage store (no database) ----------
 
 
-def test_store_prices_routed_models_by_the_requested_model() -> None:
-    """A router answering under an unlisted model name is priced by the configured model instead."""
+def test_store_records_the_reported_cost_and_zero_when_not_reported() -> None:
+    """A reported cost is stored as is; a call without one is stored at $0 and flagged as not reported."""
     conn = MagicMock()
     cursor = conn.cursor.return_value.__enter__.return_value
-    store = UsageStore(lambda: conn, PriceTable({"openrouter/free": ModelPrice(0, 0)}))
+    store = UsageStore(lambda: conn)
     usage = RequestUsage(status="ok")
     usage.calls = [
-        LlmCall(
-            kind="chat", model="vendor/picked-model", requested_model="openrouter/free", called_at=usage.started_at
-        ),
-        LlmCall(kind="chat", model="vendor/unknown", requested_model="vendor/unknown", called_at=usage.started_at),
+        LlmCall(model="paid/model", called_at=usage.started_at, input_tokens=1_000, cost_usd=0.0042),
+        LlmCall(model="free/model:free", called_at=usage.started_at, cost_usd=0.0),
+        LlmCall(model="local/model", called_at=usage.started_at, input_tokens=1_000),
     ]
     store.record(usage)
 
     [rows] = [c.args[1] for c in cursor.executemany.call_args_list]
-    priced = [row[8] for row in rows]  # the priced column
-    assert priced == [True, False]
-
-
-def test_store_prefers_cost_billed_by_the_provider() -> None:
-    """A provider reported cost is stored as is, even for a model missing from pricing.yaml."""
-    conn = MagicMock()
-    cursor = conn.cursor.return_value.__enter__.return_value
-    store = UsageStore(lambda: conn, PriceTable({"paid/model": ModelPrice(100.0, 100.0)}))
-    usage = RequestUsage(status="ok")
-    usage.calls = [
-        LlmCall(kind="chat", model="paid/model", called_at=usage.started_at, input_tokens=1_000, cost_usd=0.0042),
-        LlmCall(kind="chat", model="unlisted/model", called_at=usage.started_at, cost_usd=0.001),
-        LlmCall(kind="chat", model="paid/model", called_at=usage.started_at, input_tokens=1_000),
-    ]
-    store.record(usage)
-
-    [rows] = [c.args[1] for c in cursor.executemany.call_args_list]
-    # columns: cost_usd, priced, cost_reported
-    assert [(row[7], row[8], row[9]) for row in rows] == [(0.0042, True, True), (0.001, True, True), (0.1, True, False)]
+    # columns: cost_usd, cost_reported
+    assert [(row[6], row[7]) for row in rows] == [(0.0042, True), (0.0, True), (0.0, False)]
 
 
 def test_store_backs_off_after_the_database_is_unreachable() -> None:
     """After a failed connect, writes are skipped quickly instead of every request waiting on the database."""
     connect = MagicMock(side_effect=OperationalError("connection refused"))
-    store = UsageStore(connect, PriceTable({}))
+    store = UsageStore(connect)
 
     with pytest.raises(OperationalError):
         store.record(RequestUsage(status="ok"))
@@ -193,7 +122,7 @@ def test_tracker_records_status_latency_and_calls() -> None:
     """A tracked request is recorded once with its status and calls."""
     store = MagicMock()
     with UsageTracker(store).track("user-1", "session-1") as usage:
-        usage.calls.append(LlmCall(kind="chat", model="m", called_at=usage.started_at))
+        usage.calls.append(LlmCall(model="m", called_at=usage.started_at))
         usage.status = "ok"
 
     [recorded] = [c.args[0] for c in store.record.call_args_list]

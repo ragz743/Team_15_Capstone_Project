@@ -1,8 +1,7 @@
 """Capture the LLM calls made while answering a chat request.
 
 Chat model calls are captured with a LangChain callback handler that is attached to every
-LangChain model invoked inside `metered(usage)`, so chatbot classes need no changes. Embedding
-calls do not emit LangChain callbacks, so the embedding model is wrapped in `MeteredEmbedding`.
+LangChain model invoked inside `metered(usage)`, so chatbot classes need no changes.
 """
 
 from __future__ import annotations
@@ -18,9 +17,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal, override
 from uuid import UUID, uuid4
 
-from backend.models._embedding_base import _BaseEmbedding
 from langchain_core.callbacks import BaseCallbackHandler
-from langchain_core.documents import Document
 from langchain_core.messages import AIMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.tracers.context import register_configure_hook
@@ -38,9 +35,8 @@ def estimate_tokens(chars: int) -> int:
 
 @dataclass
 class LlmCall:
-    """A single model call made while answering a request."""
+    """A single chat model call made while answering a request."""
 
-    kind: Literal["chat", "embedding"]
     model: str
     called_at: datetime
     input_tokens: int = 0
@@ -48,7 +44,6 @@ class LlmCall:
     tokens_estimated: bool = False
     latency_ms: int | None = None
     succeeded: bool = True
-    requested_model: str | None = None  # configured model, when the provider answered under another name
     cost_usd: float | None = None  # cost billed by the provider (OpenRouter reports it), None when not reported
 
 
@@ -90,9 +85,7 @@ class _LlmCallRecorder(BaseCallbackHandler):
         input_tokens, output_tokens, estimated = _token_usage(response, prompt_chars)
         self._append(
             LlmCall(
-                kind="chat",
                 model=_response_model_name(response) or model,
-                requested_model=model,
                 cost_usd=_reported_cost(response),
                 called_at=datetime.now(UTC),
                 input_tokens=input_tokens,
@@ -107,25 +100,10 @@ class _LlmCallRecorder(BaseCallbackHandler):
         started, model, _ = self._finish(kwargs["run_id"])
         self._append(
             LlmCall(
-                kind="chat",
                 model=model,
                 called_at=datetime.now(UTC),
                 latency_ms=_elapsed_ms(started),
                 succeeded=False,
-            )
-        )
-
-    def add_embedding_call(self, model: str, chars: int, latency_ms: int, succeeded: bool) -> None:
-        """Record an embedding call made by MeteredEmbedding."""
-        self._append(
-            LlmCall(
-                kind="embedding",
-                model=model,
-                called_at=datetime.now(UTC),
-                input_tokens=estimate_tokens(chars),
-                tokens_estimated=True,
-                latency_ms=latency_ms,
-                succeeded=succeeded,
             )
         )
 
@@ -156,37 +134,6 @@ def metered(usage: RequestUsage) -> Iterator[RequestUsage]:
         yield usage
     finally:
         _active_recorder.reset(token)
-
-
-class MeteredEmbedding(_BaseEmbedding):
-    """Wraps an embedding model so each embedding call is recorded for the active request."""
-
-    def __init__(self, inner: _BaseEmbedding, model_name: str) -> None:
-        """Wrap `inner`, reporting its calls under `model_name`."""
-        self._inner = inner
-        self._model_name = model_name
-
-    @override
-    def embed_document(self, document: Document) -> tuple[list[float], Document]:
-        with self._metered_call(len(document.page_content)):
-            return self._inner.embed_document(document)
-
-    @override
-    def embed_documents(self, documents: list[Document]) -> list[tuple[list[float], Document]]:
-        with self._metered_call(sum(len(d.page_content) for d in documents)):
-            return self._inner.embed_documents(documents)
-
-    @contextmanager
-    def _metered_call(self, chars: int) -> Iterator[None]:
-        recorder = _active_recorder.get()
-        started = time.perf_counter()
-        succeeded = False
-        try:
-            yield
-            succeeded = True
-        finally:
-            if recorder is not None:
-                recorder.add_embedding_call(self._model_name, chars, _elapsed_ms(started) or 0, succeeded)
 
 
 def _elapsed_ms(started: float | None) -> int | None:

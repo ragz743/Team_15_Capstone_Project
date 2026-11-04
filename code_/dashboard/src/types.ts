@@ -78,7 +78,6 @@ export type Budget = {
 };
 
 export type ModelRow = {
-  kind: "chat" | "embedding";
   model: string;
   calls: number;
   failed_calls: number;
@@ -86,9 +85,8 @@ export type ModelRow = {
   output_tokens: number;
   cost_usd: number;
   avg_cost_per_call: number | null;
-  priced: boolean;
-  /** billed: the provider reported the cost; estimated: tokens × pricing.yaml; unpriced: no price known. */
-  cost_source: "billed" | "estimated" | "mixed" | "unpriced";
+  /** billed: OpenRouter reported the cost of every request; mixed: some; unreported: none (counted as $0). */
+  cost_source: "billed" | "mixed" | "unreported";
   tokens_estimated: boolean;
   latency_p50_ms: number | null;
 };

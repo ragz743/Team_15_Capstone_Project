@@ -1,4 +1,8 @@
-# Sample questions for the retrieval quality check (python -m scripts.evaluate_retrieval).
+# Sample questions for the retrieval quality check (retrieval_quality.py).
+#
+# These are production data, not test fixtures: the running API asks these questions once a day against the
+# live chatbot and weather databases, and the admin dashboard shows how many found the right data. To run the
+# check by hand: python -m scripts.evaluate_retrieval
 #
 # Each question is asked at its station through the LangGraph weather workflow, and passes when the
 # workflow queries the expected kind of data and gets records back. Keep the sample small: every question

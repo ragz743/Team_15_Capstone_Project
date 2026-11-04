@@ -78,7 +78,7 @@ def test_evaluate_keeps_the_model_calls_for_the_budget(monkeypatch: MonkeyPatch)
         return [_read("current_weather", 1)]
 
     run = evaluate(ask, [Sample(f"q{i}", "current", station="Pullman") for i in range(2)])
-    assert [call.kind for call in run.calls] == ["chat", "chat"]
+    assert len(run.calls) == 2
 
 
 def test_evaluate_records_errors_without_stopping() -> None:
@@ -214,31 +214,42 @@ def test_unconfigured_email_is_reported_not_sent() -> None:
 
 def test_alert_message_links_to_the_dashboard() -> None:
     """The email names the month, the spend, the budget, and the dashboard link when configured."""
-    config = BudgetConfig(smtp_sender="a@wsu.edu", dashboard_url="https://weather.wsu.edu/admin/")
+    config = BudgetConfig(
+        smtp_host="smtp.wsu.edu", smtp_sender="a@wsu.edu", dashboard_url="https://weather.wsu.edu/admin/"
+    )
     body = alert_message(config, date(2026, 11, 1), 72.4).get_content()
     assert "November 2026" in body and "$72.40" in body and "https://weather.wsu.edu/admin/" in body
 
 
-# ---------- vector store connection recovery ----------
+def test_budget_settings_are_optional() -> None:
+    """With no email settings the API still starts; the alert is just not emailed."""
+    assert not BudgetConfig().email_configured
 
 
-def test_failed_vector_store_query_does_not_poison_the_connection() -> None:
-    """A failed query rolls back so later chat and quality-check queries on the same connection still work."""
-    from threading import Lock
+@pytest.mark.parametrize(
+    ("settings", "problem"),
+    [
+        ({"smtp_host": "smtp.wsu.edu"}, "AWN_SMTP_FROM"),
+        ({"smtp_sender": "a@wsu.edu"}, "AWN_SMTP_HOST"),
+        ({"smtp_host": "smtp.wsu.edu", "smtp_sender": "a@wsu.edu", "smtp_username": "u"}, "AWN_SMTP_PASSWORD"),
+        ({"threshold_usd": 0}, "AWN_MONTHLY_BUDGET_USD"),
+        ({"smtp_port": 0}, "AWN_SMTP_PORT"),
+    ],
+)
+def test_incomplete_budget_settings_fail_at_startup(settings: dict, problem: str) -> None:
+    """A setup that could never send the alert is rejected when the API starts, not when the alert is due."""
+    with pytest.raises(ValueError, match=problem):
+        BudgetConfig(**settings)
 
-    import psycopg
-    from backend.databases.pgvector import PgVectorConnection
 
-    connection = object.__new__(PgVectorConnection)
-    connection.conn = MagicMock()
-    connection._query_lock = Lock()
-    cursor = connection.conn.cursor.return_value.__enter__.return_value
-    cursor.execute.side_effect = psycopg.errors.UndefinedTable("no such table")
-
-    with pytest.raises(psycopg.errors.UndefinedTable):
-        list(connection.simple_query(b"SELECT 1", ()))
-    transaction = connection.conn.transaction.return_value
-    assert transaction.__exit__.call_args.args[0] is psycopg.errors.UndefinedTable
+def test_budget_settings_are_read_from_the_environment(monkeypatch: MonkeyPatch) -> None:
+    """from_env applies the same checks to the AWN_* environment variables."""
+    monkeypatch.setenv("AWN_SMTP_HOST", "smtp.wsu.edu")
+    monkeypatch.delenv("AWN_SMTP_FROM", raising=False)
+    with pytest.raises(ValueError, match="AWN_SMTP_FROM"):
+        BudgetConfig.from_env()
+    monkeypatch.setenv("AWN_SMTP_FROM", "awn-dashboard@wsu.edu")
+    assert BudgetConfig.from_env().email_configured
 
 
 def test_smtp_starttls_verifies_the_server_certificate(monkeypatch: MonkeyPatch) -> None:

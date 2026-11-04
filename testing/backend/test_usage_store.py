@@ -20,7 +20,6 @@ import psycopg
 import pytest
 from backend.analytics import admin_api
 from backend.analytics.metering import LlmCall, RequestStatus, RequestUsage
-from backend.analytics.pricing import ModelPrice, PriceTable
 from backend.analytics.usage_store import UsageStore, UsageTracker
 from backend.chat_turn import AnsweredTurn, PreparedChatTurn
 from backend.conversation_store import ConversationStore
@@ -59,8 +58,7 @@ def store():
 
     schema = f"usage_test_{uuid.uuid4().hex[:8]}"
     admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-    prices = PriceTable({"paid/chat": ModelPrice(1.0, 4.0), "paid/embed": ModelPrice(0.02, 0)})
-    store = UsageStore(lambda: psycopg.connect(**info, options=f"-c search_path={schema}"), prices)
+    store = UsageStore(lambda: psycopg.connect(**info, options=f"-c search_path={schema}"))
     try:
         yield store
     finally:
@@ -75,8 +73,9 @@ def _request(
     started = _NOW - timedelta(days=days_ago, minutes=1)
     usage = RequestUsage(user_id=user, session_id=session, started_at=started, latency_ms=latency, status=status)
     usage.calls = [
-        LlmCall(kind="embedding", model="paid/embed", called_at=started, input_tokens=1_000, tokens_estimated=True),
-        LlmCall(kind="chat", model="paid/chat", called_at=started, input_tokens=1_000, output_tokens=250),
+        # costs as OpenRouter reports them
+        LlmCall(model="paid/sql", called_at=started, input_tokens=1_000, tokens_estimated=True, cost_usd=0.00002),
+        LlmCall(model="paid/chat", called_at=started, input_tokens=1_000, output_tokens=250, cost_usd=0.002),
     ]
     return usage
 
@@ -165,7 +164,7 @@ def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -
     metrics = store.metrics(7, _TZ, target_ms=2_500, now=_NOW)
     summary = metrics["summary"]
 
-    call_cost = 1_000 * 0.02 / 1e6 + (1_000 * 1.0 + 250 * 4.0) / 1e6
+    call_cost = 0.00002 + 0.002  # the two model requests in _request
     assert (summary["calls"], summary["unidentified_calls"], summary["failed_calls"]) == (5, 1, 2)
     assert summary["error_rate"] == pytest.approx(0.4)
     assert summary["model_requests"] == 10
@@ -188,7 +187,10 @@ def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -
     assert sum(point["failed_calls"] for point in metrics["series"]) == 2
     assert (metrics["series"][-1]["bucket"], metrics["series"][-1]["calls"]) == ("2026-10-15", 2)
     assert {row["status"]: row["requests"] for row in metrics["by_status"]} == {"ok": 3, "error": 1, "empty": 1}
-    assert {(row["model"], row["priced"]) for row in metrics["by_model"]} == {("paid/chat", True), ("paid/embed", True)}
+    assert {(row["model"], row["cost_source"]) for row in metrics["by_model"]} == {
+        ("paid/chat", "billed"),
+        ("paid/sql", "billed"),
+    }
     assert not metrics["includes_demo_data"]
     assert metrics["quality"] == {"runs": [], "latest": None}
     assert metrics["budget"]["spent_usd"] == pytest.approx(5 * call_cost)  # October so far
@@ -250,22 +252,22 @@ def test_month_spend_includes_quality_check_costs(store: UsageStore) -> None:
     """The quality check's model calls are not user requests, but their cost counts toward the budget."""
     store.record(_request("u1", "s1", 1, "ok", 100))
     before = store.month_spend(_TZ, now=_NOW)[1]
-    call = LlmCall(kind="chat", model="paid/chat", called_at=_NOW, input_tokens=1_000, output_tokens=250)
+    call = LlmCall(model="paid/chat", called_at=_NOW, input_tokens=1_000, output_tokens=250, cost_usd=0.002)
     store.record_quality_run(samples=1, passed=1, details=[], calls=[call])
     with store._connect() as conn:
         conn.execute("UPDATE usage_quality_runs SET run_at = %s", (_NOW - timedelta(hours=1),))
-    assert store.month_spend(_TZ, now=_NOW)[1] == pytest.approx(before + store._prices.call_cost(call)[0])
+    assert store.month_spend(_TZ, now=_NOW)[1] == pytest.approx(before + 0.002)
     assert store.metrics(7, _TZ, now=_NOW)["summary"]["calls"] == 1  # still one user request
 
 
-def test_unpriced_models_are_recorded_at_zero_and_flagged(store: UsageStore) -> None:
-    """Models missing from the price table cost nothing and report priced=False."""
+def test_calls_without_a_reported_cost_are_recorded_at_zero_and_flagged(store: UsageStore) -> None:
+    """A model whose provider reported no cost counts as $0 and is labelled unreported."""
     usage = _request("u1", "s1", 0, "ok", 100)
-    usage.calls = [LlmCall(kind="chat", model="unknown/model", called_at=usage.started_at, input_tokens=10)]
+    usage.calls = [LlmCall(model="local/model", called_at=usage.started_at, input_tokens=10)]
     store.record(usage)
 
     [row] = store.metrics(7, _TZ, now=_NOW)["by_model"]
-    assert (row["model"], row["cost_usd"], row["priced"]) == ("unknown/model", 0.0, False)
+    assert (row["model"], row["cost_usd"], row["cost_source"]) == ("local/model", 0.0, "unreported")
 
 
 def test_dashboard_reads_do_not_wait_for_the_write_connection(store: UsageStore) -> None:
@@ -285,18 +287,19 @@ def test_dashboard_reads_do_not_wait_for_the_write_connection(store: UsageStore)
     assert result["metrics"]["summary"]["calls"] == 1
 
 
-def test_cost_source_distinguishes_billed_and_estimated_costs(store: UsageStore) -> None:
-    """Models whose cost the provider reported are labelled billed; pricing.yaml ones estimated."""
+def test_cost_source_shows_whether_every_cost_was_reported(store: UsageStore) -> None:
+    """A model is billed when every request reported a cost, mixed when only some did."""
     usage = _request("u1", "s1", 0, "ok", 100)
     usage.calls = [
-        LlmCall(kind="chat", model="billed/model", called_at=usage.started_at, input_tokens=10, cost_usd=0.25),
-        LlmCall(kind="chat", model="paid/chat", called_at=usage.started_at, input_tokens=1_000_000),
+        LlmCall(model="billed/model", called_at=usage.started_at, input_tokens=10, cost_usd=0.25),
+        LlmCall(model="mixed/model", called_at=usage.started_at, cost_usd=0.5),
+        LlmCall(model="mixed/model", called_at=usage.started_at),
     ]
     store.record(usage)
 
     rows = {row["model"]: row for row in store.metrics(7, _TZ, now=_NOW)["by_model"]}
     assert (rows["billed/model"]["cost_source"], rows["billed/model"]["cost_usd"]) == ("billed", 0.25)
-    assert (rows["paid/chat"]["cost_source"], rows["paid/chat"]["cost_usd"]) == ("estimated", 1.0)
+    assert (rows["mixed/model"]["cost_source"], rows["mixed/model"]["cost_usd"]) == ("mixed", 0.5)
 
 
 def test_users_break_down_cost_per_user_most_expensive_first(store: UsageStore) -> None:
@@ -310,7 +313,7 @@ def test_users_break_down_cost_per_user_most_expensive_first(store: UsageStore) 
         _request("old", "s4", 40, "ok", 100),  # outside the 7 day window
     ]:
         store.record(usage)
-    call_cost = 1_000 * 0.02 / 1e6 + (1_000 * 1.0 + 250 * 4.0) / 1e6
+    call_cost = 0.00002 + 0.002  # the two model requests in _request
 
     result = store.users(7, _TZ, now=_NOW)
 

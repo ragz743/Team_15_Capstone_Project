@@ -54,9 +54,10 @@ call. A failed attempt that invokes a model is recorded; generating a new answer
 and its model usage is recorded separately. Merely reopening a conversation does not add usage.
 Empty answers count as failed calls and are excluded from successful-answer response times.
 
-The chatbot answers only through the LangGraph SQL workflow, which does not use embeddings or the vector
-store, so every recorded model request is a chat request. Model tokens and billed cost come from provider
-metadata when available; estimates remain labelled.
+The chatbot answers only through the LangGraph SQL workflow, so every recorded model request is a chat
+model request. Model tokens and billed cost come from provider
+metadata; token estimates are labelled. For a short overview of the design, see
+[`backend/analytics/README.md`](../backend/analytics/README.md).
 
 ### Users and sessions
 
@@ -110,14 +111,16 @@ refresh `/admin/`, and check that calls, model requests, tokens, and costs chang
 conversation to confirm it does not add usage. Provider-reported free calls may legitimately cost $0.
 
 No demo seed is required. If synthetic rows were previously seeded, the dashboard labels the mixed data
-as "Includes demo data". `python -m scripts.seed_dashboard_demo --clear` removes only those synthetic rows
+as "Includes demo data". `PYTHONPATH=code_ python testing/seed_dashboard_demo.py --clear` (from the
+repository root) removes only those synthetic rows
 when you are ready to view real traffic alone.
 
 ### Spending
 
-Spending = tokens × the price per token in [`backend/analytics/pricing.yaml`](../backend/analytics/pricing.yaml),
-or the exact amount when the provider reports one. Models ending in `:free` cost $0; a model missing from the file
-is counted as $0 and the dashboard warns that spending is understated.
+Spending is the cost OpenRouter reports in each response
+([usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)), so there is no
+price list to keep up to date. Free models are reported as $0. A request whose provider reports no cost is
+counted as $0 and the dashboard warns that spending may be understated.
 
 ### Retrieval quality
 
@@ -147,17 +150,16 @@ only sent once SMTP is configured** (see below).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `AWN_ADMIN_TOKEN` | unset | Token admins enter to sign in. The dashboard is disabled until this is set |
+| `AWN_ADMIN_TOKEN` | unset | Placeholder login until the dashboard uses the AWN website's admin sign-in (see open items below): admins type this value to sign in. Any value works; the project `.env` uses a dummy one. The dashboard is disabled until this is set |
 | `AWN_DASHBOARD_TIMEZONE` | `America/Los_Angeles` | Timezone for days, months, and the monthly budget |
 | `AWN_RESPONSE_TARGET_MS` | `5000` | Response time target |
 | `AWN_QUALITY_CHECK_HOURS` | `24` | How often the retrieval quality check runs |
 | `AWN_MONTHLY_BUDGET_USD` | `50` | Monthly spending that triggers the alert |
 | `AWN_BUDGET_ALERT_EMAIL` | `weather@wsu.edu` | Alert recipients (comma separated) |
-| `AWN_SMTP_HOST`, `AWN_SMTP_PORT`, `AWN_SMTP_USERNAME`, `AWN_SMTP_PASSWORD`, `AWN_SMTP_FROM`, `AWN_SMTP_STARTTLS` | unset, `587`, unset, unset, unset, `true` | Mail server for the budget alert |
+| `AWN_SMTP_HOST`, `AWN_SMTP_PORT`, `AWN_SMTP_USERNAME`, `AWN_SMTP_PASSWORD`, `AWN_SMTP_FROM`, `AWN_SMTP_STARTTLS` | unset, `587`, unset, unset, unset, `true` | Mail server for the budget alert. Optional: set `AWN_SMTP_HOST` and `AWN_SMTP_FROM` together, and `AWN_SMTP_USERNAME` and `AWN_SMTP_PASSWORD` together. These and the budget settings are checked when the API starts |
 | `AWN_DASHBOARD_URL` | unset | Link included in the alert email |
 | `AWN_USAGE_TRACKING` | `true` | Set to `false` to stop recording usage |
 | `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | unset | When both are set, usage and quality checks are sent to the AgWeatherNet backend (awn_be_v2 `/api/v1/internal/llm-usage/*`) instead of Postgres. Its admin dashboard (LLM Usage tab) and monthly budget alert then replace this dashboard and the email settings above |
-| `AWN_PRICING_FILE` | bundled `pricing.yaml` | Alternative price table |
 
 ## Running locally
 
@@ -180,8 +182,9 @@ To preview with synthetic data (signed-in users with 2 day sessions and daily qu
 "Includes demo data" and never counted toward the budget):
 
 ```sh
-python -m scripts.seed_dashboard_demo          # ~120 days of demo traffic
-python -m scripts.seed_dashboard_demo --clear  # remove it again
+# from the repository root
+PYTHONPATH=code_ python testing/seed_dashboard_demo.py          # ~120 days of demo traffic
+PYTHONPATH=code_ python testing/seed_dashboard_demo.py --clear  # remove it again
 ```
 
 ## Deployment and open items
