@@ -1,69 +1,94 @@
-"""Integration tests for UsageStore against a real Postgres (skipped when none is reachable).
+"""Integration tests for UsageStore against a real MariaDB/MySQL (skipped when none is reachable).
 
-Uses the same PG_HOST / PG_PORT / PG_USER / PG_PASSWORD settings as the rest of the backend,
-and works in a throwaway schema so it never touches real usage data.
+Never point these at AgWeatherNet's server: each test creates its own throwaway database with schema.sql
+and drops it afterwards. Start a local server with
+
+    docker run -d --rm --name awn-usage-test -e MARIADB_ROOT_PASSWORD=usage-test -p 127.0.0.1:3308:3306 mariadb:10.11
+
+and run with AWN_USAGE_TEST_DB_PORT=3308 AWN_USAGE_TEST_DB_PASSWORD=usage-test (host 127.0.0.1 and user root
+by default; also AWN_USAGE_TEST_DB_HOST / AWN_USAGE_TEST_DB_USER).
 """
 
 from __future__ import annotations
 
 import os
+import re
 import threading
 import uuid
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import backend.api as api
-import dotenv
-import psycopg
+import mysql.connector
 import pytest
 from backend.analytics import admin_api
 from backend.analytics.metering import LlmCall, RequestStatus, RequestUsage
-from backend.analytics.usage_store import UsageStore, UsageTracker
+from backend.analytics.usage_store import UsageDatabaseConfig, UsageStore, UsageTracker
 from backend.chat_turn import AnsweredTurn, PreparedChatTurn
 from backend.conversation_store import ConversationStore
 from backend.workflow.contracts import WorkflowRequest
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
-from psycopg import sql
 
 _TZ = "America/Los_Angeles"
 # fixed "now" so day and month buckets are deterministic
 _NOW = datetime(2026, 10, 15, 12, 0, tzinfo=ZoneInfo(_TZ))
 
 
-def _conn_info() -> dict:
-    dotenv.load_dotenv()
-    info = {
-        "host": os.getenv("PG_HOST", "localhost"),
-        "port": int(os.getenv("PG_PORT", "5432")),
-        "dbname": "vectorstore",
-    }
-    for key, env in (("user", "PG_USER"), ("password", "PG_PASSWORD")):
-        if os.getenv(env):
-            info[key] = os.getenv(env)
-    return info
+_SCHEMA = Path(__file__).resolve().parents[2] / "code_/backend/analytics/schema.sql"
+
+
+def _execute(store: UsageStore, statement: str, params: tuple = ()) -> list[tuple]:
+    """Run one statement on the store's test database, as a test setting up or checking rows directly."""
+    with closing(store._connect()) as conn, closing(conn.cursor()) as cur:
+        cur.execute(statement, params)
+        return cur.fetchall() if cur.with_rows else []
 
 
 @pytest.fixture
 def store():
-    """Yield a UsageStore writing into a temporary schema that is dropped afterwards."""
-    info = _conn_info()
+    """Yield a UsageStore writing into a temporary database (the client's tables) that is dropped afterwards."""
+    base = UsageDatabaseConfig(
+        user=os.getenv("AWN_USAGE_TEST_DB_USER", "root"),
+        password=os.getenv("AWN_USAGE_TEST_DB_PASSWORD", ""),
+        host=os.getenv("AWN_USAGE_TEST_DB_HOST", "127.0.0.1"),
+        port=int(os.getenv("AWN_USAGE_TEST_DB_PORT") or 3306),
+        database="",
+    )
     try:
-        admin = psycopg.connect(**info, autocommit=True, connect_timeout=2)
-    except psycopg.OperationalError:
-        pytest.skip("Postgres is not reachable")
+        admin = mysql.connector.connect(
+            user=base.user,
+            password=base.password,
+            host=base.host,
+            port=base.port,
+            connection_timeout=2,
+            autocommit=True,
+        )
+    except mysql.connector.Error:
+        pytest.skip("No MariaDB/MySQL test server is reachable (see this module's docstring)")
 
-    schema = f"usage_test_{uuid.uuid4().hex[:8]}"
-    admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
-    store = UsageStore(lambda: psycopg.connect(**info, options=f"-c search_path={schema}"))
+    database = f"usage_test_{uuid.uuid4().hex[:8]}"
+    with closing(admin.cursor()) as cur:
+        cur.execute(f"CREATE DATABASE {database}")
+        cur.execute(f"USE {database}")
+        # schema.sql names the awn database; create the same tables in the throwaway one
+        # comments contain semicolons, so drop them before splitting into statements
+        ddl = re.sub(r"--[^\n]*", "", _SCHEMA.read_text(encoding="utf-8")).replace("awn.", "")
+        for statement in ddl.split(";"):
+            if "CREATE TABLE" in statement:
+                cur.execute(statement)
+    config = UsageDatabaseConfig(base.user, base.password, base.host, base.port, database)
+    store = UsageStore(config.connect)
     try:
         yield store
     finally:
         store.close()
-        admin.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+        with closing(admin.cursor()) as cur:
+            cur.execute(f"DROP DATABASE {database}")
         admin.close()
 
 
@@ -80,13 +105,9 @@ def _request(
     return usage
 
 
-def test_saved_chat_usage_reaches_dashboard_and_csv_without_counting_replays(store, monkeypatch):
-    """HTTP, saved turns, model callbacks and admin reads share real isolated Postgres storage."""
-    migrations = Path(__file__).resolve().parents[2] / "deployment/migrations"
-    with store._connect() as connection:
-        for name in ("001_conversations.sql", "002_turn_snapshots.sql", "003_search_indexes.sql"):
-            connection.execute((migrations / name).read_bytes())
-    monkeypatch.setattr(api, "_conversations", ConversationStore(store._connect))
+def test_saved_chat_usage_reaches_dashboard_and_csv_without_counting_replays(store, database, monkeypatch):
+    """HTTP, saved turns (Postgres), model callbacks and admin reads (MariaDB) use real isolated storage."""
+    monkeypatch.setattr(api, "_conversations", ConversationStore(database))
     monkeypatch.setattr(api, "_usage_tracker", UsageTracker(store))
     monkeypatch.setattr(admin_api, "_usage_store", store)
     monkeypatch.setenv("AWN_ADMIN_TOKEN", "local-test")
@@ -145,8 +166,9 @@ def test_saved_chat_usage_reaches_dashboard_and_csv_without_counting_replays(sto
     assert users[0]["cost_usd"] == pytest.approx(0.006)
     export = client.get("/api/admin/users.csv", headers=admin)
     assert export.status_code == 200 and "sai@wsu.edu" in export.text
-    with store._connect() as connection:
-        assert connection.execute("SELECT count(*) FROM usage_llm_calls WHERE cost_reported").fetchone()[0] == 3
+    assert _execute(store, "SELECT count(*) FROM table_llm_usage_model_calls WHERE cost_reported = 1") == [(3,)]
+    # the client's table also has kind and priced; the chatbot only makes chat requests
+    assert _execute(store, "SELECT DISTINCT kind, priced FROM table_llm_usage_model_calls") == [("chat", 1)]
 
 
 def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -> None:
@@ -230,34 +252,51 @@ def test_budget_alert_is_claimed_once_per_month(store: UsageStore) -> None:
 
     store.finish_budget_alert(month, 50.0, delivered=False, error="SMTP down")
     assert not store.claim_budget_alert(month, 50.0, 52.0, "weather@wsu.edu")  # too soon to retry
-    with store._connect() as conn:
-        conn.execute("UPDATE usage_budget_alerts SET attempted_at = now() - interval '2 hours'")
+    _execute(store, "UPDATE table_llm_usage_budget_alerts SET attempted_at = UTC_TIMESTAMP() - INTERVAL 2 HOUR")
     assert store.claim_budget_alert(month, 50.0, 53.0, "weather@wsu.edu")  # retry allowed
 
     store.finish_budget_alert(month, 50.0, delivered=True, error=None)
-    with store._connect() as conn:
-        conn.execute("UPDATE usage_budget_alerts SET attempted_at = now() - interval '2 hours'")
+    _execute(store, "UPDATE table_llm_usage_budget_alerts SET attempted_at = UTC_TIMESTAMP() - INTERVAL 2 HOUR")
     assert not store.claim_budget_alert(month, 50.0, 60.0, "weather@wsu.edu")  # delivered: never again
+    alert = store.budget_status(_TZ, 50.0, now=_NOW)["alert"]
+    assert alert is not None and alert["delivered"] is True
 
 
 def test_month_spend_ignores_demo_data(store: UsageStore) -> None:
     """Demo rows never count toward the real monthly budget."""
     store.record(_request("u1", "s1", 1, "ok", 100))
-    with store._connect() as conn:
-        conn.execute("UPDATE usage_requests SET is_demo = true")
+    _execute(store, "UPDATE table_llm_usage_requests SET is_demo = 1")
     assert store.month_spend(_TZ, now=_NOW)[1] == 0.0
 
 
-def test_month_spend_includes_quality_check_costs(store: UsageStore) -> None:
-    """The quality check's model calls are not user requests, but their cost counts toward the budget."""
+def test_quality_checks_are_not_user_requests(store: UsageStore) -> None:
+    """A quality check is stored on its own; it adds no calls, and (no cost column) no spending."""
     store.record(_request("u1", "s1", 1, "ok", 100))
     before = store.month_spend(_TZ, now=_NOW)[1]
     call = LlmCall(model="paid/chat", called_at=_NOW, input_tokens=1_000, output_tokens=250, cost_usd=0.002)
     store.record_quality_run(samples=1, passed=1, details=[], calls=[call])
-    with store._connect() as conn:
-        conn.execute("UPDATE usage_quality_runs SET run_at = %s", (_NOW - timedelta(hours=1),))
-    assert store.month_spend(_TZ, now=_NOW)[1] == pytest.approx(before + 0.002)
+    assert store.month_spend(_TZ, now=_NOW)[1] == pytest.approx(before)
     assert store.metrics(7, _TZ, now=_NOW)["summary"]["calls"] == 1  # still one user request
+
+
+def test_month_spend_uses_the_dashboard_timezone(store: UsageStore) -> None:
+    """Timestamps are stored in UTC; a call on Sep 30 at 11 pm Pacific (Oct 1 UTC) is September spending."""
+    usage = _request("u1", "s1", 0, "ok", 100)
+    usage.started_at = datetime(2026, 9, 30, 23, 0, tzinfo=ZoneInfo(_TZ))
+    store.record(usage)
+    assert store.month_spend(_TZ, now=_NOW)[1] == 0.0
+    assert store.month_spend(_TZ, now=datetime(2026, 9, 30, 23, 30, tzinfo=ZoneInfo(_TZ)))[1] > 0
+    stored = _execute(store, "SELECT started_at FROM table_llm_usage_requests")[0][0]
+    assert stored == datetime(2026, 10, 1, 6, 0)  # naive UTC, as the client's DATETIME(3) columns expect
+
+
+def test_long_values_are_trimmed_to_the_client_columns(store: UsageStore) -> None:
+    """The server runs in strict mode, so text longer than a column would otherwise lose the whole call."""
+    usage = _request("u1", "s1", 0, "error", 100)
+    usage.error_type = "E" * 300
+    usage.calls[0].model = "m" * 300
+    store.record(usage)
+    assert store.metrics(7, _TZ, now=_NOW)["summary"]["calls"] == 1
 
 
 def test_calls_without_a_reported_cost_are_recorded_at_zero_and_flagged(store: UsageStore) -> None:

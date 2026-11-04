@@ -28,7 +28,6 @@ from backend.conversation_store import (
     ConversationStore,
     TurnConflictError,
 )
-from backend.databases.pgvector import PgVectorConnection
 from backend.history_service import HistoryService
 from backend.models._chatbot_base import _BaseChatbot
 from backend.models.chatbot_openrouter import ChatbotOpenRouter
@@ -154,7 +153,7 @@ def _build_retriever() -> tuple[LangGraphEngine, _BaseChatbot, str, str]:
 
 
 def _build_usage_store() -> AwnUsageReporter | UsageStore | None:
-    """Where usage goes: the AgWeatherNet backend when AWN_BACKEND_URL is set, otherwise the local Postgres store."""
+    """Where usage goes: the AgWeatherNet backend when AWN_BACKEND_URL is set, otherwise AWN's usage tables."""
     if os.getenv("AWN_USAGE_TRACKING", "true").lower() == "false":
         logger.info("Usage tracking disabled by AWN_USAGE_TRACKING")
         return None
@@ -164,13 +163,9 @@ def _build_usage_store() -> AwnUsageReporter | UsageStore | None:
         logger.info("Reporting usage to the AgWeatherNet backend at %s", reporter.base_url)
         return reporter
 
-    # short timeout so an unreachable database delays a chat request by seconds, not minutes
-    store = UsageStore(lambda: PgVectorConnection(connect_timeout=3).conn)
-    try:
-        store.ensure_schema()
-    except Exception:
-        # keep the store, it retries on the next write once the database is reachable
-        logger.warning("Usage tables could not be created yet, will retry on first use", exc_info=True)
+    store = UsageStore.from_env()
+    if store is None:
+        logger.warning("Usage tracking is off: set AWN_USAGE_DB_USER and AWN_USAGE_DB_PASSWORD (or AWN_BACKEND_URL)")
     return store
 
 

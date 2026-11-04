@@ -1,7 +1,8 @@
 """Run the sampled retrieval quality check now and save the result for the admin dashboard.
 
 The API already runs this once a day; use this script to run it on demand or from cron. The result goes to
-the AgWeatherNet backend when AWN_BACKEND_URL and AWN_INTERNAL_KEY are set, otherwise to the local store.
+the AgWeatherNet backend when AWN_BACKEND_URL and AWN_INTERNAL_KEY are set, otherwise to AWN's usage tables
+(AWN_USAGE_DB_*).
 
     python -m scripts.evaluate_retrieval            # evaluate and save
     python -m scripts.evaluate_retrieval --dry-run  # evaluate and print only
@@ -14,7 +15,6 @@ import dotenv
 from backend.analytics import retrieval_quality
 from backend.analytics.awn_reporter import AwnUsageReporter
 from backend.analytics.usage_store import UsageStore
-from backend.databases.pgvector import PgVectorConnection
 
 
 def main() -> None:
@@ -43,7 +43,9 @@ def main() -> None:
 
     if not args.dry_run:
         reporter = AwnUsageReporter.from_env()
-        store = reporter or UsageStore(lambda: PgVectorConnection().conn)
+        store = reporter or UsageStore.from_env()
+        if store is None:
+            raise SystemExit("Not saved: set AWN_USAGE_DB_USER and AWN_USAGE_DB_PASSWORD, or AWN_BACKEND_URL.")
         store.record_quality_run(run.samples, run.passed, run.details, calls=run.calls)
         print(f"Saved to the dashboard{' at ' + reporter.base_url if reporter else ''}.")
 

@@ -12,16 +12,16 @@ It is a development tool, not part of the running chatbot. From the repository r
 """
 
 import argparse
+import json
 import math
 import random
 import uuid
+from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import dotenv
 from backend.analytics.retrieval_quality import load_samples
-from backend.analytics.usage_store import UsageStore
-from backend.databases.pgvector import PgVectorConnection
-from psycopg.types.json import Jsonb
+from backend.analytics.usage_store import UsageDatabaseConfig
 
 # made up prices for the demo chat model, USD per 1M tokens, so cost charts have something to show
 # (real calls use the cost OpenRouter reports)
@@ -36,9 +36,14 @@ _SESSION_LENGTH = timedelta(days=2)  # login sessions expire after 2 days
 
 
 def _clear(conn) -> tuple[int, int]:
-    with conn.transaction():
-        requests = conn.execute("DELETE FROM usage_requests WHERE is_demo").rowcount
-        runs = conn.execute("DELETE FROM usage_quality_runs WHERE is_demo").rowcount
+    # a request's model calls are deleted with it (ON DELETE CASCADE)
+    with closing(conn.cursor()) as cur:
+        conn.start_transaction()
+        cur.execute("DELETE FROM table_llm_usage_requests WHERE is_demo = 1")
+        requests = cur.rowcount
+        cur.execute("DELETE FROM table_llm_usage_quality_runs WHERE is_demo = 1")
+        runs = cur.rowcount
+        conn.commit()
     return requests, runs
 
 
@@ -81,23 +86,31 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
 
         quality_runs.append(_quality_run(day_start + timedelta(hours=10), incident, rng))
 
-    with conn.transaction(), conn.cursor() as cur:
+    with closing(conn.cursor()) as cur:
+        conn.start_transaction()
         cur.executemany(
-            "INSERT INTO usage_requests (request_id, user_id, session_id, started_at, latency_ms, status,"
-            " error_type, is_demo) VALUES (%s, %s, %s, %s, %s, %s, %s, true)",
+            "INSERT INTO table_llm_usage_requests (request_id, user_id, session_id, started_at, latency_ms,"
+            " status, error_type, is_demo) VALUES (%s, %s, %s, %s, %s, %s, %s, 1)",
             requests,
         )
         cur.executemany(
-            "INSERT INTO usage_llm_calls (request_id, called_at, model, input_tokens, output_tokens,"
-            " tokens_estimated, cost_usd, cost_reported, latency_ms, succeeded)"
-            " VALUES (%s, %s, %s, %s, %s, %s, %s, true, %s, %s)",
+            "INSERT INTO table_llm_usage_model_calls (request_id, called_at, kind, model, input_tokens,"
+            " output_tokens, tokens_estimated, cost_usd, priced, cost_reported, latency_ms, succeeded)"
+            " VALUES (%s, %s, 'chat', %s, %s, %s, %s, %s, 1, 1, %s, %s)",
             calls,
         )
         cur.executemany(
-            "INSERT INTO usage_quality_runs (run_at, samples, passed, details, is_demo) VALUES (%s, %s, %s, %s, true)",
+            "INSERT INTO table_llm_usage_quality_runs (run_at, samples, passed, details, is_demo)"
+            " VALUES (%s, %s, %s, %s, 1)",
             quality_runs,
         )
+        conn.commit()
     return len(requests)
+
+
+def _naive(moment: datetime) -> datetime:
+    """UTC without a timezone, as the DATETIME columns store it."""
+    return moment.astimezone(UTC).replace(tzinfo=None)
 
 
 def _quality_run(run_at: datetime, incident: bool, rng: random.Random) -> tuple:
@@ -117,11 +130,11 @@ def _quality_run(run_at: datetime, incident: bool, rng: random.Random) -> tuple:
         }
         for i, sample in enumerate(samples)
     ]
-    return (run_at, len(samples), len(samples) - len(missed), Jsonb(details))
+    return (_naive(run_at), len(samples), len(samples) - len(missed), json.dumps(details))
 
 
 def _add_request(requests: list, calls: list, user, session, started, incident: bool, rng) -> None:
-    request_id = uuid.uuid4()
+    request_id = str(uuid.uuid4())
     roll = rng.random()
     failure_rate = 0.12 if incident else 0.015
     if roll < failure_rate:
@@ -143,11 +156,11 @@ def _add_request(requests: list, calls: list, user, session, started, incident: 
             tokens_in = tokens_out = 0
         cost = (tokens_in * price_in + tokens_out * price_out) / 1e6
         latency = int(chat_latency * share)
-        calls.append((request_id, called_at, model, tokens_in, tokens_out, False, cost, latency, succeeded))
+        calls.append((request_id, _naive(called_at), model, tokens_in, tokens_out, False, cost, latency, succeeded))
         called_at += timedelta(milliseconds=latency)
 
     latency = chat_latency + rng.randint(150, 600)
-    requests.append((request_id, user, session, started, latency, status, error))
+    requests.append((request_id, user, session, _naive(started), latency, status, error))
 
 
 def main() -> None:
@@ -160,11 +173,11 @@ def main() -> None:
     args = parser.parse_args()
 
     dotenv.load_dotenv()
-    UsageStore(lambda: PgVectorConnection().conn).ensure_schema()
+    config = UsageDatabaseConfig.from_env()
+    if config is None:
+        raise SystemExit("Set AWN_USAGE_DB_USER and AWN_USAGE_DB_PASSWORD (and AWN_USAGE_DB_HOST) first.")
 
-    with PgVectorConnection() as db:
-        conn = db.conn
-        conn.autocommit = True
+    with closing(config.connect(timeout=10)) as conn:
         if args.clear:
             requests, runs = _clear(conn)
             print(f"Removed {requests} demo calls and {runs} demo quality checks.")

@@ -16,7 +16,7 @@ from backend.analytics.usage_store import (
 from fastapi.testclient import TestClient
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
-from psycopg import OperationalError
+from mysql.connector.errors import DatabaseError
 from pytest import MonkeyPatch
 
 
@@ -82,7 +82,7 @@ def test_calls_outside_metered_block_are_not_recorded() -> None:
 def test_store_records_the_reported_cost_and_zero_when_not_reported() -> None:
     """A reported cost is stored as is; a call without one is stored at $0 and flagged as not reported."""
     conn = MagicMock()
-    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor = conn.cursor.return_value
     store = UsageStore(lambda: conn)
     usage = RequestUsage(status="ok")
     usage.calls = [
@@ -93,16 +93,16 @@ def test_store_records_the_reported_cost_and_zero_when_not_reported() -> None:
     store.record(usage)
 
     [rows] = [c.args[1] for c in cursor.executemany.call_args_list]
-    # columns: cost_usd, cost_reported
-    assert [(row[6], row[7]) for row in rows] == [(0.0042, True), (0.0, True), (0.0, False)]
+    # columns: cost_usd, priced, cost_reported
+    assert [row[6:9] for row in rows] == [(0.0042, True, True), (0.0, True, True), (0.0, False, False)]
 
 
 def test_store_backs_off_after_the_database_is_unreachable() -> None:
     """After a failed connect, writes are skipped quickly instead of every request waiting on the database."""
-    connect = MagicMock(side_effect=OperationalError("connection refused"))
+    connect = MagicMock(side_effect=DatabaseError(msg="Can't connect to MySQL server", errno=2003))
     store = UsageStore(connect)
 
-    with pytest.raises(OperationalError):
+    with pytest.raises(DatabaseError):
         store.record(RequestUsage(status="ok"))
     attempts = connect.call_count
 

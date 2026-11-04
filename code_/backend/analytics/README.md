@@ -12,7 +12,7 @@ POST /api/chat (api.py)
        └─ metered()                          LangChain callback attached to every model call inside
             └─ LangGraph workflow            classifier, SQL generation, summary: each call's model,
                                              tokens, and the cost OpenRouter reports
-  └─ UsageStore.record()  ──> Postgres       usage_requests + usage_llm_calls
+  └─ UsageStore.record()  ──> AWN MariaDB    awn.table_llm_usage_requests + table_llm_usage_model_calls
        or AwnUsageReporter ──> AgWeatherNet backend (when AWN_BACKEND_URL is set)
 
 GET /api/admin/* (admin_api.py)  ──> UsageStore SQL queries ──> dashboard
@@ -30,7 +30,8 @@ GET /api/admin/* (admin_api.py)  ──> UsageStore SQL queries ──> dashboar
   a cost (for example a local llama.cpp model) is recorded at $0 and the dashboard flags it.
 - **Retrieval quality:** `retrieval_quality.py` is production monitoring, not a test. Once a day the API
   asks the questions in `retrieval_samples.yaml` through the same workflow and records whether it read
-  the right kind of weather data at the right station. Its model cost counts toward the monthly budget.
+  the right kind of weather data at the right station. Its model calls are not user calls, and because the
+  client's quality runs table has no cost column, their cost is not counted toward the monthly budget.
 - **Budget alert:** `budget.py` checks month-to-date spending every hour and emails the team once per month
   when it passes the budget.
 
@@ -42,25 +43,41 @@ No question or answer text is stored, only counts, tokens, costs, timings and ou
   token counts they are estimated from the text length and shown with `~` on the dashboard.
 - `testing/backend/workflow/test_workflow_metering.py` runs the real workflow and checks that every model
   call (classifier, each query node, summary) is recorded exactly once with its tokens and cost.
-- `testing/backend/test_usage_store.py` runs the dashboard's SQL against a real Postgres schema and checks
-  the totals add up.
+- `testing/backend/test_usage_store.py` runs the store against a real MariaDB with the client's tables
+  (`schema.sql`) and checks the totals add up. It needs a local test server; see the file's docstring.
 - The numbers can be compared with the OpenRouter activity page for the same API key.
 
-## Where Postgres is used
+## Where the usage data is stored
 
-The project's Postgres (the `pgvector` service in Docker, configured with `PG_USER`, `PG_PASSWORD`,
-`PG_HOST`, `PG_PORT`) holds:
+Usage is written to four tables that AgWeatherNet created in its `awn` MariaDB database, the same server
+the chatbot reads weather data from. `schema.sql` is a copy of their definitions; the API never creates or
+changes them.
 
-| Tables | Used for | Created by |
-| --- | --- | --- |
-| `conversations`, `conversation_turns`, station directory tables | Saved chat history and station lookup | `deployment/migrations/*.sql` |
-| `usage_requests`, `usage_llm_calls`, `usage_quality_runs`, `usage_budget_alerts` | This dashboard | `schema.sql`, applied automatically at API startup |
+| Table | One row per |
+| --- | --- |
+| `table_llm_usage_requests` | Call (one question answered end to end): user, login session, response time, outcome |
+| `table_llm_usage_model_calls` | Model request made during a call: model, tokens, the cost OpenRouter reported |
+| `table_llm_usage_quality_runs` | Daily retrieval quality check |
+| `table_llm_usage_budget_alerts` | Month whose spending passed the budget, so the email is sent once (across servers) |
 
-The weather data itself is read from AgWeatherNet's MySQL databases, not Postgres.
+How the chatbot fills the client's columns:
 
-If the client would rather not run Postgres for analytics, set `AWN_BACKEND_URL` and `AWN_INTERNAL_KEY`:
-usage is then sent to the AgWeatherNet backend (`awn_reporter.py`) and shown in its own admin dashboard,
-and none of the `usage_*` tables are used.
+- `kind` is always `chat`; the chatbot makes no embedding requests.
+- `priced` and `cost_reported` are both 1 when OpenRouter reported the cost and both 0 otherwise (the call
+  is then recorded at $0 and the dashboard says the cost was not reported). There is no price list.
+- Timestamps are UTC (`DATETIME(3)` has no timezone); the dashboard converts them to
+  `AWN_DASHBOARD_TIMEZONE` for days and months.
+
+The writes use their own database account (`AWN_USAGE_DB_*`), not the chatbot's `AWN_DB_USER`. The chatbot
+runs SQL written by the model with that account, so it should stay read only. The usage account needs only
+`SELECT, INSERT, UPDATE` on the four tables, plus `DELETE` if `testing/seed_dashboard_demo.py --clear` is
+run with it.
+
+The project's Postgres is no longer used by the dashboard. It still holds the chatbot's saved conversations
+and station directory (`deployment/migrations/*.sql`), which belong to the chatbot.
+
+Alternatively, set `AWN_BACKEND_URL` and `AWN_INTERNAL_KEY`: usage is then sent to the AgWeatherNet backend
+(`awn_reporter.py`) and shown in its own admin dashboard instead.
 
 ## Settings
 
@@ -69,11 +86,13 @@ required for the chatbot itself to run.
 
 | Variable | Needed for | How to set it |
 | --- | --- | --- |
+| `AWN_USAGE_DB_USER`, `AWN_USAGE_DB_PASSWORD` | Recording usage and showing the dashboard | A MariaDB account from AgWeatherNet with `SELECT, INSERT, UPDATE` on the `table_llm_usage_*` tables. Usage tracking is off while unset |
+| `AWN_USAGE_DB_HOST`, `AWN_USAGE_DB_PORT`, `AWN_USAGE_DB_NAME` | Where the usage tables are | Optional; default `AWN_DB_HOST`, `3306` and `awn` |
 | `AWN_ADMIN_TOKEN` | Signing in to the dashboard | A placeholder login until the dashboard uses the AWN website's admin sign-in: any value works (the project `.env` uses a dummy one), and admins type the same value to sign in. The dashboard is disabled while it is unset |
 | `AWN_MONTHLY_BUDGET_USD`, `AWN_BUDGET_ALERT_EMAIL` | Budget alert | Optional; default $50 and `weather@wsu.edu` |
 | `AWN_SMTP_HOST`, `AWN_SMTP_FROM` | Emailing the alert | Optional, but set both or neither |
 | `AWN_SMTP_USERNAME`, `AWN_SMTP_PASSWORD` | Mail servers that need a login | Optional, but set both or neither |
-| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | Sending usage to the AgWeatherNet backend instead of Postgres | From the AgWeatherNet backend team |
+| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | Sending usage to the AgWeatherNet backend instead of the usage tables | From the AgWeatherNet backend team |
 
 The full list, with defaults, is in the dashboard README's
 [configuration table](../../dashboard/README.md#configuration-api-environment). The budget and email
@@ -85,8 +104,8 @@ missing variable instead of failing when the first alert is due.
 | File | Purpose |
 | --- | --- |
 | `metering.py` | Captures each model call's tokens and reported cost during a request |
-| `usage_store.py` | Writes usage to Postgres and runs the dashboard's metric queries |
-| `schema.sql` | The `usage_*` tables |
+| `usage_store.py` | Writes usage to the AWN tables and computes the dashboard's metrics |
+| `schema.sql` | Copy of AgWeatherNet's `table_llm_usage_*` table definitions |
 | `admin_api.py` | The `/api/admin/*` endpoints the dashboard reads |
 | `awn_reporter.py` | Alternative to `usage_store.py`: sends usage to the AgWeatherNet backend |
 | `budget.py` | Monthly budget check and alert email |

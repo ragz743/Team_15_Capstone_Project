@@ -36,13 +36,13 @@ chart has a table view, the page refreshes its data every hour, and **Export CSV
 
 ## How the data is collected
 
-The API records every `/api/chat` call in Postgres (tables are created automatically at startup, see
-`backend/analytics/schema.sql`):
+The API records every `/api/chat` call in AgWeatherNet's `awn` MariaDB database, in tables AgWeatherNet
+created (a copy of their definitions is in `backend/analytics/schema.sql`; the API does not create them):
 
-- `usage_requests`: one row per call with its user ID, login session ID, response time, and outcome
-- `usage_llm_calls`: one row per model request with its model, tokens, and cost
-- `usage_quality_runs`: one row per retrieval quality check
-- `usage_budget_alerts`: one row per month once spending passes the budget, so the email goes out once
+- `table_llm_usage_requests`: one row per call with its user ID, login session ID, response time, and outcome
+- `table_llm_usage_model_calls`: one row per model request with its model, tokens, and cost
+- `table_llm_usage_quality_runs`: one row per retrieval quality check
+- `table_llm_usage_budget_alerts`: one row per month once spending passes the budget, so the email goes out once
 
 Chat model requests are captured with a LangChain callback, including the LangGraph classifier, query
 generation, summarizer, and saved-history interpretation and answers. No question or answer text is stored
@@ -150,6 +150,8 @@ only sent once SMTP is configured** (see below).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `AWN_USAGE_DB_USER`, `AWN_USAGE_DB_PASSWORD` | unset | MariaDB account (from AgWeatherNet) that can `SELECT, INSERT, UPDATE` the `table_llm_usage_*` tables. Kept separate from the chatbot's read only `AWN_DB_USER`. Usage tracking and the dashboard are off until set |
+| `AWN_USAGE_DB_HOST`, `AWN_USAGE_DB_PORT`, `AWN_USAGE_DB_NAME` | `AWN_DB_HOST`, `3306`, `awn` | Where the usage tables are |
 | `AWN_ADMIN_TOKEN` | unset | Placeholder login until the dashboard uses the AWN website's admin sign-in (see open items below): admins type this value to sign in. Any value works; the project `.env` uses a dummy one. The dashboard is disabled until this is set |
 | `AWN_DASHBOARD_TIMEZONE` | `America/Los_Angeles` | Timezone for days, months, and the monthly budget |
 | `AWN_RESPONSE_TARGET_MS` | `5000` | Response time target |
@@ -159,12 +161,12 @@ only sent once SMTP is configured** (see below).
 | `AWN_SMTP_HOST`, `AWN_SMTP_PORT`, `AWN_SMTP_USERNAME`, `AWN_SMTP_PASSWORD`, `AWN_SMTP_FROM`, `AWN_SMTP_STARTTLS` | unset, `587`, unset, unset, unset, `true` | Mail server for the budget alert. Optional: set `AWN_SMTP_HOST` and `AWN_SMTP_FROM` together, and `AWN_SMTP_USERNAME` and `AWN_SMTP_PASSWORD` together. These and the budget settings are checked when the API starts |
 | `AWN_DASHBOARD_URL` | unset | Link included in the alert email |
 | `AWN_USAGE_TRACKING` | `true` | Set to `false` to stop recording usage |
-| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | unset | When both are set, usage and quality checks are sent to the AgWeatherNet backend (awn_be_v2 `/api/v1/internal/llm-usage/*`) instead of Postgres. Its admin dashboard (LLM Usage tab) and monthly budget alert then replace this dashboard and the email settings above |
+| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | unset | When both are set, usage and quality checks are sent to the AgWeatherNet backend (awn_be_v2 `/api/v1/internal/llm-usage/*`) instead of the usage tables. Its admin dashboard (LLM Usage tab) and monthly budget alert then replace this dashboard and the email settings above |
 
 ## Running locally
 
 ```sh
-# API (from code_/, with the venv active and Postgres running)
+# API (from code_/, with the venv active, AWN_USAGE_DB_* set, and Postgres running for saved chats)
 python -m scripts.migrate_conversations
 AWN_ADMIN_TOKEN=change-me uvicorn backend.api:app --reload --port 8000
 
@@ -195,5 +197,7 @@ The dashboard is deployed with the rest of the app on an **AWS EC2 instance** (s
 | --- | --- |
 | Mail server for the budget alert | **Later**, once there is access to the AWS EC2 repo: set the `AWN_SMTP_*` settings there. Until then the dashboard warns that alerts are not set up. On EC2, Amazon SES's SMTP interface works with these settings |
 | Admin sign-in | **Later**, once there is access to the AWS EC2 repo. A shared token (`AWN_ADMIN_TOKEN`) until then |
+| Usage database account | **Needed from AgWeatherNet**: an account for `AWN_USAGE_DB_*` with `SELECT, INSERT, UPDATE` on the `awn.table_llm_usage_*` tables (the chatbot's account is read only) |
+| Quality check cost | `table_llm_usage_quality_runs` has no cost column, so the daily check's model cost is not counted toward the budget. Adding a `cost_usd DECIMAL(16,10) NOT NULL DEFAULT 0` column would allow it |
 | Users who have not used the chatbot | Needs the total number of signed-in website users (e.g. from the site's login system or GA4) |
 | User satisfaction (thumbs up / down) | Not built; needs a feedback button in the chat app |
