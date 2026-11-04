@@ -1,7 +1,7 @@
 """Generated SQL stays within the selected station and public measurement schema."""
 
 import pytest
-from backend.workflow.sql_policy import bounded_query, measurement_unit
+from backend.workflow.sql_policy import bounded_query, date_only_query, measurement_unit
 from mysql.connector.errors import ProgrammingError
 
 
@@ -123,7 +123,7 @@ def test_historical_queries_require_a_real_bounded_period(predicate):
 def test_date_bounds_allow_day_queries_leap_years_and_bounded_boolean_filters(predicate):
     """Keep supported periods without changing the generated SQL's meaning."""
     query = bounded_query(
-        f"SELECT AVG(AVG_AIR_TEMP) FROM station1daily WHERE {predicate}",
+        f"SELECT MIN(JULDATE), MAX(JULDATE), AVG(AVG_AIR_TEMP) FROM station1daily WHERE {predicate}",
         "station1daily",
         {"AVG_AIR_TEMP", "JULDATE"},
         date_column="JULDATE",
@@ -138,7 +138,7 @@ def test_timestamp_columns_and_date_wrappers_support_absolute_periods(column, ex
     """Date expressions still refer to the selected source's applicable time field."""
     predicate = expression.format(column=f"s.{column}")
     query = bounded_query(
-        f"SELECT AIR_TEMP FROM station1 s WHERE {predicate} >= '2026-09-29' AND {predicate} < '2026-09-30'",
+        f"SELECT s.{column}, AIR_TEMP FROM station1 s WHERE {predicate} >= '2026-09-29' AND {predicate} < '2026-09-30'",
         "station1",
         {column, "AIR_TEMP"},
         date_column=column,
@@ -203,7 +203,7 @@ def test_outer_date_bounds_do_not_exempt_nested_weather_reads(subquery):
 def test_bounded_nested_weather_read_is_supported():
     """Both sides of a comparison can read evidence from a bounded period."""
     sql = bounded_query(
-        "SELECT AIR_TEMP FROM station1 WHERE TSTAMP >= '2026-09-29' AND TSTAMP < '2026-09-30' "
+        "SELECT TSTAMP, AIR_TEMP FROM station1 WHERE TSTAMP >= '2026-09-29' AND TSTAMP < '2026-09-30' "
         "AND AIR_TEMP > (SELECT AVG(AIR_TEMP) FROM station1 "
         "WHERE TSTAMP >= '2026-09-29' AND TSTAMP < '2026-09-30')",
         "station1",
@@ -234,3 +234,68 @@ def test_missing_measurement_sentinel_is_a_constant_without_a_table_read():
     for query in ["SELECT NULL AS unavailable FROM station1 LIMIT 1", "SELECT 72 AS unavailable"]:
         with pytest.raises(ProgrammingError):
             bounded_query(query, "station1", date_column="TSTAMP")
+
+
+@pytest.mark.parametrize("column", ["JULDATE", "TSTAMP", "Forecast_time"])
+@pytest.mark.parametrize(
+    "projection",
+    [
+        "AIR_TEMP",
+        "AIR_TEMP AS {column}",
+        "'2026-09-29' AS {column}, AIR_TEMP",
+        "YEAR({column}), AIR_TEMP",
+        "AVG(AIR_TEMP)",
+        "{column}, AVG(AIR_TEMP)",
+        "MIN({column}), AVG(AIR_TEMP)",
+        "MAX({column}), AVG(AIR_TEMP)",
+        "MIN(AIR_TEMP) AS source_start, MAX(AIR_TEMP) AS source_end, AVG(AIR_TEMP)",
+    ],
+)
+def test_missing_or_fabricated_source_dates_are_rejected(column, projection):
+    """Predicates, aliases and partial bounds cannot stand in for returned source dates."""
+    with pytest.raises(ProgrammingError, match="Include"):
+        bounded_query(
+            f"SELECT {projection.format(column=column)} FROM station1 WHERE {column} = '2026-09-29'",
+            "station1",
+            {column, "AIR_TEMP"},
+            date_column=column,
+        )
+
+
+@pytest.mark.parametrize("column", ["JULDATE", "TSTAMP", "Forecast_time"])
+@pytest.mark.parametrize(
+    "projection",
+    [
+        "s.{column} AS observed_at, AIR_TEMP",
+        "DATE(s.{column}), AIR_TEMP",
+        "CAST(s.{column} AS DATE), AIR_TEMP",
+        "MIN(s.{column}) AS source_start, MAX(s.{column}) AS source_end, ROUND(AVG(AIR_TEMP), 2)",
+        "MIN(DATE(s.{column})), MAX(DATE(s.{column})), SUM(AIR_TEMP)",
+    ],
+)
+def test_actual_source_dates_are_preserved(column, projection):
+    """Readings and aggregates retain returned date evidence for every weather source."""
+    sql = bounded_query(
+        f"SELECT {projection.format(column=column)} FROM station1 s WHERE s.{column} = '2026-09-29'",
+        "station1",
+        {column, "AIR_TEMP"},
+        date_column=column,
+    )
+    assert sql.endswith("LIMIT 200")
+    assert not date_only_query(sql, column)
+
+
+@pytest.mark.parametrize(
+    "projection",
+    ["JULDATE", "MAX(JULDATE) AS last_rain", "MIN(JULDATE), MAX(JULDATE)", "DATE(MAX(JULDATE))"],
+)
+def test_date_only_queries_need_no_extra_bounds_in_the_projection(projection):
+    """Date answers are intentional even when a measurement determines matching records."""
+    sql = bounded_query(
+        f"SELECT {projection} FROM station1daily WHERE JULDATE >= '2026-09-01' "
+        "AND JULDATE < '2026-10-01' AND SUM_PRECIP > 0",
+        "station1daily",
+        {"JULDATE", "SUM_PRECIP"},
+        date_column="JULDATE",
+    )
+    assert date_only_query(sql, "JULDATE")

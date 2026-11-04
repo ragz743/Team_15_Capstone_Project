@@ -3,7 +3,7 @@
 from datetime import datetime
 from decimal import Decimal
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import backend.workflow.workflow as graph_module
 from backend.databases._awn_connection_base import SchemaQueryResult
@@ -29,6 +29,12 @@ def make_graph(monkeypatch):
         "SELECT JULDATE, AVG_AIR_TEMP FROM station1daily WHERE JULDATE = '2026-09-29'",
         "At Pullman on 2026-09-29 the average temperature was 70.25 F.",
     ]
+    model.ainvoke = AsyncMock(side_effect=lambda messages: model.invoke(messages))
+
+    async def stream(messages):
+        yield await model.ainvoke(messages)
+
+    model.astream.side_effect = stream
     classifier = MagicMock()
     classifier.invoke_json.return_value = (
         '{"sub_queries":[{"query_type":"historical_weather","reworded_query":"Temperature on 2026-09-29"}]}'

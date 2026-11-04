@@ -48,7 +48,7 @@ class _FakeWorkflowChatbot(_BaseChatbot):
             messages=itertools.cycle(
                 [
                     _reply(
-                        f"SELECT air_temp FROM `{_TABLE}` "
+                        f"SELECT TSTAMP, Forecast_time, air_temp FROM `{_TABLE}` "
                         "WHERE TSTAMP >= '2026-10-30' AND TSTAMP < '2026-10-31' "
                         "AND Forecast_time >= '2026-10-30' AND Forecast_time < '2026-10-31'",
                         "vendor/sql-model",
@@ -71,6 +71,7 @@ def _workflow(sub_queries: list[QueryClassification]) -> ChatbotWorkflow:
     workflow.checkpointer = InMemorySaver()
     workflow._debug = False
     workflow._deadline = monotonic() + 90
+    workflow._schema_fetchers = {}
     workflow._query_handlers = {
         "current_weather": "_query_current",
         "forecast_weather": "_query_forecast",
@@ -137,5 +138,6 @@ def test_workflow_runs_outside_a_request_are_not_recorded() -> None:
     usage = RequestUsage()
     with metered(usage):
         pass
-    workflow.run("What is a dew point?", (46.73, -117.15), "whitman")
+    workflow.run_result("What is a dew point?", station_id=100093, reference_time=datetime(2026, 10, 30, tzinfo=UTC))
+    assert usage.calls == []
     assert usage.calls == []
