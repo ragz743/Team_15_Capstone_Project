@@ -482,6 +482,23 @@ def test_sub_queries_result_message_and_routing() -> None:
     assert [send.node for send in sends] == ["_query_current", "_query_miscellaneous"]
 
 
+def test_output_guardrail_accepts_numbers_from_multiple_evidence_rows() -> None:
+    """Allow summaries that combine supported measurements from multiple result rows."""
+    evidence = "(2026-09-01, 65)\n(2026-09-02, 68)\n(2026-09-03, 70)"
+
+    assert ChatbotWorkflow._output_guardrail_reason("The highs were 65, 68, and 70°F.", evidence) is None
+
+
+def test_output_guardrail_rejects_numbers_missing_from_evidence() -> None:
+    """Continue blocking numeric claims that do not occur in the query results."""
+    evidence = "(2026-09-01, 65)\n(2026-09-02, 68)"
+
+    assert (
+        ChatbotWorkflow._output_guardrail_reason("The highs were 65, 68, and 70°F.", evidence)
+        == "unsupported_numeric_claim"
+    )
+
+
 def test_summarize_streams_chunks_and_returns_assistant_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the streamed response identical to the collected answer."""
     chatbot = make_workflow()

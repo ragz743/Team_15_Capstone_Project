@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from abc import ABC, abstractmethod
 from types import TracebackType
-from typing import Any, ClassVar, Generator, NamedTuple, Self, Sequence, cast
+from typing import Any, ClassVar, Generator, NamedTuple, Self, Sequence
 
 from mysql import connector
 
@@ -76,11 +76,19 @@ class AWNDatabaseConnectionBase(ABC):
         self.conn.disconnect()
 
     def simple_query(self, sql_query: str, query_vars: Sequence[Any]) -> Generator[Sequence[Any]]:
-        """Make a simple query to the connected database."""
-        with self.conn.cursor() as cursor:
+        """Execute a query in a read-only transaction and yield its results."""
+        cursor = self.conn.cursor()
+
+        try:
+            cursor.execute("START TRANSACTION READ ONLY", ())
             cursor.execute(sql_query, query_vars)
-            while (row := cursor.fetchone()) is not None:
-                yield cast(Sequence[Any], row)
+            results = list(cursor)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+
+        yield from results
 
     def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
         """Query table schema given a table name."""

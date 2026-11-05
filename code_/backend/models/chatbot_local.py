@@ -32,12 +32,7 @@ class _LangchainChatbot(_BaseChatbot):
     async def ainvoke(self, messages: list[str]) -> str:
         """Asynchronously send messages to the local model and return the response."""
         response = await self._model.ainvoke(messages)
-        match response.content:
-            case str(msg):
-                return msg
-            case [*parts]:
-                return "\n".join(str(p) for p in parts)
-        return str(response.content)
+return self._content_to_str(response.content)
 
     @override
     def invoke(self, messages: list[str]) -> str:
