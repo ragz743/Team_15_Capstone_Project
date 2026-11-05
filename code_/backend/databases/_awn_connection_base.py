@@ -42,7 +42,7 @@ class AWNDatabaseConnectionBase(ABC):
     _DB_NAME: ClassVar[str]
     CONNECTION_TIMEOUT_SECONDS: ClassVar[int] = 30
 
-    def __init__(self) -> None:
+    def __init__(self, *, statement_timeout: int | None = None) -> None:
         """Create a new AWN Database Connection."""
         self.conn: connector.MySQLConnection = connector.MySQLConnection(
             user=os.getenv("AWN_DB_USER"),
@@ -50,7 +50,17 @@ class AWNDatabaseConnectionBase(ABC):
             host=os.getenv("AWN_DB_HOST"),
             database=self._DB_NAME,
             connection_timeout=self.CONNECTION_TIMEOUT_SECONDS,
+            read_timeout=statement_timeout + 2 if statement_timeout is not None else 60,
+            write_timeout=15,
         )
+        try:
+            with self.conn.cursor() as cursor:
+                if statement_timeout is not None:
+                    cursor.execute("SET SESSION max_statement_time = %s", (statement_timeout,))
+                cursor.execute("START TRANSACTION READ ONLY")
+        except Exception:
+            self.conn.disconnect()
+            raise
 
     def __enter__(self) -> Self:
         """Open the database connection using a context manager."""
@@ -81,7 +91,7 @@ class AWNDatabaseConnectionBase(ABC):
         yield from results
 
     def query_schema(self, table_name: str) -> list[SchemaQueryResult]:
-        """Return schema metadata for a table."""
+        """Query table schema given a table name."""
         cols = ", ".join(map(lambda s: s.upper(), SchemaQueryResult._fields))
         # column list is built from fixed field names, not user input, so inlining it is safe
         query_schema = f"""

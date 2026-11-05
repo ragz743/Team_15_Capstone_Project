@@ -11,7 +11,7 @@ import json
 import os
 import re
 
-import psycopg2
+import psycopg
 import pytest
 import requests
 from dotenv import load_dotenv
@@ -26,7 +26,7 @@ PG_USER = os.getenv("PG_USER", "awn")
 PG_PASSWORD = os.getenv("PG_PASSWORD", "changeme")
 
 # How much numeric difference is acceptable (in original units)
-# Note: F for temp, % for humidity, inches for percip, mph for wind
+# Units: F for temperature, % for humidity, inches for precipitation and mph for wind.
 TEMP_TOLERANCE = 3.0
 HUMIDITY_TOLERANCE = 5.0
 PRECIP_TOLERANCE = 0.1
@@ -34,7 +34,7 @@ WIND_TOLERANCE = 5.0
 
 
 def _pg_connect():
-    return psycopg2.connect(
+    return psycopg.connect(
         host=PG_HOST,
         port=PG_PORT,
         user=PG_USER,
@@ -66,10 +66,15 @@ def _has_indexed_data() -> bool:
             conn.close()
 
 
-def _chat(question: str) -> str:
+def _chat(question: str, record: dict) -> str:
+    metadata = record["metadata"]
+    try:
+        point = {"latitude": float(metadata["latitude"]), "longitude": -abs(float(metadata["longitude"]))}
+    except (KeyError, TypeError, ValueError):
+        pytest.skip("The indexed record has no usable map coordinates")
     response = requests.post(
         f"{BASE_URL}/api/chat",
-        json={"messages": [{"role": "user", "content": question}]},
+        json={"messages": [{"role": "user", "content": question}], "point": point},
         timeout=30,
     )
     assert response.status_code == 200, f"API error: {response.text}"
@@ -111,6 +116,7 @@ def _get_station_daily(station: str) -> dict | None:
         if conn is not None:
             conn.close()
 
+
 def _get_station_live(station: str) -> dict | None:
     try:
         conn = _pg_connect()
@@ -129,7 +135,7 @@ def _get_station_live(station: str) -> dict | None:
         conn.close()
         if not row:
             return None
-        return {"document": row[0], "metadata": json.loads(row[1])}
+        return {"document": row[0], "metadata": json.loads(row[1]) if isinstance(row[1], str) else row[1]}
     except Exception:
         return None
 
@@ -152,7 +158,7 @@ def _get_station_forecast(station: str) -> dict | None:
         conn.close()
         if not row:
             return None
-        return {"document": row[0], "metadata": json.loads(row[1])}
+        return {"document": row[0], "metadata": json.loads(row[1]) if isinstance(row[1], str) else row[1]}
     except Exception:
         return None
 
@@ -195,7 +201,7 @@ def test_daily_temperature_accuracy(station: str):
         pytest.skip(f"Could not parse temperature from daily document for {station}")
 
     question = f"What was the average temperature in {station} recently?"
-    reply = _chat(question)
+    reply = _chat(question, record)
 
     print(f"\nStation: {station}")
     print(f"DB value (avg_air_temp): {actual_temp}F")
@@ -226,7 +232,7 @@ def test_daily_humidity_accuracy(station: str):
         pytest.skip(f"Could not parse humidity from document for {station}")
 
     question = f"What was the average humidity in {station} recently?"
-    reply = _chat(question)
+    reply = _chat(question, record)
 
     print(f"\nStation: {station}")
     print(f"DB value (avg_humidity): {actual_humidity}%")
@@ -258,7 +264,7 @@ def test_live_temperature_accuracy(station: str):
         pytest.skip(f"Could not parse temperature from live document for {station}")
 
     question = f"What is the current temperature in {station}?"
-    reply = _chat(question)
+    reply = _chat(question, record)
 
     print(f"\nStation: {station}")
     print(f"DB value (live air_temp): {actual_temp}F")
@@ -290,7 +296,7 @@ def test_forecast_temperature_accuracy(station: str):
         pytest.skip(f"Could not parse temperature from forecast document for {station}")
 
     question = f"What is the temperature forecast for {station}?"
-    reply = _chat(question)
+    reply = _chat(question, record)
 
     print(f"\nStation: {station}")
     print(f"DB value (forecast air_temp): {actual_temp}F")

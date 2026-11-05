@@ -80,6 +80,43 @@ The E2E report contains the test results and details for each test.             
 
 If you have any questions or run into issues, feel free to ask!
 
+## PR 90 checks
+
+Run backend checks with local PostgreSQL and disposable schemas:
+
+```bash
+RUN_PGVECTOR_TESTS=1 pytest testing/backend \
+  --ignore=testing/backend/test_awn_connection.py \
+  --ignore=testing/backend/test_model_factory.py \
+  -k 'not test_nearest_station_search'
+```
+
+The excluded AWN connection and model factory checks require their configured external
+services. Run `npm test`, `npm run lint` and `npm run build` from `code_/frontend`.
+
+Controlled model outputs verify interpretation contracts and routing. They do not measure
+live language accuracy. Startup checks verify migration failure stops the API.
+
+For live interpretation and saved chat checks, select an available free model that supports
+structured output. For example:
+
+```bash
+OPENROUTER_CHAT_MODEL=dots-studio/dots-3-note-preview:free \
+OPENROUTER_HISTORY_MODEL=dots-studio/dots-3-note-preview:free \
+RUN_WEATHER_MODEL_TESTS=1 RUN_HISTORY_MODEL_TESTS=1 RUN_HISTORY_RUNTIME_TESTS=1 \
+pytest testing/e2e/test_weather_language.py \
+  testing/e2e/test_history_language.py testing/e2e/test_history_runtime.py
+```
+
+These checks send synthetic messages. The API checks use disposable PostgreSQL schemas
+and controlled weather records with live model interpretation and answer generation.
+They cover recall, saved location reuse, failed retrieval retries, reloads and ownership.
+They do not query the external AWN database. Provider failures remain failed checks.
+
+For browser checks, build the frontend and run
+`PYTHONPATH=code_:testing python testing/pr90_browser_fixture.py --env-file .env`.
+With Playwright and Chrome available, run `node testing/pr90_browser.cjs` in another
+terminal. The fixture uses a disposable PostgreSQL schema and removes it on shutdown.
 ## Logging
 Certain tests such as those in `workflow/test_workflow.py` utilize logging to track events during the program. To enable logging with pytest, make sure to add the correct flags. The following pytest call will enable logging (and overwrite the contents of the file in 'w' mode) and also show test output in stdout.
 ```Bash

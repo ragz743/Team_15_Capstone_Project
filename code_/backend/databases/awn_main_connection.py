@@ -10,9 +10,9 @@ class AWNDatabaseConnection(AWNDatabaseConnectionBase):
 
     _DB_NAME = "awn"
 
-    def __init__(self) -> None:
+    def __init__(self, **kwargs) -> None:
         """Init an AWNDatabaseConnection."""
-        super().__init__()
+        super().__init__(**kwargs)
 
     @override
     def format_table_name(self, station_id: int) -> str:

@@ -80,17 +80,6 @@ def test_chatbot_workflow(
                 location_coord=coords,
                 county=county,
             ):
-                # response = "".join(
-                #     [
-                #         chunk
-                #         async for chunk in workflow.run(
-                #             user_input,
-                #             location_coord=coords,
-                #             county=county,
-                #         )
-                #     ]
-                # )
-                # track time to first response chunk, not response finish
                 if not first_chunk_found:
                     elapsed_sec = (perf_counter_ns() - start_time_ns) / 1_000_000_000
                     total_elapsed_seconds += elapsed_sec

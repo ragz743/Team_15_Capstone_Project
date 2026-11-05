@@ -1,6 +1,7 @@
 """The base class for a chatbot model."""
 
 import asyncio
+import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 
@@ -32,7 +33,13 @@ class _BaseChatbot(ABC):
 
         msg = "invoke() cannot run inside an event loop; use 'await ainvoke(...)' instead"
         raise RuntimeError(msg)
-        
+
+    def invoke_json(self, instructions: str, payload: dict, schema: dict) -> str:
+        """Provide a JSON contract for local/test models that do not offer constrained decoding."""
+        prompt = instructions + "\nSchema:\n" + json.dumps(schema)
+        prompt += "\nInput JSON:\n" + json.dumps(payload, ensure_ascii=False, default=str)
+        return self.invoke([prompt])
+
     @staticmethod
     def _content_to_str(content: str | list) -> str:
         """Flatten a langchain message content (str or list of parts) into a single string."""
