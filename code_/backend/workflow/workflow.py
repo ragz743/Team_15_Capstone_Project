@@ -807,14 +807,10 @@ class ChatbotWorkflow:
             return "empty_response"
         if any(pattern.search(answer) for pattern in _INTERNAL_OUTPUT_PATTERNS):
             return "internal_data_or_raw_format"
-        evidence_rows = [
-            {Decimal(value).normalize() for value in _NUMBER_PATTERN.findall(row)}
-            for row in evidence.splitlines()
-            if row.strip()
-        ]
+        evidence_numbers = {Decimal(value).normalize() for value in _NUMBER_PATTERN.findall(evidence)}
         for sentence in re.split(r"(?<=[.!?])\s+", answer):
             sentence_numbers = {Decimal(value).normalize() for value in _NUMBER_PATTERN.findall(sentence)}
-            if sentence_numbers and not any(sentence_numbers.issubset(row) for row in evidence_rows):
+            if sentence_numbers and not sentence_numbers.issubset(evidence_numbers):
                 return "unsupported_numeric_claim"
         return None
 
