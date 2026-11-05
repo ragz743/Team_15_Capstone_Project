@@ -6,14 +6,21 @@ Run locally (from repo root, with venv active):
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
-from contextlib import asynccontextmanager
+import re
+from contextlib import asynccontextmanager, suppress
 from typing import Literal
 from uuid import UUID
 
 import dotenv
 import psycopg
+from backend.analytics import admin_api
+from backend.analytics.awn_reporter import AwnUsageReporter
+from backend.analytics.budget import BudgetConfig, BudgetMonitor
+from backend.analytics.metering import RequestStatus, RequestUsage
+from backend.analytics.usage_store import UsageStore, UsageTracker
 from backend.chat_service import ChatServiceError, SavedChatService
 from backend.conversation_context import ConversationContext
 from backend.conversation_store import (
@@ -39,7 +46,8 @@ logger = logging.getLogger("awn.api")
 logging.basicConfig(level=logging.INFO)
 
 # Keep the demo on the free router unless explicitly configured otherwise.
-_DEFAULT_CHAT_MODEL = "openrouter/free"
+_DEFAULT_CHAT_MODEL = "nvidia/nemotron-3.5-super-vl:free"
+_CLIENT_ID_PATTERN = re.compile(r"[A-Za-z0-9._@-]{1,64}")
 
 
 class ChatMessage(BaseModel):
@@ -119,6 +127,7 @@ _chatbot: _BaseChatbot | None = None
 _retriever: LangGraphEngine | None = None
 _chatbot_model_name: str = ""
 _embedding_model_name: str = ""
+_usage_tracker = UsageTracker(None)
 
 
 def _chat_model() -> str:
@@ -143,6 +152,38 @@ def _build_retriever() -> tuple[LangGraphEngine, _BaseChatbot, str, str]:
     return LangGraphEngine(chatbot, classifier), chatbot, model_name, ""
 
 
+def _build_usage_store() -> AwnUsageReporter | UsageStore | None:
+    """Where usage goes: the AgWeatherNet backend when AWN_BACKEND_URL is set, otherwise AWN's usage tables."""
+    if os.getenv("AWN_USAGE_TRACKING", "true").lower() == "false":
+        logger.info("Usage tracking disabled by AWN_USAGE_TRACKING")
+        return None
+
+    reporter = AwnUsageReporter.from_env()
+    if reporter is not None:
+        logger.info("Reporting usage to the AgWeatherNet backend at %s", reporter.base_url)
+        return reporter
+
+    store = UsageStore.from_env()
+    if store is None:
+        logger.warning("Usage tracking is off: set AWN_USAGE_DB_USER and AWN_USAGE_DB_PASSWORD (or AWN_BACKEND_URL)")
+    return store
+
+
+async def _hourly_budget_checks(monitor: BudgetMonitor) -> None:
+    """Check the monthly LLM budget now and then every hour."""
+    interval = int(os.getenv("AWN_BUDGET_CHECK_SECONDS") or 3600)
+    while True:
+        try:
+            await asyncio.to_thread(monitor.check)
+        except Exception:
+            logger.warning("Scheduled budget check failed, will retry next hour", exc_info=True)
+        await asyncio.sleep(interval)
+
+
+def _client_id(value: str | None) -> str | None:
+    return value if value is not None and _CLIENT_ID_PATTERN.fullmatch(value) else None
+
+
 def _latest_user_message(messages: list[ChatMessage]) -> str | None:
     for message in reversed(messages):
         if message.role == "user":
@@ -161,8 +202,12 @@ def _preceding_messages(messages: list[ChatMessage]) -> list[dict[str, str]]:
 async def lifespan(app: FastAPI):
     """Initialize shared model clients and the weather graph adapter."""
     global _chatbot, _retriever, _chatbot_model_name, _embedding_model_name
-    global _history_service
+    global _history_service, _usage_tracker
     dotenv.load_dotenv()
+    usage_store = _build_usage_store()
+    local_store = usage_store if isinstance(usage_store, UsageStore) else None
+    admin_api.set_usage_store(local_store)
+    _usage_tracker = UsageTracker(usage_store)
     try:
         model_name = os.getenv("OPENROUTER_HISTORY_MODEL", "").strip() or _chat_model()
         model = ChatbotOpenRouter(
@@ -181,7 +226,22 @@ async def lifespan(app: FastAPI):
         _retriever = None
         _chatbot_model_name = ""
         _embedding_model_name = ""
-    yield
+    budget_task = None
+    if local_store is not None:
+        # with AWN_BACKEND_URL the AgWeatherNet backend sends the budget alert instead
+        monitor = BudgetMonitor(local_store, BudgetConfig.from_env(), admin_api.dashboard_timezone())
+        budget_task = asyncio.create_task(_hourly_budget_checks(monitor))
+    try:
+        yield
+    finally:
+        if budget_task is not None:
+            budget_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await budget_task
+        if usage_store is not None:
+            await asyncio.to_thread(usage_store.close)
+        _usage_tracker = UsageTracker(None)
+        admin_api.set_usage_store(None)
 
 
 app = FastAPI(
@@ -199,6 +259,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+app.include_router(admin_api.router)
 
 
 def _retrieval_error(exc: BaseException) -> HTTPException:
@@ -326,7 +388,9 @@ def nearby_stations(payload: RequestedPoint, response: Response) -> StationList:
     return _station_catalog(response, payload)
 
 
-def _saved_chat(payload: SavedChatRequest, request: Request, response: Response) -> SavedChatResponse:
+def _saved_chat(
+    payload: SavedChatRequest, request: Request, response: Response, usage: RequestUsage
+) -> SavedChatResponse:
     question = payload.message.strip()
     if not question:
         raise HTTPException(status_code=400, detail="Please enter a weather related question.")
@@ -341,6 +405,7 @@ def _saved_chat(payload: SavedChatRequest, request: Request, response: Response)
         station_id=payload.station_id,
         mode=payload.mode or "weather",
     )
+    usage.record = not result.replayed
     return SavedChatResponse(
         **result.response(), conversation_id=payload.conversation_id, request_id=payload.request_id
     )
@@ -365,9 +430,38 @@ def health() -> dict[str, object]:
 @app.post("/api/chat", response_model=SavedChatResponse | ChatResponse)
 def chat(request: ChatRequest | SavedChatRequest, raw: Request, response: Response) -> SavedChatResponse | ChatResponse:
     """Endpoint for the frontend to send a conversation and receive a reply."""
-    if isinstance(request, SavedChatRequest):
-        return _saved_chat(request, raw, response)
+    user_id = _client_id(raw.headers.get("X-AWN-User-Id"))
+    # A login session has no meaning without its signed-in user.
+    session_id = _client_id(raw.headers.get("X-AWN-Session-Id")) if user_id else None
+    with _usage_tracker.track(user_id, session_id) as usage:
+        try:
+            if isinstance(request, SavedChatRequest):
+                result = _saved_chat(request, raw, response, usage)
+            else:
+                result = _answer(request, usage)
+            usage.status = "ok"
+            return result
+        except ChatServiceError as exc:
+            cause = exc.__cause__ or exc
+            usage.status = exc.reason if exc.reason in ("empty", "unavailable") else _failure_status(cause)
+            usage.error_type = type(cause).__name__
+            raise
+        except (ConversationNotFoundError, TurnConflictError):
+            usage.record = bool(usage.calls)
+            raise
+        except HTTPException as exc:
+            if 400 <= exc.status_code < 500:
+                usage.record = bool(usage.calls)
+            raise
+
+
+def _failure_status(exc: BaseException) -> RequestStatus:
+    return "rate_limited" if isinstance(exc, (RateLimitError, TooManyRequestsResponseError)) else "error"
+
+
+def _answer(request: ChatRequest, usage: RequestUsage) -> ChatResponse:
     if _retriever is None:
+        usage.status = "unavailable"
         raise HTTPException(
             status_code=503,
             detail="The weather service is temporarily unavailable. Please try again later.",
@@ -391,9 +485,12 @@ def chat(request: ChatRequest | SavedChatRequest, raw: Request, response: Respon
         )
     except Exception as exc:
         logger.error("Retriever invocation failed (%s)", type(exc).__name__)
+        usage.status = _failure_status(exc)
+        usage.error_type = type(exc).__name__
         raise _retrieval_error(exc) from exc
 
     if not reply.strip():
+        usage.status = "empty"
         raise HTTPException(
             status_code=502,
             detail="The weather service returned an empty answer. Please try again.",

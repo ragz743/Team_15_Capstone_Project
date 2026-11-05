@@ -34,16 +34,15 @@ npm run dev
 
 Open `http://localhost:5173` in the browser.
 
-## Map selection and saved chats
+## Station selection and saved chats
 
-Choose a map point to request weather. Only the selected point is plotted.
-Reopening a saved chat restores its point. A new map selection is sent as a location
-override until the server accepts it. Other messages use the saved context, so reusing
-an old location can update the map. Retrying a failed message sends its original input
-even if the map has changed. History recall can run without a selected point.
-The browser loads OpenStreetMap tiles through Leaflet.
+Choose a station to ask about its weather. Search by station name or county, or use
+your location to find nearby stations. Reopening a saved chat restores its station.
+A new selection overrides the saved location for the next message. Retrying a failed
+message sends its original input, even if the station selection has changed.
+History recall can run without a selected station.
 
-The workspace composes the sidebar, transcript, map and composer. Conversation state
+The workspace composes the sidebar, transcript, station picker and composer. Conversation state
 uses a reducer. Separate hooks handle history navigation and message submission.
 Request ownership prevents responses from an earlier chat from updating the active chat.
 

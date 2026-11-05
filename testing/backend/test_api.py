@@ -100,7 +100,12 @@ def test_chat_requires_user_message(monkeypatch) -> None:
 
 @pytest.mark.parametrize(
     ("setting", "expected"),
-    [(None, "openrouter/free"), ("", "openrouter/free"), ("  ", "openrouter/free"), ("custom/model", "custom/model")],
+    [
+        (None, "nvidia/nemotron-3.5-super-vl:free"),
+        ("", "nvidia/nemotron-3.5-super-vl:free"),
+        ("  ", "nvidia/nemotron-3.5-super-vl:free"),
+        ("custom/model", "custom/model"),
+    ],
 )
 def test_startup_uses_default_or_explicit_chat_setting(monkeypatch, setting, expected):
     """Start successfully with unset settings and preserve explicit overrides."""

@@ -53,9 +53,23 @@ class ChatbotOpenRouter(_BaseChatbot):
     async def ainvoke(self, messages: list[str]) -> str:
         """Asynchronously send messages to the model and return the response."""
         response = await self._model.ainvoke(messages)
+        return self._response_text(response.content)
 
+    def invoke(self, messages: list[str]) -> str:
+        """Send messages to the model with the sync client and return the response.
+
+        The base class runs ainvoke() in a new event loop per call, but the OpenRouter async client
+        stays bound to the first loop, so a second call on the same instance fails with
+        "Event loop is closed".
+        """
+        response = self._model.invoke(messages)
+        return self._response_text(response.content)
+
+    @staticmethod
+    def _response_text(content: str | list) -> str:
+        """Join a model response's content into one string."""
         all_responses: str = ""
-        match response.content:
+        match content:
             case [msgs]:
                 if isinstance(msgs, str):
                     all_responses = msgs

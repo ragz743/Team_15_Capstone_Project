@@ -1,0 +1,235 @@
+/*
+ * Layout, cards, buttons, tables, and alerts come from MUI (see theme.ts).
+ * This file only styles what MUI does not draw: the SVG charts, the WSU logo sizing, and a few helpers.
+ */
+
+/* Chart colors, validated for colorblind safety on the white card surface (dataviz palette). */
+:root {
+  --surface: #fff;
+  --ink: #29272a;
+  --ink-secondary: #5d585e;
+  --ink-muted: #777278;
+  --grid: #ebe8e9;
+  --axis: #c9c4c7;
+  --border: #eee9eb;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+}
+
+::selection {
+  background: #ecd0d6;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+code {
+  font-size: 0.92em;
+}
+
+.muted {
+  color: var(--ink-muted);
+}
+
+/* ---------- WSU logo (the file has transparent padding, scaled up as in the chat app) ---------- */
+
+.wsu-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  flex-shrink: 0;
+  transform: scale(1.55);
+}
+
+.brand-mark {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  flex-shrink: 0;
+}
+
+.university-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+}
+
+.gate-mark {
+  width: 56px;
+  height: 56px;
+}
+
+/* ---------- table cells ---------- */
+
+.user-id {
+  display: inline-block;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 12px;
+}
+
+.wrap-cell {
+  display: inline-block;
+  max-width: 560px;
+  white-space: normal;
+}
+
+/* ---------- charts ---------- */
+
+.chart {
+  position: relative;
+  width: 100%;
+  min-height: 216px; /* plot plus x-axis band */
+}
+
+.chart svg {
+  display: block;
+  overflow: visible;
+  touch-action: pan-y;
+}
+
+.chart svg:focus-visible {
+  outline: 2px solid #981e32;
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+.grid-line {
+  stroke: var(--grid);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.axis-line {
+  stroke: var(--axis);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.axis-text {
+  fill: var(--ink-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.end-label {
+  fill: var(--ink-secondary);
+  font-size: 11px;
+}
+
+.target-line {
+  stroke: var(--ink-muted);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+
+.target-label {
+  fill: var(--ink-secondary);
+  font-size: 11px;
+}
+
+.column {
+  transition: opacity 120ms ease;
+}
+
+.column-dimmed {
+  opacity: 0.45;
+}
+
+.series-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.series-dot {
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+
+.crosshair {
+  stroke: var(--axis);
+  stroke-width: 1;
+}
+
+.chart-empty {
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  text-align: center;
+}
+
+.rect-key {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.line-key {
+  display: inline-block;
+  width: 14px;
+  height: 2px;
+  border-radius: 1px;
+  flex-shrink: 0;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 4px;
+  pointer-events: none;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  font-size: 12px;
+  z-index: 2;
+}
+
+.chart-tooltip-title {
+  color: var(--ink-secondary);
+  margin-bottom: 4px;
+}
+
+.chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chart-tooltip-row strong {
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.chart-tooltip-label {
+  color: var(--ink-secondary);
+}
+
+.chart-tooltip-total {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--grid);
+  padding-left: 20px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+  }
+}

@@ -1,4 +1,5 @@
 import { API_BASE, ApiError, jsonPost, requestJson } from "./http.ts";
+import { chatIdentityHeaders } from "./chatIdentity.ts";
 import {
   isChatReply,
   isConversation,
@@ -51,6 +52,7 @@ export async function sendChat(
     "/api/chat",
     {
       ...jsonPost({ messages: recentChatMessages(messages), ...(point ? { point } : {}) }, signal),
+      headers: { "Content-Type": "application/json", ...chatIdentityHeaders() },
       credentials: "same-origin",
     },
     isChatReply,
@@ -77,8 +79,11 @@ export function sendSavedChat(
 ): Promise<SavedChatResponse> {
   return requestJson(
     "/api/chat",
-    jsonPost({ conversation_id: conversationId, request_id: requestId, message, mode,
-      ...(point ? { point } : {}), ...(stationId ? { station_id: stationId } : {}) }, signal),
+    {
+      ...jsonPost({ conversation_id: conversationId, request_id: requestId, message, mode,
+        ...(point ? { point } : {}), ...(stationId ? { station_id: stationId } : {}) }, signal),
+      headers: { "Content-Type": "application/json", ...chatIdentityHeaders() },
+    },
     (value): value is SavedChatResponse =>
       isSavedReply(value) &&
       value.conversation_id === conversationId &&

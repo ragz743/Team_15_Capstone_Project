@@ -44,6 +44,7 @@ class ChatCompletion:
     answer: AnsweredTurn
     model: str
     context: ConversationContext
+    replayed: bool = False
 
     def response(self) -> dict:
         """Project the saved result without exposing internal attempts or evidence."""
@@ -112,6 +113,7 @@ class SavedChatService:
             ),
             result["model"],
             turn.context,
+            replayed=True,
         )
 
     def _prepare(
