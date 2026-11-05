@@ -146,12 +146,3 @@ def test_session_header_without_a_user_does_not_invent_a_login(chat_usage):
     assert f.client.post("/api/chat", json=f.payload, headers={"X-AWN-Session-Id": "orphan"}).status_code == 200
     usage = f.recorder.record.call_args.args[0]
     assert usage.user_id is None and usage.session_id is None and len(usage.calls) == 1
-
-
-def test_sql_workflow_does_not_publish_an_index_quality_score(monkeypatch):
-    """An incompatible sampler must not publish a fabricated zero or success rate."""
-    monkeypatch.setattr(api, "_retriever", SimpleNamespace())
-    store = MagicMock()
-    api._check_quality_if_due(store)
-    store.record_quality_run.assert_not_called()
-    store.latest_quality_run_at.assert_not_called()

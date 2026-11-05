@@ -1,9 +1,9 @@
 """Fill the usage tables with synthetic traffic so the admin dashboard can be previewed.
 
 Generates signed-in users (signing in is required to use the chatbot) with 2 day login sessions, the
-LangGraph workflow's chat requests for each question (classifier, SQL, summary), and a daily retrieval
-quality check. Rows are flagged is_demo: the dashboard shows a "Demo data" badge while any
-are in range, and demo spending never counts toward the monthly budget alert.
+LangGraph workflow's chat requests for each question (classifier, SQL, summary). Rows are flagged
+is_demo: the dashboard shows a "Demo data" badge while any are in range, and demo spending never counts
+toward the monthly budget alert.
 
 It is a development tool, not part of the running chatbot. From the repository root:
 
@@ -12,7 +12,6 @@ It is a development tool, not part of the running chatbot. From the repository r
 """
 
 import argparse
-import json
 import math
 import random
 import uuid
@@ -20,7 +19,6 @@ from contextlib import closing
 from datetime import UTC, datetime, timedelta
 
 import dotenv
-from backend.analytics.retrieval_quality import load_samples
 from backend.analytics.usage_store import UsageDatabaseConfig
 
 # made up prices for the demo chat model, USD per 1M tokens, so cost charts have something to show
@@ -35,16 +33,11 @@ _WORKFLOW_STEPS = (
 _SESSION_LENGTH = timedelta(days=2)  # login sessions expire after 2 days
 
 
-def _clear(conn) -> tuple[int, int]:
+def _clear(conn) -> int:
     # a request's model calls are deleted with it (ON DELETE CASCADE)
     with closing(conn.cursor()) as cur:
-        conn.start_transaction()
         cur.execute("DELETE FROM table_llm_usage_requests WHERE is_demo = 1")
-        requests = cur.rowcount
-        cur.execute("DELETE FROM table_llm_usage_quality_runs WHERE is_demo = 1")
-        runs = cur.rowcount
-        conn.commit()
-    return requests, runs
+        return cur.rowcount
 
 
 def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
@@ -53,7 +46,6 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
     requests, calls = [], []
 
     sessions: dict[str, tuple[str, datetime]] = {}  # user -> (login session id, expires at)
-    quality_runs = []
 
     def login_session(user: str, at: datetime) -> str:
         """Reuse the user's login session until it expires, then log them in again."""
@@ -84,8 +76,6 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
             for _ in range(rng.choices([1, 2, 3], weights=[70, 22, 8])[0]):
                 visit(user, day_start, incident)
 
-        quality_runs.append(_quality_run(day_start + timedelta(hours=10), incident, rng))
-
     with closing(conn.cursor()) as cur:
         conn.start_transaction()
         cur.executemany(
@@ -99,11 +89,6 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
             " VALUES (%s, %s, 'chat', %s, %s, %s, %s, %s, 1, 1, %s, %s)",
             calls,
         )
-        cur.executemany(
-            "INSERT INTO table_llm_usage_quality_runs (run_at, samples, passed, details, is_demo)"
-            " VALUES (%s, %s, %s, %s, 1)",
-            quality_runs,
-        )
         conn.commit()
     return len(requests)
 
@@ -111,26 +96,6 @@ def _seed(conn, days: int, max_daily_users: int, rng: random.Random) -> int:
 def _naive(moment: datetime) -> datetime:
     """UTC without a timezone, as the DATETIME columns store it."""
     return moment.astimezone(UTC).replace(tzinfo=None)
-
-
-def _quality_run(run_at: datetime, incident: bool, rng: random.Random) -> tuple:
-    """Build one daily retrieval quality check: most sample questions pass, fewer on a bad provider day."""
-    samples = load_samples()
-    misses = rng.choices([0, 1, 2], weights=[55, 35, 10])[0] + (rng.randint(2, 4) if incident else 0)
-    missed = set(rng.sample(range(len(samples)), min(misses, len(samples))))
-    details = [
-        {
-            "question": sample.question,
-            "source": sample.source,
-            "expected": sample.station,
-            "passed": i not in missed,
-            # like the real check: what the workflow read, or the right kind of data with no records
-            "found": [f"{sample.source}: {0 if i in missed else rng.randint(1, 7)} rows"],
-            "error": None,
-        }
-        for i, sample in enumerate(samples)
-    ]
-    return (_naive(run_at), len(samples), len(samples) - len(missed), json.dumps(details))
 
 
 def _add_request(requests: list, calls: list, user, session, started, incident: bool, rng) -> None:
@@ -179,8 +144,7 @@ def main() -> None:
 
     with closing(config.connect(timeout=10)) as conn:
         if args.clear:
-            requests, runs = _clear(conn)
-            print(f"Removed {requests} demo calls and {runs} demo quality checks.")
+            print(f"Removed {_clear(conn)} demo calls.")
             return
         created = _seed(conn, args.days, args.users, random.Random(args.seed))
         print(f"Added {created} demo calls over {args.days} days. Remove them with --clear.")

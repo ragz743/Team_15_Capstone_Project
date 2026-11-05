@@ -7,7 +7,6 @@ import ChartCard from "./ChartCard";
 import ColumnChart from "./ColumnChart";
 import DataTable from "./DataTable";
 import LineChart from "./LineChart";
-import QualityPanel from "./QualityPanel";
 import StatTile from "./StatTile";
 import UserCostTable from "./UserCostTable";
 import type { Series } from "./chartUtils";
@@ -32,7 +31,6 @@ const count = (v: number | null) => formatCount(v);
 const msAxis = (v: number) => (v === 0 ? "0" : formatMs(v));
 const percentAxis = (v: number) => `${Number((v * 100).toFixed(1))}%`;
 const usdAxis = (v: number) => (v === 0 ? "$0" : formatUsd(v));
-const runDay = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" });
 
 function SectionHeading({ id, children }: { id: string; children: ReactNode }) {
   return (
@@ -82,13 +80,11 @@ function TableCard({ id, title, subtitle, children }: { id: string; title: strin
 type DashboardProps = { metrics: Metrics; range: RangeKey; token: string; refreshCount: number };
 
 export default function Dashboard({ metrics, range: rangeKey, token, refreshCount }: DashboardProps) {
-  const { summary, previous, series, range, quality } = metrics;
+  const { summary, previous, series, range } = metrics;
   const period = periodLabels[range.days] ?? `${range.days} days`;
   const unit = range.bucket;
   const empty = summary.calls === 0;
   const target = formatMs(metrics.target_ms);
-  const latestQuality = quality.latest;
-  const previousRun = quality.runs.length > 1 ? quality.runs[quality.runs.length - 2] : null;
 
   const categories = series.map((p) => formatBucket(p.bucket, unit));
   const ticks = series.map((p) => formatBucketTick(p.bucket, unit));
@@ -132,19 +128,6 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
             upIsGood
             periodLabel={period}
             hint={`${formatCount(summary.successful_sessions)} of ${formatCount(summary.sessions)} login sessions`}
-          />
-          <StatTile
-            label="Retrieval quality"
-            value={formatPercent(latestQuality?.score)}
-            current={latestQuality?.score ?? null}
-            previous={previousRun?.score ?? null}
-            upIsGood
-            periodLabel="check"
-            hint={
-              latestQuality
-                ? `${latestQuality.passed} of ${latestQuality.samples} sample questions · ${runDay.format(new Date(latestQuality.run_at))}`
-                : "No check has run yet"
-            }
           />
           <StatTile
             label="Calls"
@@ -259,11 +242,6 @@ export default function Dashboard({ metrics, range: rangeKey, token, refreshCoun
         <SectionHeading id="users-cost-heading">Cost per user</SectionHeading>
         {/* keyed by range so paging restarts at the first page when the range changes */}
         <UserCostTable key={rangeKey} range={rangeKey} token={token} refreshCount={refreshCount} periodLabel={period} />
-      </section>
-
-      <section aria-labelledby="quality-heading">
-        <SectionHeading id="quality-heading">Retrieval quality</SectionHeading>
-        <QualityPanel quality={quality} />
       </section>
 
       <section aria-labelledby="cost-heading">

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { formatBucket, formatBucketTick, formatCount, formatMs, formatPercent, formatUsd, relativeChange } from "../src/format.ts";
+import { formatBucket, formatBucketTick, formatCount, formatMs, formatPercent, formatUsd, relativeChange } from "../../code_/dashboard/src/format.ts";
 
 test("formats dollars with enough precision for sub-cent call costs", () => {
   assert.equal(formatUsd(null), "—");

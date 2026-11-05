@@ -30,7 +30,7 @@ export default function TokenGate({ error, checking, onSubmit }: TokenGateProps)
                 AgWeatherNet admin
               </Typography>
               <Typography variant="body2" color="text.secondary">
-                Sign in to view users, retrieval quality, spending, and performance.
+                Sign in to view users, spending, and performance.
               </Typography>
             </Box>
             <TextField

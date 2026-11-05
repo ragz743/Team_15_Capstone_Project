@@ -8,11 +8,11 @@
     ],
     "strict": true,
     "noEmit": false,
-    "rootDir": ".",
+    "rootDir": "../..",
     "outDir": "./.test-build",
     "rewriteRelativeImportExtensions": true
   },
   "include": [
-    "tests"
+    "../../testing/dashboard"
   ]
 }

@@ -6,7 +6,6 @@ import json
 import threading
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from unittest.mock import MagicMock
 
 import backend.api as api
 import pytest
@@ -23,7 +22,6 @@ class _FakeBackend:
         self.requests: list[tuple[str, str, dict | None, str | None]] = []
         self.fail_first = fail_first
         self.reject = reject
-        self.latest: str | None = "2026-10-26T05:26:45.054Z"
         backend = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -43,8 +41,6 @@ class _FakeBackend:
                     payload = {"status": 0, "error": "unauthorized"}
                 elif backend.reject:
                     payload = {"status": 0, "error": "status must be ok, empty, error, rate_limited, or unavailable"}
-                elif self.path.endswith("/quality-runs/latest"):
-                    payload = {"status": 1, "data": {"run_at": backend.latest}}
                 else:
                     payload = {"status": 1, "data": {}}
                 data = json.dumps(payload).encode()
@@ -141,9 +137,10 @@ def test_rejected_reports_are_not_retried() -> None:
     try:
         reporter = AwnUsageReporter(server.url, "k3y")
         with pytest.raises(AwnBackendError):
-            reporter.record_quality_run(3, 2, [])
+            reporter._with_retries(lambda: reporter._request("POST", "/requests", reporter.request_body(_usage())))
+        reporter.record(_usage())  # the sender thread logs the rejection instead of retrying
         reporter.close()
-        assert len(server.requests) == 1
+        assert len(server.requests) == 2
     finally:
         server.close()
 
@@ -154,21 +151,6 @@ def test_unreachable_backend_never_fails_the_chat_request() -> None:
     with UsageTracker(reporter).track("jdoe", None) as usage:
         usage.status = "ok"
     reporter.close()
-
-
-def test_quality_runs_are_sent_and_scheduled_from_the_backend(backend: _FakeBackend) -> None:
-    """Quality runs go to the backend, and its latest run time decides when the next check is due."""
-    reporter = AwnUsageReporter(backend.url, "k3y")
-    reporter.record_quality_run(3, 2, [{"question": "q", "passed": True}])
-    assert reporter.latest_quality_run_at() == datetime(2026, 10, 26, 5, 26, 45, 54000, tzinfo=UTC)
-    backend.latest = None
-    assert reporter.latest_quality_run_at() is None
-    reporter.close()
-
-    method, path, body, _ = backend.requests[0]
-    assert (method, path) == ("POST", "/api/v1/internal/llm-usage/quality-runs")
-    assert body is not None
-    assert (body["samples"], body["passed"], body["is_demo"]) == (3, 2, False)
 
 
 def test_api_reports_to_agweathernet_when_configured(monkeypatch: MonkeyPatch) -> None:
@@ -188,15 +170,3 @@ def test_chat_accepts_awn_usernames(monkeypatch: MonkeyPatch) -> None:
     assert api._client_id("j.doe@wsu.edu") == "j.doe@wsu.edu"
     assert api._client_id("has spaces") is None
     assert api._client_id("x" * 65) is None
-
-
-def test_quality_check_uses_the_reporter_schedule(monkeypatch: MonkeyPatch) -> None:
-    """The hourly quality check works the same with the reporter as with the local store."""
-    reporter = MagicMock(spec=AwnUsageReporter)
-    reporter.latest_quality_run_at.return_value = None
-    engine = MagicMock()
-    engine.sample_executions.return_value = []
-    monkeypatch.setattr(api, "_retriever", engine)
-    monkeypatch.setattr("backend.analytics.retrieval_quality.load_samples", lambda: [])
-    api._check_quality_if_due(reporter)
-    reporter.record_quality_run.assert_called_once_with(0, 0, [], calls=[])

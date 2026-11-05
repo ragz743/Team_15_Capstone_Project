@@ -214,7 +214,6 @@ def test_metrics_aggregate_calls_users_sessions_and_latency(store: UsageStore) -
         ("paid/sql", "billed"),
     }
     assert not metrics["includes_demo_data"]
-    assert metrics["quality"] == {"runs": [], "latest": None}
     assert metrics["budget"]["spent_usd"] == pytest.approx(5 * call_cost)  # October so far
 
 
@@ -230,18 +229,6 @@ def test_metrics_series_granularity(store: UsageStore, bucket: str, expected: in
     assert sum(point["calls"] for point in series) == 2
     if bucket == "month":
         assert [(p["bucket"], p["users"]) for p in series] == [("2026-09-01", 1), ("2026-10-01", 1)]
-
-
-def test_quality_runs_appear_in_metrics(store: UsageStore) -> None:
-    """Saved retrieval quality runs are listed, with the latest run's question by question details."""
-    details = [{"question": "q", "source": "current", "expected": "Pullman", "passed": True, "found": ["Pullman"]}]
-    store.record_quality_run(samples=4, passed=3, details=details)
-
-    quality = store.metrics(7, _TZ)["quality"]
-
-    assert [(run["samples"], run["passed"], run["score"]) for run in quality["runs"]] == [(4, 3, 0.75)]
-    assert quality["latest"]["details"] == details
-    assert store.latest_quality_run_at() is not None
 
 
 def test_budget_alert_is_claimed_once_per_month(store: UsageStore) -> None:
@@ -267,16 +254,6 @@ def test_month_spend_ignores_demo_data(store: UsageStore) -> None:
     store.record(_request("u1", "s1", 1, "ok", 100))
     _execute(store, "UPDATE table_llm_usage_requests SET is_demo = 1")
     assert store.month_spend(_TZ, now=_NOW)[1] == 0.0
-
-
-def test_quality_checks_are_not_user_requests(store: UsageStore) -> None:
-    """A quality check is stored on its own; it adds no calls, and (no cost column) no spending."""
-    store.record(_request("u1", "s1", 1, "ok", 100))
-    before = store.month_spend(_TZ, now=_NOW)[1]
-    call = LlmCall(model="paid/chat", called_at=_NOW, input_tokens=1_000, output_tokens=250, cost_usd=0.002)
-    store.record_quality_run(samples=1, passed=1, details=[], calls=[call])
-    assert store.month_spend(_TZ, now=_NOW)[1] == pytest.approx(before)
-    assert store.metrics(7, _TZ, now=_NOW)["summary"]["calls"] == 1  # still one user request
 
 
 def test_month_spend_uses_the_dashboard_timezone(store: UsageStore) -> None:

@@ -98,7 +98,7 @@ def metrics(
     range: Annotated[RangeKey, Query()] = "30d",
     bucket: BucketParam = None,
 ) -> dict[str, Any]:
-    """Return user, quality, cost, and performance metrics for the selected range."""
+    """Return user, cost, and performance metrics for the selected range."""
     result = _load_metrics(store, range, bucket)
     budget = BudgetConfig.from_env()
     result["budget"]["email_configured"] = budget.email_configured

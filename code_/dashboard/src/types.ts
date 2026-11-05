@@ -50,23 +50,6 @@ export type SeriesPoint = {
   within_target_rate: number | null;
 };
 
-export type QualityRun = {
-  run_at: string;
-  samples: number;
-  passed: number;
-  score: number | null;
-  is_demo: boolean;
-};
-
-export type QualityDetail = {
-  question: string;
-  source: "current" | "historical" | "forecast";
-  expected: string;
-  passed: boolean;
-  found: string[];
-  error: string | null;
-};
-
 export type Budget = {
   month: string;
   threshold_usd: number;
@@ -100,7 +83,6 @@ export type Metrics = {
   series: SeriesPoint[];
   by_model: ModelRow[];
   by_status: { status: string; requests: number }[];
-  quality: { runs: QualityRun[]; latest: (QualityRun & { details: QualityDetail[] }) | null };
   budget: Budget;
 };
 

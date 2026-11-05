@@ -1,15 +1,14 @@
 # AWN admin dashboard
 
-An admin-only page for tracking the AgWeatherNet weather assistant's users, retrieval quality, LLM spending,
-and performance. It is served at `/admin/` alongside the chat app, which will run on an AWS EC2 instance, and
+An admin-only page for tracking the AgWeatherNet weather assistant's users, LLM spending, and
+performance. It is served at `/admin/` alongside the chat app, which will run on an AWS EC2 instance, and
 reads from the `/api/admin/*` endpoints.
 
 | Section | What it shows |
 | --- | --- |
-| Overview | Active users, successful sessions, retrieval quality, calls, share answered within 5 s, LLM spending, cost per 1,000 calls, failed calls; each compared with the previous period |
+| Overview | Active users, successful sessions, calls, share answered within 5 s, LLM spending, cost per 1,000 calls, failed calls; each compared with the previous period |
 | Users and sessions | Active users and successful sessions per day, week, or month |
 | Cost per user | Every logged-in user's calls, sessions, tokens, and spending: searchable, sortable, CSV export |
-| Retrieval quality | Score of each daily sample check through the LangGraph workflow, and the latest check question by question |
 | Spending | Month-to-date spending against the $50 budget, spending and calls over time, spending by model |
 | Query performance | Response time against the 5 s target, share answered within 5 s, failed calls, calls by outcome |
 
@@ -30,7 +29,6 @@ chart has a table view, the page refreshes its data every hour, and **Export CSV
 | Successful session | A session in which every call was answered |
 | Call | One attempt to answer a question. Each call can make several model requests; reopening a saved answer adds no usage |
 | LLM spending | Real spending on model requests only (no hosting, no projections). OpenRouter's free models cost $0 |
-| Retrieval quality | Share of a fixed sample of questions for which the right weather data was found, checked daily rather than on every call |
 | Response time target | Under 5 seconds, end to end |
 | Budget | Email weather@wsu.edu once a month's real spending passes $50 |
 
@@ -41,7 +39,6 @@ created (a copy of their definitions is in `backend/analytics/schema.sql`; the A
 
 - `table_llm_usage_requests`: one row per call with its user ID, login session ID, response time, and outcome
 - `table_llm_usage_model_calls`: one row per model request with its model, tokens, and cost
-- `table_llm_usage_quality_runs`: one row per retrieval quality check
 - `table_llm_usage_budget_alerts`: one row per month once spending passes the budget, so the email goes out once
 
 Chat model requests are captured with a LangChain callback, including the LangGraph classifier, query
@@ -122,24 +119,6 @@ Spending is the cost OpenRouter reports in each response
 price list to keep up to date. Free models are reported as $0. A request whose provider reports no cost is
 counted as $0 and the dashboard warns that spending may be understated.
 
-### Retrieval quality
-
-The API runs the check once a day (whenever the last run is over 24 hours old). It asks each question in
-[`backend/analytics/retrieval_samples.yaml`](../backend/analytics/retrieval_samples.yaml) at its station
-through the same LangGraph workflow as the chat endpoint, and passes it when the workflow queried the
-expected kind of data (current, historical, or forecast) and got records back. A model error, a question
-classified as the wrong kind, or a query that returns no records counts as a miss, and the dashboard shows
-what the chatbot queried for each question.
-
-Each question makes about three chat model requests, so the questions are 10 seconds apart to stay under
-OpenRouter's free-model rate limit. These requests are not recorded as chat usage. Keep the sample in step
-with the active stations. To run it now:
-
-```sh
-python -m scripts.evaluate_retrieval            # evaluate and save
-python -m scripts.evaluate_retrieval --dry-run  # print results only
-```
-
 ### Budget alert
 
 Every hour the API compares this month's real spending (demo data excluded) with the budget. Once it passes,
@@ -155,13 +134,12 @@ only sent once SMTP is configured** (see below).
 | `AWN_ADMIN_TOKEN` | unset | Placeholder login until the dashboard uses the AWN website's admin sign-in (see open items below): admins type this value to sign in. Any value works; the project `.env` uses a dummy one. The dashboard is disabled until this is set |
 | `AWN_DASHBOARD_TIMEZONE` | `America/Los_Angeles` | Timezone for days, months, and the monthly budget |
 | `AWN_RESPONSE_TARGET_MS` | `5000` | Response time target |
-| `AWN_QUALITY_CHECK_HOURS` | `24` | How often the retrieval quality check runs |
 | `AWN_MONTHLY_BUDGET_USD` | `50` | Monthly spending that triggers the alert |
 | `AWN_BUDGET_ALERT_EMAIL` | `weather@wsu.edu` | Alert recipients (comma separated) |
 | `AWN_SMTP_HOST`, `AWN_SMTP_PORT`, `AWN_SMTP_USERNAME`, `AWN_SMTP_PASSWORD`, `AWN_SMTP_FROM`, `AWN_SMTP_STARTTLS` | unset, `587`, unset, unset, unset, `true` | Mail server for the budget alert. Optional: set `AWN_SMTP_HOST` and `AWN_SMTP_FROM` together, and `AWN_SMTP_USERNAME` and `AWN_SMTP_PASSWORD` together. These and the budget settings are checked when the API starts |
 | `AWN_DASHBOARD_URL` | unset | Link included in the alert email |
 | `AWN_USAGE_TRACKING` | `true` | Set to `false` to stop recording usage |
-| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | unset | When both are set, usage and quality checks are sent to the AgWeatherNet backend (awn_be_v2 `/api/v1/internal/llm-usage/*`) instead of the usage tables. Its admin dashboard (LLM Usage tab) and monthly budget alert then replace this dashboard and the email settings above |
+| `AWN_BACKEND_URL`, `AWN_INTERNAL_KEY` | unset | When both are set, usage is sent to the AgWeatherNet backend (awn_be_v2 `/api/v1/internal/llm-usage/*`) instead of the usage tables. Its admin dashboard (LLM Usage tab) and monthly budget alert then replace this dashboard and the email settings above |
 
 ## Running locally
 
@@ -177,10 +155,10 @@ VITE_API_TARGET=http://127.0.0.1:8000 npm run dev   # http://localhost:5173/
 # dashboard (from code_/dashboard/)
 npm ci
 VITE_API_TARGET=http://127.0.0.1:8000 npm run dev   # http://localhost:5174/admin/
-npm test
+npm test   # runs testing/dashboard/*.test.ts
 ```
 
-To preview with synthetic data (signed-in users with 2 day sessions and daily quality checks, all labelled
+To preview with synthetic data (signed-in users with 2 day sessions, all labelled
 "Includes demo data" and never counted toward the budget):
 
 ```sh
@@ -198,6 +176,5 @@ The dashboard is deployed with the rest of the app on an **AWS EC2 instance** (s
 | Mail server for the budget alert | **Later**, once there is access to the AWS EC2 repo: set the `AWN_SMTP_*` settings there. Until then the dashboard warns that alerts are not set up. On EC2, Amazon SES's SMTP interface works with these settings |
 | Admin sign-in | **Later**, once there is access to the AWS EC2 repo. A shared token (`AWN_ADMIN_TOKEN`) until then |
 | Usage database account | **Needed from AgWeatherNet**: an account for `AWN_USAGE_DB_*` with `SELECT, INSERT, UPDATE` on the `awn.table_llm_usage_*` tables (the chatbot's account is read only) |
-| Quality check cost | `table_llm_usage_quality_runs` has no cost column, so the daily check's model cost is not counted toward the budget. Adding a `cost_usd DECIMAL(16,10) NOT NULL DEFAULT 0` column would allow it |
 | Users who have not used the chatbot | Needs the total number of signed-in website users (e.g. from the site's login system or GA4) |
 | User satisfaction (thumbs up / down) | Not built; needs a feedback button in the chat app |

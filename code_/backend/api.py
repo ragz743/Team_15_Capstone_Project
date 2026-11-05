@@ -11,12 +11,12 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager, suppress
-from typing import Literal, cast
+from typing import Literal
 from uuid import UUID
 
 import dotenv
 import psycopg
-from backend.analytics import admin_api, retrieval_quality
+from backend.analytics import admin_api
 from backend.analytics.awn_reporter import AwnUsageReporter
 from backend.analytics.budget import BudgetConfig, BudgetMonitor
 from backend.analytics.metering import RequestStatus, RequestUsage
@@ -169,32 +169,14 @@ def _build_usage_store() -> AwnUsageReporter | UsageStore | None:
     return store
 
 
-def _check_quality_if_due(store: AwnUsageReporter | UsageStore) -> None:
-    """Run the sampled retrieval quality check when the last run is older than AWN_QUALITY_CHECK_HOURS (24)."""
-    every_hours = float(os.getenv("AWN_QUALITY_CHECK_HOURS") or 24)
-    ask = getattr(_retriever, "sample_executions", None)  # the LangGraph engine
-    if every_hours <= 0 or not callable(ask):
-        return
-    if not retrieval_quality.is_due(store.latest_quality_run_at(), every_hours):
-        return
-    run = retrieval_quality.run_and_record(
-        cast(retrieval_quality.AskStation, ask), store, pause_seconds=retrieval_quality.SCHEDULED_PAUSE_SECONDS
-    )
-    logger.info("Retrieval quality check: %d of %d sample questions found the right data", run.passed, run.samples)
-
-
-async def _hourly_checks(monitor: BudgetMonitor | None, store: AwnUsageReporter | UsageStore) -> None:
-    """Check the monthly LLM budget (local store only) and the retrieval quality schedule now and then every hour."""
+async def _hourly_budget_checks(monitor: BudgetMonitor) -> None:
+    """Check the monthly LLM budget now and then every hour."""
     interval = int(os.getenv("AWN_BUDGET_CHECK_SECONDS") or 3600)
-    checks = [lambda: _check_quality_if_due(store)]
-    if monitor is not None:
-        checks.insert(0, monitor.check)
     while True:
-        for check in checks:
-            try:
-                await asyncio.to_thread(check)
-            except Exception:
-                logger.warning("Scheduled dashboard check failed, will retry next hour", exc_info=True)
+        try:
+            await asyncio.to_thread(monitor.check)
+        except Exception:
+            logger.warning("Scheduled budget check failed, will retry next hour", exc_info=True)
         await asyncio.sleep(interval)
 
 
@@ -245,11 +227,10 @@ async def lifespan(app: FastAPI):
         _chatbot_model_name = ""
         _embedding_model_name = ""
     budget_task = None
-    if usage_store is not None:
-        monitor = (
-            BudgetMonitor(local_store, BudgetConfig.from_env(), admin_api.dashboard_timezone()) if local_store else None
-        )
-        budget_task = asyncio.create_task(_hourly_checks(monitor, usage_store))
+    if local_store is not None:
+        # with AWN_BACKEND_URL the AgWeatherNet backend sends the budget alert instead
+        monitor = BudgetMonitor(local_store, BudgetConfig.from_env(), admin_api.dashboard_timezone())
+        budget_task = asyncio.create_task(_hourly_budget_checks(monitor))
     try:
         yield
     finally:

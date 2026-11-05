@@ -4,8 +4,6 @@ When AWN_BACKEND_URL and AWN_INTERNAL_KEY are set, every chat call (one question
 its model requests) is sent to the AgWeatherNet Go backend (awn_be_v2):
 
     POST {AWN_BACKEND_URL}/api/v1/internal/llm-usage/requests        one call
-    POST {AWN_BACKEND_URL}/api/v1/internal/llm-usage/quality-runs    one retrieval quality check
-    GET  {AWN_BACKEND_URL}/api/v1/internal/llm-usage/quality-runs/latest
 
 authenticated with the X-Internal-Key header. The backend answers {"status": 1, "data": ...} on success and
 {"status": 0, "error": ...} otherwise. The dashboard is the "LLM Usage" tab of the AgWeatherNet admin
@@ -26,11 +24,9 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Sequence
-from datetime import datetime
 from typing import Any
 
-from backend.analytics.metering import LlmCall, RequestUsage
+from backend.analytics.metering import RequestUsage
 
 logger = logging.getLogger("awn.analytics")
 
@@ -42,7 +38,7 @@ class AwnBackendError(RuntimeError):
 
 
 class AwnUsageReporter:
-    """Sends usage and retrieval quality runs to the AgWeatherNet backend."""
+    """Sends usage to the AgWeatherNet backend."""
 
     def __init__(
         self,
@@ -115,27 +111,6 @@ class AwnUsageReporter:
             self._queue.put_nowait(self.request_body(usage))
         except queue.Full:
             logger.warning("Usage report queue is full, dropping request %s", usage.request_id)
-
-    def record_quality_run(
-        self,
-        samples: int,
-        passed: int,
-        details: list[dict],
-        is_demo: bool = False,
-        calls: Sequence[LlmCall] = (),
-    ) -> None:
-        """Send the result of one sampled retrieval quality check (raises if it could not be saved).
-
-        The backend's quality-runs endpoint has no cost field yet, so `calls` is not sent.
-        """
-        body = {"samples": samples, "passed": passed, "details": details, "is_demo": is_demo}
-        self._with_retries(lambda: self._request("POST", "/quality-runs", body))
-
-    def latest_quality_run_at(self) -> datetime | None:
-        """When the retrieval quality check last ran (demo runs excluded), or None if it never has."""
-        data = self._with_retries(lambda: self._request("GET", "/quality-runs/latest"))
-        run_at = (data or {}).get("run_at")
-        return datetime.fromisoformat(run_at.replace("Z", "+00:00")) if run_at else None
 
     def close(self, timeout: float = 5.0) -> None:
         """Send what is still queued (for up to `timeout` seconds) and stop the sender thread."""

@@ -7,14 +7,13 @@ timezone) are computed here in Python, so nothing depends on database specific S
 
 from __future__ import annotations
 
-import json
 import logging
 import math
 import os
 import threading
 import time
 from collections import Counter, defaultdict
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -22,7 +21,7 @@ from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
 import mysql.connector
-from backend.analytics.metering import LlmCall, RequestUsage, metered
+from backend.analytics.metering import RequestUsage, metered
 from mysql.connector import errors
 
 logger = logging.getLogger("awn.analytics")
@@ -66,15 +65,6 @@ _CALLS_SQL = """
            c.cost_reported, c.latency_ms, c.succeeded
     FROM table_llm_usage_model_calls c JOIN table_llm_usage_requests r ON r.request_id = c.request_id
     WHERE r.started_at >= %s AND r.started_at < %s
-"""
-
-_QUALITY_RUNS_SQL = """
-    SELECT run_at, samples, passed, is_demo FROM table_llm_usage_quality_runs
-    WHERE run_at >= %s AND run_at < %s ORDER BY run_at
-"""
-
-_LATEST_QUALITY_RUN_SQL = """
-    SELECT run_at, samples, passed, details, is_demo FROM table_llm_usage_quality_runs ORDER BY run_at DESC LIMIT 1
 """
 
 # real (non demo) chat spending between two UTC times
@@ -236,10 +226,6 @@ class UsageStore:
         # reads use their own short lived connection so a slow dashboard query never holds up chat requests
         with self._read() as cur:
             usage = _fetch_usage(cur, previous_start, now)
-            cur.execute(_QUALITY_RUNS_SQL, (_utc(start), _utc(now)))
-            quality_runs = cur.fetchall()
-            cur.execute(_LATEST_QUALITY_RUN_SQL)
-            latest = cur.fetchone()
 
         current = usage.between(start, now)
         previous = usage.between(previous_start, start)
@@ -251,8 +237,7 @@ class UsageStore:
                 "bucket": bucket,
                 "timezone": tz,
             },
-            "includes_demo_data": any(r["is_demo"] for r in current.requests)
-            or any(run["is_demo"] for run in quality_runs),
+            "includes_demo_data": any(r["is_demo"] for r in current.requests),
             "target_ms": target_ms,
             "summary": _summary(current, target_ms),
             "previous": _summary(previous, target_ms),
@@ -264,43 +249,8 @@ class UsageStore:
                     Counter(r["status"] for r in current.requests).items(), key=lambda item: (-item[1], item[0])
                 )
             ],
-            "quality": {
-                "runs": [_quality_run(run) for run in quality_runs],
-                "latest": {**_quality_run(latest), "details": json.loads(latest["details"])} if latest else None,
-            },
             "budget": self.budget_status(tz, budget_usd, now=now),
         }
-
-    def record_quality_run(
-        self,
-        samples: int,
-        passed: int,
-        details: list[dict],
-        is_demo: bool = False,
-        calls: Sequence[LlmCall] = (),
-    ) -> None:
-        """Save the result of one sampled retrieval quality check.
-
-        `calls` (the check's model requests) are accepted for the same interface as AwnUsageReporter, but the
-        quality runs table has no cost column, so their cost is not stored.
-        """
-
-        def write(conn: Any) -> None:
-            with _transaction(conn), closing(conn.cursor()) as cur:
-                cur.execute(
-                    "INSERT INTO table_llm_usage_quality_runs (run_at, samples, passed, details, is_demo)"
-                    " VALUES (%s, %s, %s, %s, %s)",
-                    (_utc(datetime.now(UTC)), samples, passed, json.dumps(details), is_demo),
-                )
-
-        self._run(write)
-
-    def latest_quality_run_at(self) -> datetime | None:
-        """When the retrieval quality check last ran (demo runs excluded), or None if it never has."""
-        with self._read() as cur:
-            cur.execute("SELECT MAX(run_at) AS run_at FROM table_llm_usage_quality_runs WHERE is_demo = 0")
-            row = cur.fetchone()
-        return _from_utc(row["run_at"]) if row else None
 
     def month_spend(self, tz: str, now: datetime | None = None) -> tuple[date, float]:
         """Return (first day of the current month, real LLM spending so far this month), demo data excluded."""
@@ -653,16 +603,6 @@ def _by_model(usage: _Usage) -> list[dict[str, Any]]:
             }
         )
     return sorted(rows, key=lambda row: (-row["cost_usd"], -row["calls"], row["model"]))
-
-
-def _quality_run(row: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "run_at": _timestamp(row["run_at"]),
-        "samples": row["samples"],
-        "passed": row["passed"],
-        "score": _ratio(row["passed"], row["samples"]),
-        "is_demo": bool(row["is_demo"]),
-    }
 
 
 def _window(days: int, tz: str, now: datetime | None) -> tuple[datetime, datetime]:

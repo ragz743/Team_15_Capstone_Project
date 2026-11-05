@@ -80,10 +80,6 @@ function definitions(metrics: Metrics | null): [string, ReactNode][] {
     ["Sessions", "One login session identified by the host website. A session is successful when every call in it was answered."],
     ["Calls", "One attempt to answer a question. A call can make several model requests. Reopening a saved answer adds no usage."],
     [
-      "Retrieval quality",
-      "The share of a fixed set of sample questions where the chatbot found the right weather data. Once a day each question is asked at its station through the chatbot's workflow, and it passes when the chatbot queried the expected kind of data (current conditions, past days, or forecast) and got records back. A model error during the check counts as a miss.",
-    ],
-    [
       "Tokens",
       "The units of text a model reads and writes. Usage includes each model request in the workflow. Provider-reported counts are used when available; estimated counts are labelled.",
     ],
@@ -216,7 +212,7 @@ export default function App() {
       <Box component="main" sx={{ maxWidth: 1280, mx: "auto", px: { xs: 2, sm: 3 }, pt: 3, pb: 6 }}>
         <Typography variant="h1">LLM usage dashboard</Typography>
         <Typography variant="body2" color="text.secondary">
-          Users, retrieval quality, spending, and performance of the AgWeatherNet weather assistant.
+          Users, spending, and performance of the AgWeatherNet weather assistant.
         </Typography>
 
         <Stack

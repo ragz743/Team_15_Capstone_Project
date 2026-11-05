@@ -6,8 +6,6 @@
 --   kind is always 'chat' (the chatbot makes no embedding requests).
 --   priced and cost_reported are both 1 when OpenRouter reported the call's cost, otherwise both 0 and
 --   cost_usd is 0. Every cost is the one OpenRouter billed; there is no price list.
---   table_llm_usage_quality_runs has no cost column, so the daily quality check's model cost is not
---   counted toward the monthly budget.
 
 -- 1. One row per call (one question answered end to end)
 CREATE TABLE IF NOT EXISTS awn.table_llm_usage_requests (
@@ -44,18 +42,7 @@ CREATE TABLE IF NOT EXISTS awn.table_llm_usage_model_calls (
     REFERENCES awn.table_llm_usage_requests (request_id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- 3. One row per daily retrieval quality check
-CREATE TABLE IF NOT EXISTS awn.table_llm_usage_quality_runs (
-  id       INT         AUTO_INCREMENT PRIMARY KEY,
-  run_at   DATETIME(3) NOT NULL,  -- UTC
-  samples  INT         NOT NULL,  -- sample questions evaluated
-  passed   INT         NOT NULL,  -- questions whose expected weather data was retrieved
-  details  MEDIUMTEXT  NOT NULL,  -- JSON array, per question results
-  is_demo  TINYINT(1)  NOT NULL DEFAULT 0,
-  INDEX idx_run_at (run_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-
--- 4. One row per monthly budget alert (sent once per month across both servers)
+-- 3. One row per monthly budget alert (sent once per month across both servers)
 CREATE TABLE IF NOT EXISTS awn.table_llm_usage_budget_alerts (
   month         DATE           NOT NULL,  -- first day of the month, TZ_DISPLAY
   threshold_usd DECIMAL(12,2)  NOT NULL,

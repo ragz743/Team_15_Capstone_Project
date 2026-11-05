@@ -28,10 +28,6 @@ GET /api/admin/* (admin_api.py)  ──> UsageStore SQL queries ──> dashboar
   ([usage accounting](https://openrouter.ai/docs/cookbook/administration/usage-accounting)), and that is the
   cost recorded. Nothing is estimated and there is no price list to maintain. A provider that does not report
   a cost (for example a local llama.cpp model) is recorded at $0 and the dashboard flags it.
-- **Retrieval quality:** `retrieval_quality.py` is production monitoring, not a test. Once a day the API
-  asks the questions in `retrieval_samples.yaml` through the same workflow and records whether it read
-  the right kind of weather data at the right station. Its model calls are not user calls, and because the
-  client's quality runs table has no cost column, their cost is not counted toward the monthly budget.
 - **Budget alert:** `budget.py` checks month-to-date spending every hour and emails the team once per month
   when it passes the budget.
 
@@ -49,15 +45,14 @@ No question or answer text is stored, only counts, tokens, costs, timings and ou
 
 ## Where the usage data is stored
 
-Usage is written to four tables that AgWeatherNet created in its `awn` MariaDB database, the same server
-the chatbot reads weather data from. `schema.sql` is a copy of their definitions; the API never creates or
+Usage is written to three tables AgWeatherNet created in its `awn` MariaDB database, the same server the
+chatbot reads weather data from. `schema.sql` is a copy of their definitions; the API never creates or
 changes them.
 
 | Table | One row per |
 | --- | --- |
 | `table_llm_usage_requests` | Call (one question answered end to end): user, login session, response time, outcome |
 | `table_llm_usage_model_calls` | Model request made during a call: model, tokens, the cost OpenRouter reported |
-| `table_llm_usage_quality_runs` | Daily retrieval quality check |
 | `table_llm_usage_budget_alerts` | Month whose spending passed the budget, so the email is sent once (across servers) |
 
 How the chatbot fills the client's columns:
@@ -70,7 +65,7 @@ How the chatbot fills the client's columns:
 
 The writes use their own database account (`AWN_USAGE_DB_*`), not the chatbot's `AWN_DB_USER`. The chatbot
 runs SQL written by the model with that account, so it should stay read only. The usage account needs only
-`SELECT, INSERT, UPDATE` on the four tables, plus `DELETE` if `testing/seed_dashboard_demo.py --clear` is
+`SELECT, INSERT, UPDATE` on the three tables, plus `DELETE` if `testing/seed_dashboard_demo.py --clear` is
 run with it.
 
 The project's Postgres is no longer used by the dashboard. It still holds the chatbot's saved conversations
@@ -109,6 +104,5 @@ missing variable instead of failing when the first alert is due.
 | `admin_api.py` | The `/api/admin/*` endpoints the dashboard reads |
 | `awn_reporter.py` | Alternative to `usage_store.py`: sends usage to the AgWeatherNet backend |
 | `budget.py` | Monthly budget check and alert email |
-| `retrieval_quality.py`, `retrieval_samples.yaml` | Daily retrieval quality check and its questions |
 
 `testing/seed_dashboard_demo.py` fills the tables with labelled demo data for previewing the dashboard.
